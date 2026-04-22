@@ -59,6 +59,22 @@ Nothing here is written in stone forever, it's open to discussion and I believe 
 
 Run `make install` or `make build` if you just want the compiler binary.
 
+## Contributing
+
+[Donate monthly](https://github.com/sponsors/raphamorim).
+
+Jam follows some of Zig contribution rules.
+
+#### Strict No LLM / No AI Policy
+
+No LLMs for issues.
+
+No LLMs for patches / pull requests.
+
+No LLMs for comments on the bug tracker, including translation.
+
+English is encouraged, but not required. You are welcome to post in your native language and rely on others to have their own translation tools of choice to interpret your words.
+
 ## v0.1.0
 
 - [ ] Spec/Documentation website
