@@ -1,1 +1,2 @@
+*.png filter=lfs diff=lfs merge=lfs -text
 docs/assets/images/*.png !text !filter !merge !diff

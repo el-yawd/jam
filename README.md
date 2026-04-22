@@ -1,7 +1,7 @@
 <!-- LOGO -->
 <h1>
 <p align="center">
-  <img src="./docs/assets/images/mascot-01.png" alt="Jam Logo" width="256">
+  <img src="./miscellaneous/jam-mascot-01.png" alt="Jam Logo" width="256">
   <br>Jam Programming Language
 </h1>
   <p align="center">
