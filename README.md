@@ -45,6 +45,10 @@ tfn sumTwoValues() {
 }
 ```
 
+## Install
+
+Run `make install` or `make build` if you just want the compiler binary.
+
 ## Rules
 
 Nothing here is written in stone forever, it's open to discussion and I believe that with time it will suffer updates.
@@ -54,10 +58,7 @@ Nothing here is written in stone forever, it's open to discussion and I believe 
     - Jam grammar was intentionally designed to be unambiguous and simple to parse. This is one of the explicit design goals of the language.
 - Performance competitive.
     - The language should be capable to not necessarily be faster in every aspect but at least compete with Rust, Zig, Nim and other languages in the same tier.
-
-## Install
-
-Run `make install` or `make build` if you just want the compiler binary.
+- Safety but without increase complexity.
 
 ## Contributing
 
