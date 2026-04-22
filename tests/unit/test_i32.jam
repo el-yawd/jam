@@ -1,0 +1,29 @@
+const { assert } = import("test");
+
+fn add_i32(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn max_i32() i32 {
+    const max: i32 = 2147483647;
+    return max;
+}
+
+fn min_i32() i32 {
+    const min: i32 = -2147483648;
+    return min;
+}
+
+tfn add_i32() {
+    assert(add_i32(100000, 200000), 300000);
+    assert(add_i32(-100000, 50000), -50000);
+    assert(add_i32(1000000000, 1000000000), 2000000000);
+}
+
+tfn max_i32() {
+    assert(max_i32(), 2147483647);
+}
+
+tfn min_i32() {
+    assert(min_i32(), -2147483648);
+}

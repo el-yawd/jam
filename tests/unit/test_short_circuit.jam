@@ -1,0 +1,42 @@
+// Test short-circuit evaluation for 'and' and 'or' operators
+// Following Zig's behavior
+
+// Test 'and' short-circuit: if first is false, second is not evaluated
+fn test_and_short_circuit(a: bool, b: bool) bool {
+    return a and b;
+}
+
+// Test 'or' short-circuit: if first is true, second is not evaluated
+fn test_or_short_circuit(a: bool, b: bool) bool {
+    return a or b;
+}
+
+// Nested short-circuit: (a and b) or c
+fn test_nested_and_or(a: bool, b: bool, c: bool) bool {
+    return (a and b) or c;
+}
+
+// Nested short-circuit: (a or b) and c
+fn test_nested_or_and(a: bool, b: bool, c: bool) bool {
+    return (a or b) and c;
+}
+
+// Chain: a and b and c
+fn test_chain_and(a: bool, b: bool, c: bool) bool {
+    return a and b and c;
+}
+
+// Chain: a or b or c
+fn test_chain_or(a: bool, b: bool, c: bool) bool {
+    return a or b or c;
+}
+
+// Mixed with not: !a and b
+fn test_not_and(a: bool, b: bool) bool {
+    return !a and b;
+}
+
+// Mixed with not: a or !b
+fn test_or_not(a: bool, b: bool) bool {
+    return a or !b;
+}

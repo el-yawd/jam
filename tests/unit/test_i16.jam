@@ -1,0 +1,29 @@
+const { assert } = import("test");
+
+fn add_i16(a: i16, b: i16) i16 {
+    return a + b;
+}
+
+fn max_i16() i16 {
+    const max: i16 = 32767;
+    return max;
+}
+
+fn min_i16() i16 {
+    const min: i16 = -32768;
+    return min;
+}
+
+tfn add_i16() {
+    assert(add_i16(1000, 2000), 3000);
+    assert(add_i16(-1000, 500), -500);
+    assert(add_i16(30000, -10000), 20000);
+}
+
+tfn max_i16() {
+    assert(max_i16(), 32767);
+}
+
+tfn min_i16() {
+    assert(min_i16(), -32768);
+}

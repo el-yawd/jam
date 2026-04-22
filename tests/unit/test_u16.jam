@@ -1,0 +1,29 @@
+const { assert } = import("test");
+
+fn add_u16(a: u16, b: u16) u16 {
+    return a + b;
+}
+
+fn max_u16() u16 {
+    const max: u16 = 65535;
+    return max;
+}
+
+fn min_u16() u16 {
+    const min: u16 = 0;
+    return min;
+}
+
+tfn add_u16() {
+    assert(add_u16(1000, 2000), 3000);
+    assert(add_u16(30000, 20000), 50000);
+    assert(add_u16(100, 10000), 10100);
+}
+
+tfn max_u16() {
+    assert(max_u16(), 65535);
+}
+
+tfn min_u16() {
+    assert(min_u16(), 0);
+}

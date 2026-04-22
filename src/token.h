@@ -1,0 +1,72 @@
+/*
+ * Copyright (c) 2026-present Raphael Amorim
+ *
+ * This file is part of jam.
+ * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
+ */
+
+#ifndef TOKEN_H
+#define TOKEN_H
+
+#include <string>
+
+// Token types
+enum TokenType {
+	TOK_EOF = 0,
+	TOK_FN,
+	TOK_IDENTIFIER,
+	TOK_COLON,
+	TOK_OPEN_BRACE,
+	TOK_CLOSE_BRACE,
+	TOK_OPEN_PAREN,
+	TOK_CLOSE_PAREN,
+	TOK_COMMA,
+	TOK_RETURN,
+	TOK_PLUS,
+	TOK_MINUS,
+	TOK_SEMI,
+	TOK_NUMBER,
+	TOK_CONST,
+	TOK_VAR,
+	TOK_EQUAL,
+	TOK_TYPE,
+	TOK_IF,
+	TOK_ELSE,
+	TOK_EQUAL_EQUAL,
+	TOK_NOT_EQUAL,
+	TOK_LESS,
+	TOK_LESS_EQUAL,
+	TOK_GREATER,
+	TOK_GREATER_EQUAL,
+	TOK_TRUE,
+	TOK_FALSE,
+	TOK_OPEN_BRACKET,
+	TOK_CLOSE_BRACKET,
+	TOK_STRING_LITERAL,
+	TOK_WHILE,
+	TOK_FOR,
+	TOK_BREAK,
+	TOK_CONTINUE,
+	TOK_IN,
+	TOK_EXTERN,  // extern keyword (import C function)
+	TOK_EXPORT,  // export keyword (C ABI export)
+	TOK_PUB,     // pub keyword (visible to Jam modules, like Zig)
+	TOK_IMPORT,  // import keyword
+	TOK_DOT,     // . for member access
+	TOK_AND,     // and (logical AND)
+	TOK_OR,      // or (logical OR)
+	TOK_NOT,     // ! (logical NOT)
+	TOK_TFN,     // tfn keyword (test function)
+};
+
+// Token structure
+struct Token {
+	TokenType type;
+	std::string lexeme;
+	int line;
+
+	Token(TokenType type, std::string lexeme, int line)
+	    : type(type), lexeme(std::move(lexeme)), line(line) {}
+};
+
+#endif  // TOKEN_H

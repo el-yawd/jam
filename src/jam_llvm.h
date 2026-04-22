@@ -1,0 +1,307 @@
+/*
+ * Copyright (c) 2026-present Raphael Amorim
+ *
+ * This file is part of jam.
+ * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
+ */
+
+/*
+ * Jam LLVM Wrapper Layer
+ *
+ * The purpose of this file is to:
+ * 1. Isolate all LLVM C++ API interaction to reduce compile times
+ * 2. Provide a C interface for potential future self-hosting
+ * 3. Prevent LLVM C++ headers from infecting the rest of the project
+ *
+ * Inspired by Zig's zig_llvm.h approach.
+ */
+
+#ifndef JAM_LLVM_H
+#define JAM_LLVM_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+#define JAM_EXTERN_C extern "C"
+#else
+#define JAM_EXTERN_C
+#endif
+
+// Opaque pointer types for LLVM objects
+typedef struct JamLLVMContext *JamContextRef;
+typedef struct JamLLVMModule *JamModuleRef;
+typedef struct JamLLVMBuilder *JamBuilderRef;
+typedef struct JamLLVMType *JamTypeRef;
+typedef struct JamLLVMValue *JamValueRef;
+typedef struct JamLLVMBasicBlock *JamBasicBlockRef;
+typedef struct JamLLVMFunction *JamFunctionRef;
+typedef struct JamLLVMTargetMachine *JamTargetMachineRef;
+
+// Calling conventions
+typedef enum {
+	JAM_CALLCONV_C = 0,
+	JAM_CALLCONV_FAST = 8,
+	JAM_CALLCONV_COLD = 9,
+} JamCallingConv;
+
+// Linkage types
+typedef enum {
+	JAM_LINKAGE_EXTERNAL = 0,
+	JAM_LINKAGE_INTERNAL = 1,
+	JAM_LINKAGE_PRIVATE = 2,
+} JamLinkage;
+
+// Integer comparison predicates
+typedef enum {
+	JAM_ICMP_EQ = 32,   // equal
+	JAM_ICMP_NE = 33,   // not equal
+	JAM_ICMP_UGT = 34,  // unsigned greater than
+	JAM_ICMP_UGE = 35,  // unsigned greater or equal
+	JAM_ICMP_ULT = 36,  // unsigned less than
+	JAM_ICMP_ULE = 37,  // unsigned less or equal
+	JAM_ICMP_SGT = 38,  // signed greater than
+	JAM_ICMP_SGE = 39,  // signed greater or equal
+	JAM_ICMP_SLT = 40,  // signed less than
+	JAM_ICMP_SLE = 41,  // signed less or equal
+} JamIntPredicate;
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+JAM_EXTERN_C void JamLLVMInitializeNativeTarget(void);
+JAM_EXTERN_C void JamLLVMInitializeNativeAsmPrinter(void);
+JAM_EXTERN_C void JamLLVMInitializeNativeAsmParser(void);
+JAM_EXTERN_C void JamLLVMInitializeAllTargets(void);
+
+// ============================================================================
+// Context
+// ============================================================================
+
+JAM_EXTERN_C JamContextRef JamLLVMCreateContext(void);
+JAM_EXTERN_C void JamLLVMDisposeContext(JamContextRef ctx);
+
+// ============================================================================
+// Module
+// ============================================================================
+
+JAM_EXTERN_C JamModuleRef JamLLVMCreateModule(const char *name,
+                                              JamContextRef ctx);
+JAM_EXTERN_C void JamLLVMDisposeModule(JamModuleRef mod);
+JAM_EXTERN_C void JamLLVMSetTargetTriple(JamModuleRef mod, const char *triple);
+JAM_EXTERN_C void JamLLVMSetDataLayout(JamModuleRef mod,
+                                       JamTargetMachineRef tm);
+JAM_EXTERN_C JamFunctionRef JamLLVMGetFunction(JamModuleRef mod,
+                                               const char *name);
+JAM_EXTERN_C char *JamLLVMPrintModuleToString(JamModuleRef mod);
+JAM_EXTERN_C void JamLLVMDisposeMessage(char *msg);
+
+// ============================================================================
+// Builder
+// ============================================================================
+
+JAM_EXTERN_C JamBuilderRef JamLLVMCreateBuilder(JamContextRef ctx);
+JAM_EXTERN_C void JamLLVMDisposeBuilder(JamBuilderRef builder);
+JAM_EXTERN_C void JamLLVMPositionBuilderAtEnd(JamBuilderRef builder,
+                                              JamBasicBlockRef block);
+JAM_EXTERN_C JamBasicBlockRef JamLLVMGetInsertBlock(JamBuilderRef builder);
+
+// ============================================================================
+// Types
+// ============================================================================
+
+JAM_EXTERN_C JamTypeRef JamLLVMInt1Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMInt8Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMInt16Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMInt32Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMInt64Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMVoidType(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMPointerType(JamTypeRef elementType,
+                                           unsigned addressSpace);
+JAM_EXTERN_C JamTypeRef JamLLVMStructType(JamContextRef ctx,
+                                          JamTypeRef *elementTypes,
+                                          unsigned elementCount, bool packed);
+JAM_EXTERN_C JamTypeRef JamLLVMFunctionType(JamTypeRef returnType,
+                                            JamTypeRef *paramTypes,
+                                            unsigned paramCount, bool isVarArg);
+JAM_EXTERN_C JamTypeRef JamLLVMArrayType(JamTypeRef elementType,
+                                         unsigned elementCount);
+JAM_EXTERN_C bool JamLLVMTypeIsVoid(JamTypeRef type);
+JAM_EXTERN_C bool JamLLVMTypeIsStruct(JamTypeRef type);
+JAM_EXTERN_C bool JamLLVMTypeIsInteger(JamTypeRef type);
+JAM_EXTERN_C unsigned JamLLVMGetIntTypeWidth(JamTypeRef type);
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMConstInt(JamTypeRef type, uint64_t val,
+                                         bool signExtend);
+JAM_EXTERN_C JamValueRef JamLLVMConstNull(JamTypeRef type);
+JAM_EXTERN_C JamValueRef JamLLVMConstString(JamContextRef ctx, const char *str,
+                                            unsigned length,
+                                            bool nullTerminate);
+JAM_EXTERN_C JamValueRef JamLLVMConstStringInContext(JamContextRef ctx,
+                                                     const char *str,
+                                                     unsigned length,
+                                                     bool dontNullTerminate);
+JAM_EXTERN_C JamValueRef JamLLVMGetUndef(JamTypeRef type);
+
+// ============================================================================
+// Global Variables
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMAddGlobalString(JamModuleRef mod,
+                                                const char *str,
+                                                const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildGlobalStringPtr(JamBuilderRef builder,
+                                                     const char *str,
+                                                     const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMAddGlobal(JamModuleRef mod, JamTypeRef type,
+                                          const char *name);
+JAM_EXTERN_C void JamLLVMSetGlobalConstant(JamValueRef global, bool isConstant);
+JAM_EXTERN_C void JamLLVMSetInitializer(JamValueRef global,
+                                        JamValueRef constantVal);
+
+// ============================================================================
+// Functions
+// ============================================================================
+
+JAM_EXTERN_C JamFunctionRef JamLLVMAddFunction(JamModuleRef mod,
+                                               const char *name,
+                                               JamTypeRef funcType);
+JAM_EXTERN_C void JamLLVMSetFunctionCallConv(JamFunctionRef func,
+                                             JamCallingConv cc);
+JAM_EXTERN_C void JamLLVMSetLinkage(JamValueRef global, JamLinkage linkage);
+JAM_EXTERN_C unsigned JamLLVMCountParams(JamFunctionRef func);
+JAM_EXTERN_C JamValueRef JamLLVMGetParam(JamFunctionRef func, unsigned index);
+JAM_EXTERN_C void JamLLVMSetValueName(JamValueRef val, const char *name);
+JAM_EXTERN_C JamTypeRef JamLLVMGetReturnType(JamFunctionRef func);
+JAM_EXTERN_C bool JamLLVMVerifyFunction(JamFunctionRef func);
+
+// ============================================================================
+// Basic Blocks
+// ============================================================================
+
+JAM_EXTERN_C JamBasicBlockRef JamLLVMCreateBasicBlock(JamContextRef ctx,
+                                                      const char *name);
+JAM_EXTERN_C JamBasicBlockRef JamLLVMAppendBasicBlock(JamFunctionRef func,
+                                                      const char *name);
+JAM_EXTERN_C JamFunctionRef JamLLVMGetBasicBlockParent(JamBasicBlockRef block);
+JAM_EXTERN_C JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block);
+
+// ============================================================================
+// Instructions - Memory
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder,
+                                            JamTypeRef type, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildLoad(JamBuilderRef builder,
+                                          JamTypeRef type, JamValueRef ptr,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildStore(JamBuilderRef builder,
+                                           JamValueRef val, JamValueRef ptr);
+
+// ============================================================================
+// Instructions - Arithmetic
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildAdd(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildSub(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildMul(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildAnd(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildOr(JamBuilderRef builder, JamValueRef lhs,
+                                        JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildXor(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+
+// ============================================================================
+// Instructions - Comparison
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildICmp(JamBuilderRef builder,
+                                          JamIntPredicate pred, JamValueRef lhs,
+                                          JamValueRef rhs, const char *name);
+
+// ============================================================================
+// Instructions - Control Flow
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildBr(JamBuilderRef builder,
+                                        JamBasicBlockRef dest);
+JAM_EXTERN_C JamValueRef JamLLVMBuildCondBr(JamBuilderRef builder,
+                                            JamValueRef cond,
+                                            JamBasicBlockRef thenBlock,
+                                            JamBasicBlockRef elseBlock);
+JAM_EXTERN_C JamValueRef JamLLVMBuildRet(JamBuilderRef builder,
+                                         JamValueRef val);
+JAM_EXTERN_C JamValueRef JamLLVMBuildRetVoid(JamBuilderRef builder);
+JAM_EXTERN_C JamValueRef JamLLVMBuildUnreachable(JamBuilderRef builder);
+JAM_EXTERN_C JamValueRef JamLLVMBuildCall(JamBuilderRef builder,
+                                          JamFunctionRef func,
+                                          JamValueRef *args, unsigned numArgs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildPhi(JamBuilderRef builder, JamTypeRef type,
+                                         const char *name);
+JAM_EXTERN_C void JamLLVMAddIncoming(JamValueRef phi, JamValueRef *values,
+                                     JamBasicBlockRef *blocks, unsigned count);
+
+// ============================================================================
+// Instructions - Conversions
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildBitCast(JamBuilderRef builder,
+                                             JamValueRef val,
+                                             JamTypeRef destType,
+                                             const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildIntCast(JamBuilderRef builder,
+                                             JamValueRef val,
+                                             JamTypeRef destType, bool isSigned,
+                                             const char *name);
+
+// ============================================================================
+// Instructions - Aggregates
+// ============================================================================
+
+JAM_EXTERN_C JamValueRef JamLLVMBuildInsertValue(JamBuilderRef builder,
+                                                 JamValueRef agg,
+                                                 JamValueRef val,
+                                                 unsigned index,
+                                                 const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildExtractValue(JamBuilderRef builder,
+                                                  JamValueRef agg,
+                                                  unsigned index,
+                                                  const char *name);
+
+// ============================================================================
+// Value Utilities
+// ============================================================================
+
+JAM_EXTERN_C JamTypeRef JamLLVMTypeOf(JamValueRef val);
+JAM_EXTERN_C JamTypeRef JamLLVMGetAllocatedType(JamValueRef alloca);
+
+// ============================================================================
+// Target & Code Generation
+// ============================================================================
+
+JAM_EXTERN_C char *JamLLVMGetDefaultTargetTriple(void);
+JAM_EXTERN_C char *JamLLVMGetHostCPUName(void);
+JAM_EXTERN_C char *JamLLVMGetHostCPUFeatures(void);
+
+JAM_EXTERN_C JamTargetMachineRef
+JamLLVMCreateTargetMachine(const char *triple, const char *cpu,
+                           const char *features, bool isRelocationPIC);
+JAM_EXTERN_C void JamLLVMDisposeTargetMachine(JamTargetMachineRef tm);
+
+JAM_EXTERN_C bool JamLLVMEmitObjectFile(JamModuleRef mod,
+                                        JamTargetMachineRef tm,
+                                        const char *filename,
+                                        char **errorMessage);
+
+#endif  // JAM_LLVM_H

@@ -1,0 +1,8 @@
+// Jam Standard Library - fmt module
+//
+// Provides formatting and printing functions.
+// Usage: std.fmt.println("Hello, world!");
+//
+// Currently built-in functions:
+// - println(msg: str) - Print a string with newline
+// - print(msg: str)   - Print a string without newline

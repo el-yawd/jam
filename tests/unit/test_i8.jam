@@ -1,0 +1,29 @@
+const { assert } = import("test");
+
+fn add_i8(a: i8, b: i8) i8 {
+    return a + b;
+}
+
+fn max_i8() i8 {
+    const max: i8 = 127;
+    return max;
+}
+
+fn min_i8() i8 {
+    const min: i8 = -128;
+    return min;
+}
+
+tfn add_i8() {
+    assert(add_i8(50, 25), 75);
+    assert(add_i8(-50, 30), -20);
+    assert(add_i8(100, -50), 50);
+}
+
+tfn max_i8() {
+    assert(max_i8(), 127);
+}
+
+tfn min_i8() {
+    assert(min_i8(), -128);
+}

@@ -1,0 +1,86 @@
+const { assert } = import("test");
+
+fn bool_true() bool {
+    return true;
+}
+
+fn bool_false() bool {
+    return false;
+}
+
+fn bool_not(a: bool) bool {
+    return !a;
+}
+
+fn bool_and(a: bool, b: bool) bool {
+    return a and b;
+}
+
+fn bool_or(a: bool, b: bool) bool {
+    return a or b;
+}
+
+fn bool_eq(a: bool, b: bool) bool {
+    if (a == b) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+fn bool_neq(a: bool, b: bool) bool {
+    if (a != b) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+fn bool_in_if(condition: bool) u8 {
+    if (condition == true) {
+        return 42;
+    } else {
+        return 0;
+    }
+}
+
+tfn bool_true() {
+    assert(bool_true(), true);
+}
+
+tfn bool_false() {
+    assert(bool_false(), false);
+}
+
+tfn bool_not() {
+    assert(bool_not(true), false);
+    assert(bool_not(false), true);
+}
+
+tfn bool_and() {
+    assert(bool_and(true, true), true);
+    assert(bool_and(true, false), false);
+    assert(bool_and(false, false), false);
+}
+
+tfn bool_or() {
+    assert(bool_or(true, true), true);
+    assert(bool_or(true, false), true);
+    assert(bool_or(false, false), false);
+}
+
+tfn bool_eq() {
+    assert(bool_eq(true, true), true);
+    assert(bool_eq(false, false), true);
+    assert(bool_eq(true, false), false);
+}
+
+tfn bool_neq() {
+    assert(bool_neq(true, false), true);
+    assert(bool_neq(true, true), false);
+}
+
+tfn bool_in_if() {
+    assert(bool_in_if(true), 42);
+    assert(bool_in_if(false), 0);
+}

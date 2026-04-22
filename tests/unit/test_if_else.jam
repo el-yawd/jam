@@ -1,0 +1,79 @@
+const { assert } = import("test");
+
+fn if_basic() u8 {
+    if (1 == 1) {
+        return 42;
+    } else {
+        return 0;
+    }
+}
+
+fn if_comparison(a: u8, b: u8) u8 {
+    if (a > b) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn if_equality(x: u8, y: u8) u8 {
+    if (x == y) {
+        return 255;
+    } else {
+        return 0;
+    }
+}
+
+fn if_not_equal(a: u8, b: u8) u8 {
+    if (a != b) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn if_less_than(a: u8, b: u8) u8 {
+    if (a < b) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+fn if_greater_equal(val: u8, threshold: u8) u8 {
+    if (val >= threshold) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+tfn if_basic() {
+    assert(if_basic(), 42);
+}
+
+tfn if_comparison() {
+    assert(if_comparison(10, 5), 1);
+    assert(if_comparison(5, 10), 0);
+}
+
+tfn if_equality() {
+    assert(if_equality(100, 100), 255);
+    assert(if_equality(100, 50), 0);
+}
+
+tfn if_not_equal() {
+    assert(if_not_equal(50, 75), 1);
+    assert(if_not_equal(50, 50), 0);
+}
+
+tfn if_less_than() {
+    assert(if_less_than(10, 20), 1);
+    assert(if_less_than(20, 10), 0);
+}
+
+tfn if_greater_equal() {
+    assert(if_greater_equal(15, 15), 1);
+    assert(if_greater_equal(20, 15), 1);
+    assert(if_greater_equal(10, 15), 0);
+}

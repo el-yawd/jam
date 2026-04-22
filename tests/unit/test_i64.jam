@@ -1,0 +1,10 @@
+const { assert } = import("test");
+
+fn add_i64(a: i64, b: i64) i64 {
+    return a + b;
+}
+
+tfn add_i64() {
+    assert(add_i64(1000000000, 2000000000), 3000000000);
+    assert(add_i64(-1000000000, 500000000), -500000000);
+}

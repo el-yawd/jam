@@ -1,0 +1,29 @@
+const { assert } = import("test");
+
+fn add_u8(a: u8, b: u8) u8 {
+    return a + b;
+}
+
+fn max_u8() u8 {
+    const max: u8 = 255;
+    return max;
+}
+
+fn min_u8() u8 {
+    const min: u8 = 0;
+    return min;
+}
+
+tfn add_u8() {
+    assert(add_u8(100, 50), 150);
+    assert(add_u8(10, 20), 30);
+    assert(add_u8(0, 0), 0);
+}
+
+tfn max_u8() {
+    assert(max_u8(), 255);
+}
+
+tfn min_u8() {
+    assert(min_u8(), 0);
+}

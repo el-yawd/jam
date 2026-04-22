@@ -1,0 +1,28 @@
+const { assert } = import("test");
+
+fn add_u32(a: u32, b: u32) u32 {
+    return a + b;
+}
+
+fn max_u32() u32 {
+    const max: u32 = 4294967295;
+    return max;
+}
+
+fn min_u32() u32 {
+    const min: u32 = 0;
+    return min;
+}
+
+tfn add_u32() {
+    assert(add_u32(100000, 200000), 300000);
+    assert(add_u32(1000000, 2000000), 3000000);
+}
+
+tfn max_u32() {
+    assert(max_u32(), 4294967295);
+}
+
+tfn min_u32() {
+    assert(min_u32(), 0);
+}

@@ -1,0 +1,62 @@
+// Test string literals and str type
+fn test_string_literal() str {
+    const greeting: str = "Hello, world!";
+    return greeting;
+}
+
+fn test_string_empty() str {
+    const empty: str = "";
+    return empty;
+}
+
+fn test_string_unicode() str {
+    const unicode: str = "Hello, 世界! 🌍";
+    return unicode;
+}
+
+fn test_string_with_spaces() str {
+    const spaced: str = "This is a test string";
+    return spaced;
+}
+
+fn test_string_parameter(message: str) str {
+    return message;
+}
+
+fn test_string_variable() str {
+    var msg: str = "Variable string";
+    return msg;
+}
+
+fn test_string_const() str {
+    const msg: str = "Constant string";
+    return msg;
+}
+
+// Test escape sequences
+fn test_string_escapes() str {
+    const escaped: str = "Line1\nLine2\tTabbed\\Backslash\"Quote";
+    return escaped;
+}
+
+// Test hex escapes
+fn test_string_hex() str {
+    const hex: str = "\x48\x65\x6C\x6C\x6F";
+    return hex;
+}
+
+// Test unicode escapes (like Zig)
+fn test_string_unicode_escape() str {
+    const earth: str = "\u{1F30D}";
+    return earth;
+}
+
+fn test_string_unicode_escape_ascii() str {
+    const letter: str = "\u{41}\u{42}\u{43}";
+    return letter;
+}
+
+fn test_string_unicode_escape_cjk() str {
+    const chinese: str = "\u{4E16}\u{754C}";
+    return chinese;
+}

@@ -1,0 +1,5 @@
+// std.thread module
+// Provides threading and timing utilities
+
+// sleep(ms: u64) - Sleep for the specified number of milliseconds
+// Note: Currently implemented as compiler intrinsic calling usleep()
