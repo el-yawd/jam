@@ -113,14 +113,13 @@ English is encouraged, but not required. You are welcome to post in your native 
         - [ ] Buddy allocators
         - [ ] Tailored to specific workload patterns
 - [ ] Decent Microsoft Windows support (self note)
-- [ ] Capable of creating a TUI
-- [ ] Cranelift
+- [ ] Capable of creating a TUI app
 - [ ] spirv
 
 ## todo
 
-- [ ] create tree-sitter-grammar
-- [ ] migrate docs to a jam builder
+- [x] create tree-sitter-grammar
+- [x] migrate docs to a jam builder
 - [ ] Memory safety (evaluate Rust lifecycles and zig allocators)
 - [ ] C compatible (also allow to auto generate .h files)
 - [ ] C++ compatible ? (need to validate it correctly)
