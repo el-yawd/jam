@@ -406,12 +406,140 @@ JamValueRef ReturnExprAST::codegen(JamCodegenContext &ctx) {
 	return RetVal;
 }
 
+static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
+                            JamTypeRef expected) {
+	JamTypeRef actual = JamLLVMTypeOf(val);
+	if (actual == expected) return val;
+	if (JamLLVMTypeIsFloat(expected) && JamLLVMTypeIsInteger(actual)) {
+		return JamLLVMBuildSIToFP(ctx.getBuilder(), val, expected, "assign_si2fp");
+	}
+	if (JamLLVMTypeIsFloat(expected) && JamLLVMTypeIsFloat(actual)) {
+		return JamLLVMBuildFPCast(ctx.getBuilder(), val, expected,
+		                          "assign_fpcast");
+	}
+	if (JamLLVMTypeIsInteger(expected) && JamLLVMTypeIsInteger(actual)) {
+		return JamLLVMBuildIntCast(ctx.getBuilder(), val, expected, false,
+		                           "assign_icast");
+	}
+	return val;
+}
+
+JamValueRef AssignExprAST::codegen(JamCodegenContext &ctx) {
+	JamValueRef rhsVal = Value->codegen(ctx);
+	if (!rhsVal) return nullptr;
+
+	// Plain variable target: x = value;
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(Target.get())) {
+		const std::string &name = varExpr->getName();
+		JamValueRef alloca = ctx.getVariable(name);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + name);
+		}
+		JamTypeRef expected = JamLLVMGetAllocatedType(alloca);
+		rhsVal = coerceTo(ctx, rhsVal, expected);
+		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, alloca);
+		return rhsVal;
+	}
+
+	// Struct field target, possibly nested: a.b.c = value;
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(Target.get())) {
+		std::vector<std::string> chain;  // outermost-first
+		chain.push_back(memberExpr->getMember());
+		ExprAST *cur = memberExpr->getObject();
+		while (auto *ma = dynamic_cast<MemberAccessExprAST *>(cur)) {
+			chain.push_back(ma->getMember());
+			cur = ma->getObject();
+		}
+		auto *varExpr = dynamic_cast<VariableExprAST *>(cur);
+		if (!varExpr) {
+			throw std::runtime_error("Invalid assignment target");
+		}
+		const std::string &varName = varExpr->getName();
+		JamValueRef alloca = ctx.getVariable(varName);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + varName);
+		}
+		std::string varType = ctx.getVariableType(varName);
+		if (varType.length() >= 6 && varType.substr(0, 6) == "const ") {
+			varType = varType.substr(6);
+		}
+		const auto *info = ctx.getStruct(varType);
+		if (!info) {
+			throw std::runtime_error("Cannot assign to field of non-struct: " +
+			                         varName);
+		}
+
+		// reversed = path from outer struct in toward leaf field
+		std::vector<std::string> path(chain.rbegin(), chain.rend());
+
+		JamValueRef outerValue = JamLLVMBuildLoad(ctx.getBuilder(), info->type,
+		                                          alloca, varName.c_str());
+
+		// Walk inward, collecting struct values at each level and the field
+		// index used at each level. We need these to rebuild on the way out.
+		std::vector<JamValueRef> values;
+		std::vector<unsigned> indices;
+		std::string typeAtLevel = varType;
+		values.push_back(outerValue);
+		std::string leafFieldType;
+		for (size_t i = 0; i < path.size(); i++) {
+			const auto *curInfo = ctx.getStruct(typeAtLevel);
+			if (!curInfo) {
+				throw std::runtime_error("Cannot access field '" + path[i] +
+				                         "' on non-struct " + typeAtLevel);
+			}
+			int idx = ctx.getFieldIndex(typeAtLevel, path[i]);
+			if (idx < 0) {
+				throw std::runtime_error("Unknown field '" + path[i] + "' in " +
+				                         typeAtLevel);
+			}
+			indices.push_back(static_cast<unsigned>(idx));
+			if (i + 1 < path.size()) {
+				JamValueRef inner = JamLLVMBuildExtractValue(
+				    ctx.getBuilder(), values.back(),
+				    static_cast<unsigned>(idx), path[i].c_str());
+				values.push_back(inner);
+				typeAtLevel = curInfo->fields[idx].second;
+				if (typeAtLevel.length() >= 6 &&
+				    typeAtLevel.substr(0, 6) == "const ") {
+					typeAtLevel = typeAtLevel.substr(6);
+				}
+			} else {
+				leafFieldType = curInfo->fields[idx].second;
+			}
+		}
+
+		// Coerce rhs to leaf field type if needed.
+		JamTypeRef expected = ctx.getTypeFromString(leafFieldType);
+		JamValueRef newValue = coerceTo(ctx, rhsVal, expected);
+
+		// Walk back out, rebuilding each enclosing struct value.
+		for (size_t i = path.size(); i > 0; i--) {
+			newValue = JamLLVMBuildInsertValue(ctx.getBuilder(),
+			                                   values[i - 1], newValue,
+			                                   indices[i - 1],
+			                                   path[i - 1].c_str());
+		}
+
+		JamLLVMBuildStore(ctx.getBuilder(), newValue, alloca);
+		return rhsVal;
+	}
+
+	throw std::runtime_error("Invalid assignment target");
+}
+
 JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 	JamTypeRef VarType = ctx.getTypeFromString(Type);
 	JamValueRef Alloca =
 	    JamLLVMBuildAlloca(ctx.getBuilder(), VarType, Name.c_str());
 
 	if (Init) {
+		// If the initializer is a struct literal, propagate the target type so
+		// it can build the right struct and coerce field values.
+		if (auto *structLit = dynamic_cast<StructLiteralExprAST *>(Init.get())) {
+			structLit->setTypeName(Type);
+		}
+
 		JamValueRef InitVal = Init->codegen(ctx);
 		if (!InitVal) return nullptr;
 		JamLLVMBuildStore(ctx.getBuilder(), InitVal, Alloca);
@@ -422,6 +550,7 @@ JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 	}
 
 	ctx.setVariable(Name, Alloca);
+	ctx.setVariableType(Name, Type);
 	return Alloca;
 }
 
@@ -646,6 +775,74 @@ JamValueRef ImportExprAST::codegen(JamCodegenContext &ctx) {
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
+JamValueRef StructLiteralExprAST::codegen(JamCodegenContext &ctx) {
+	if (TypeName.empty()) {
+		throw std::runtime_error(
+		    "Struct literal used without a known target type");
+	}
+
+	const auto *info = ctx.getStruct(TypeName);
+	if (!info) {
+		throw std::runtime_error("Unknown struct type: " + TypeName);
+	}
+
+	// Build an initialized struct value via insertvalue chains.
+	JamValueRef structVal = JamLLVMGetUndef(info->type);
+	for (const auto &fld : Fields) {
+		int idx = ctx.getFieldIndex(TypeName, fld.first);
+		if (idx < 0) {
+			throw std::runtime_error("Unknown field '" + fld.first +
+			                         "' in struct " + TypeName);
+		}
+
+		// Propagate target type into nested struct literals so they know what
+		// they are without an explicit annotation at the inner site.
+		const std::string &declaredFieldType = info->fields[idx].second;
+		std::string fieldTypeStripped = declaredFieldType;
+		if (fieldTypeStripped.length() >= 6 &&
+		    fieldTypeStripped.substr(0, 6) == "const ") {
+			fieldTypeStripped = fieldTypeStripped.substr(6);
+		}
+		if (auto *innerLit =
+		        dynamic_cast<StructLiteralExprAST *>(fld.second.get())) {
+			if (ctx.getStruct(fieldTypeStripped)) {
+				innerLit->setTypeName(fieldTypeStripped);
+			}
+		}
+
+		JamValueRef fieldVal = fld.second->codegen(ctx);
+		if (!fieldVal) return nullptr;
+
+		// Coerce field value to the declared field type if needed.
+		JamTypeRef expectedType = ctx.getTypeFromString(declaredFieldType);
+		JamTypeRef actualType = JamLLVMTypeOf(fieldVal);
+		if (actualType != expectedType) {
+			if (JamLLVMTypeIsFloat(expectedType) &&
+			    JamLLVMTypeIsInteger(actualType)) {
+				// integer literal -> float field: assume signed conversion is
+				// fine for the literal cases we care about today
+				fieldVal = JamLLVMBuildSIToFP(ctx.getBuilder(), fieldVal,
+				                              expectedType, "fld_si2fp");
+			} else if (JamLLVMTypeIsFloat(expectedType) &&
+			           JamLLVMTypeIsFloat(actualType)) {
+				fieldVal = JamLLVMBuildFPCast(ctx.getBuilder(), fieldVal,
+				                              expectedType, "fld_fpcast");
+			} else if (JamLLVMTypeIsInteger(expectedType) &&
+			           JamLLVMTypeIsInteger(actualType)) {
+				fieldVal = JamLLVMBuildIntCast(ctx.getBuilder(), fieldVal,
+				                               expectedType, false,
+				                               "fld_icast");
+			}
+		}
+
+		structVal = JamLLVMBuildInsertValue(ctx.getBuilder(), structVal,
+		                                    fieldVal, static_cast<unsigned>(idx),
+		                                    "fld_set");
+	}
+
+	return structVal;
+}
+
 std::string MemberAccessExprAST::getQualifiedName() const {
 	std::string base;
 
@@ -662,10 +859,63 @@ std::string MemberAccessExprAST::getQualifiedName() const {
 }
 
 JamValueRef MemberAccessExprAST::codegen(JamCodegenContext &ctx) {
-	// Member access is resolved at compile time for module access
-	// For now, throw an error as we need the qualified name for function calls
-	throw std::runtime_error(
-	    "Direct member access codegen not yet implemented");
+	// Walk down the chain to find the base. chain holds member names from
+	// outermost to innermost (i.e. for x.inner.a we get ["a", "inner"] and
+	// the base is VariableExprAST(x)).
+	std::vector<std::string> chain;
+	chain.push_back(Member);
+	ExprAST *cur = Object.get();
+	while (auto *ma = dynamic_cast<MemberAccessExprAST *>(cur)) {
+		chain.push_back(ma->getMember());
+		cur = ma->getObject();
+	}
+
+	auto *varExpr = dynamic_cast<VariableExprAST *>(cur);
+	if (!varExpr || !ctx.hasVariable(varExpr->getName())) {
+		// Module-qualified access (e.g. std.fmt.println) — consumed at the
+		// call site via getQualifiedName().
+		throw std::runtime_error(
+		    "Direct member access codegen not yet implemented");
+	}
+
+	const std::string &varName = varExpr->getName();
+	std::string varType = ctx.getVariableType(varName);
+	if (varType.length() >= 6 && varType.substr(0, 6) == "const ") {
+		varType = varType.substr(6);
+	}
+	const auto *info = ctx.getStruct(varType);
+	if (!info) {
+		throw std::runtime_error(
+		    "Direct member access codegen not yet implemented");
+	}
+
+	JamValueRef alloca = ctx.getVariable(varName);
+	JamValueRef value = JamLLVMBuildLoad(ctx.getBuilder(), info->type, alloca,
+	                                     varName.c_str());
+
+	std::string currentType = varType;
+	for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+		const auto *curInfo = ctx.getStruct(currentType);
+		if (!curInfo) {
+			throw std::runtime_error("Cannot access field '" + *it +
+			                         "' on non-struct type " + currentType);
+		}
+		int idx = ctx.getFieldIndex(currentType, *it);
+		if (idx < 0) {
+			throw std::runtime_error("Unknown field '" + *it + "' in struct " +
+			                         currentType);
+		}
+		value = JamLLVMBuildExtractValue(ctx.getBuilder(), value,
+		                                 static_cast<unsigned>(idx),
+		                                 it->c_str());
+		currentType = curInfo->fields[idx].second;
+		if (currentType.length() >= 6 &&
+		    currentType.substr(0, 6) == "const ") {
+			currentType = currentType.substr(6);
+		}
+	}
+
+	return value;
 }
 
 JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
@@ -734,6 +984,7 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 
 		// Add arguments to variable symbol table
 		ctx.setVariable(Args[i].first, Alloca);
+		ctx.setVariableType(Args[i].first, Args[i].second);
 	}
 
 	// Generate code for each expression in the function body

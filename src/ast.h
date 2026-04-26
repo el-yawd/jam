@@ -113,6 +113,18 @@ class ReturnExprAST : public ExprAST {
 	JamValueRef codegen(JamCodegenContext &ctx) override;
 };
 
+// Assignment statement: target = value;
+class AssignExprAST : public ExprAST {
+	std::unique_ptr<ExprAST> Target;
+	std::unique_ptr<ExprAST> Value;
+
+  public:
+	AssignExprAST(std::unique_ptr<ExprAST> Target,
+	              std::unique_ptr<ExprAST> Value)
+	    : Target(std::move(Target)), Value(std::move(Value)) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+};
+
 // Variable declaration
 class VarDeclAST : public ExprAST {
 	std::string Name;
@@ -207,6 +219,28 @@ class MemberAccessExprAST : public ExprAST {
 
 	// Helper to get the full qualified name (e.g., "std.fmt.println")
 	std::string getQualifiedName() const;
+
+	const std::string &getMember() const { return Member; }
+	ExprAST *getObject() const { return Object.get(); }
+};
+
+// Struct literal expression - { x: 0, y: 100, z: 50 }
+class StructLiteralExprAST : public ExprAST {
+	std::string TypeName;  // Filled in by VarDeclAST when target type is known
+	std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> Fields;
+
+  public:
+	StructLiteralExprAST(
+	    std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> Fields)
+	    : Fields(std::move(Fields)) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+
+	void setTypeName(const std::string &name) { TypeName = name; }
+	const std::string &getTypeName() const { return TypeName; }
+	const std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> &
+	getFields() const {
+		return Fields;
+	}
 };
 
 // Function declaration
@@ -233,6 +267,18 @@ class FunctionAST {
 	}
 
 	JamFunctionRef codegen(JamCodegenContext &ctx);
+};
+
+// Top-level struct declaration
+// const Vec3 = struct { x: f32, y: f32, z: f32 };
+class StructDeclAST {
+  public:
+	std::string Name;
+	std::vector<std::pair<std::string, std::string>> Fields;  // (name, type)
+
+	StructDeclAST(std::string Name,
+	              std::vector<std::pair<std::string, std::string>> Fields)
+	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
 };
 
 // Top-level import declaration
@@ -263,6 +309,7 @@ class ModuleAST {
 	std::vector<std::unique_ptr<ImportDeclAST>> Imports;
 	std::vector<std::unique_ptr<DestructuringImportDeclAST>>
 	    DestructuringImports;
+	std::vector<std::unique_ptr<StructDeclAST>> Structs;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
 
 	ModuleAST() = default;

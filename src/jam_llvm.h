@@ -117,12 +117,19 @@ JAM_EXTERN_C JamTypeRef JamLLVMInt8Type(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMInt16Type(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMInt32Type(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMInt64Type(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMFloatType(JamContextRef ctx);
+JAM_EXTERN_C JamTypeRef JamLLVMDoubleType(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMVoidType(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMPointerType(JamTypeRef elementType,
                                            unsigned addressSpace);
 JAM_EXTERN_C JamTypeRef JamLLVMStructType(JamContextRef ctx,
                                           JamTypeRef *elementTypes,
                                           unsigned elementCount, bool packed);
+JAM_EXTERN_C JamTypeRef JamLLVMStructCreateNamed(JamContextRef ctx,
+                                                 const char *name);
+JAM_EXTERN_C void JamLLVMStructSetBody(JamTypeRef structType,
+                                       JamTypeRef *elementTypes,
+                                       unsigned elementCount, bool packed);
 JAM_EXTERN_C JamTypeRef JamLLVMFunctionType(JamTypeRef returnType,
                                             JamTypeRef *paramTypes,
                                             unsigned paramCount, bool isVarArg);
@@ -131,6 +138,7 @@ JAM_EXTERN_C JamTypeRef JamLLVMArrayType(JamTypeRef elementType,
 JAM_EXTERN_C bool JamLLVMTypeIsVoid(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsStruct(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsInteger(JamTypeRef type);
+JAM_EXTERN_C bool JamLLVMTypeIsFloat(JamTypeRef type);
 JAM_EXTERN_C unsigned JamLLVMGetIntTypeWidth(JamTypeRef type);
 
 // ============================================================================
@@ -139,6 +147,7 @@ JAM_EXTERN_C unsigned JamLLVMGetIntTypeWidth(JamTypeRef type);
 
 JAM_EXTERN_C JamValueRef JamLLVMConstInt(JamTypeRef type, uint64_t val,
                                          bool signExtend);
+JAM_EXTERN_C JamValueRef JamLLVMConstReal(JamTypeRef type, double val);
 JAM_EXTERN_C JamValueRef JamLLVMConstNull(JamTypeRef type);
 JAM_EXTERN_C JamValueRef JamLLVMConstString(JamContextRef ctx, const char *str,
                                             unsigned length,
@@ -264,6 +273,18 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildIntCast(JamBuilderRef builder,
                                              JamValueRef val,
                                              JamTypeRef destType, bool isSigned,
                                              const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildSIToFP(JamBuilderRef builder,
+                                            JamValueRef val,
+                                            JamTypeRef destType,
+                                            const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildUIToFP(JamBuilderRef builder,
+                                            JamValueRef val,
+                                            JamTypeRef destType,
+                                            const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFPCast(JamBuilderRef builder,
+                                            JamValueRef val,
+                                            JamTypeRef destType,
+                                            const char *name);
 
 // ============================================================================
 // Instructions - Aggregates

@@ -57,6 +57,7 @@ enum TokenType {
 	TOK_OR,      // or (logical OR)
 	TOK_NOT,     // ! (logical NOT)
 	TOK_TFN,     // tfn keyword (test function)
+	TOK_STRUCT,  // struct keyword
 };
 
 // Token structure

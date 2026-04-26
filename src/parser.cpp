@@ -73,6 +73,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		auto expr = parseLogicalOr();
 		consume(TOK_CLOSE_PAREN, "Expected ')' after expression");
 		return expr;
+	} else if (match(TOK_OPEN_BRACE)) {
+		return parseStructLiteral();
 	} else if (match(TOK_IDENTIFIER)) {
 		std::string name = previous().lexeme;
 		std::unique_ptr<ExprAST> expr = std::make_unique<VariableExprAST>(name);
@@ -135,7 +137,24 @@ std::string Parser::parseType() {
 	}
 	// Handle base types
 	if (match(TOK_TYPE)) { return previous().lexeme; }
+	// Handle user-defined types (struct names)
+	if (match(TOK_IDENTIFIER)) { return previous().lexeme; }
 	throw std::runtime_error("Expected type");
+}
+
+std::unique_ptr<ExprAST> Parser::parseStructLiteral() {
+	// Caller has already consumed '{'
+	std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> fields;
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		consume(TOK_IDENTIFIER, "Expected field name in struct literal");
+		std::string fieldName = previous().lexeme;
+		consume(TOK_COLON, "Expected ':' after field name");
+		auto value = parseLogicalOr();
+		fields.emplace_back(fieldName, std::move(value));
+		if (!match(TOK_COMMA)) break;
+	}
+	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct literal");
+	return std::make_unique<StructLiteralExprAST>(std::move(fields));
 }
 
 std::unique_ptr<ExprAST> Parser::parseExpression() {
@@ -221,8 +240,16 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 		return std::make_unique<ContinueExprAST>();
 	} else if (check(TOK_IDENTIFIER)) {
 		// Parse the expression and check if it's a call (function call
-		// statement)
+		// statement) or an assignment target.
 		auto expr = parseComparison();
+
+		// Assignment statement: target = value;
+		if (match(TOK_EQUAL)) {
+			auto value = parseLogicalOr();
+			consume(TOK_SEMI, "Expected ';' after assignment");
+			return std::make_unique<AssignExprAST>(std::move(expr),
+			                                       std::move(value));
+		}
 
 		// If we got a CallExprAST, consume the semicolon
 		if (dynamic_cast<CallExprAST *>(expr.get())) {
@@ -352,7 +379,8 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	// Parse the return type (directly after closing paren, no arrow)
 	std::string returnType;
-	if (check(TOK_TYPE) || check(TOK_OPEN_BRACKET) || check(TOK_CONST)) {
+	if (check(TOK_TYPE) || check(TOK_OPEN_BRACKET) || check(TOK_CONST) ||
+	    check(TOK_IDENTIFIER)) {
 		returnType = parseType();
 	}
 
@@ -377,6 +405,30 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	return std::make_unique<FunctionAST>(name, std::move(args), returnType,
 	                                     std::move(body), false, isExport,
 	                                     isPub, isTest);
+}
+
+std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
+	// const Name = struct { field1: T, field2: T };
+	consume(TOK_CONST, "Expected 'const' for struct declaration");
+	consume(TOK_IDENTIFIER, "Expected struct name");
+	std::string name = previous().lexeme;
+	consume(TOK_EQUAL, "Expected '=' after struct name");
+	consume(TOK_STRUCT, "Expected 'struct' keyword");
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
+
+	std::vector<std::pair<std::string, std::string>> fields;
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		consume(TOK_IDENTIFIER, "Expected field name");
+		std::string fieldName = previous().lexeme;
+		consume(TOK_COLON, "Expected ':' after field name");
+		std::string fieldType = parseType();
+		fields.emplace_back(fieldName, fieldType);
+		if (!match(TOK_COMMA)) break;
+	}
+	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct definition");
+	consume(TOK_SEMI, "Expected ';' after struct declaration");
+
+	return std::make_unique<StructDeclAST>(name, std::move(fields));
 }
 
 std::unique_ptr<ImportDeclAST> Parser::parseImportDecl() {
@@ -423,7 +475,7 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 	auto module = std::make_unique<ModuleAST>();
 
 	while (!isAtEnd()) {
-		// Check if this is an import declaration
+		// Check if this is an import or struct declaration
 		if (check(TOK_CONST)) {
 			int saved = current;
 			advance();  // consume const
@@ -436,7 +488,7 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 				continue;
 			}
 
-			// Check for regular import: const name = import(...)
+			// Check for regular import or struct decl: const name = ...
 			if (check(TOK_IDENTIFIER)) {
 				advance();  // consume identifier
 				if (check(TOK_EQUAL)) {
@@ -447,10 +499,16 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 						module->Imports.push_back(parseImportDecl());
 						continue;
 					}
+					if (check(TOK_STRUCT)) {
+						// const Name = struct { ... };
+						current = saved;
+						module->Structs.push_back(parseStructDecl());
+						continue;
+					}
 				}
 			}
 
-			// Not an import, reset and fall through to function parsing
+			// Not an import or struct, reset and fall through to function parsing
 			current = saved;
 		}
 

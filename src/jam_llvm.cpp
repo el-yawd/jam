@@ -174,6 +174,14 @@ JamTypeRef JamLLVMInt64Type(JamContextRef ctx) {
 	return WRAP_TYPE(llvm::Type::getInt64Ty(*UNWRAP_CONTEXT(ctx)));
 }
 
+JamTypeRef JamLLVMFloatType(JamContextRef ctx) {
+	return WRAP_TYPE(llvm::Type::getFloatTy(*UNWRAP_CONTEXT(ctx)));
+}
+
+JamTypeRef JamLLVMDoubleType(JamContextRef ctx) {
+	return WRAP_TYPE(llvm::Type::getDoubleTy(*UNWRAP_CONTEXT(ctx)));
+}
+
 JamTypeRef JamLLVMVoidType(JamContextRef ctx) {
 	return WRAP_TYPE(llvm::Type::getVoidTy(*UNWRAP_CONTEXT(ctx)));
 }
@@ -191,6 +199,19 @@ JamTypeRef JamLLVMStructType(JamContextRef ctx, JamTypeRef *elementTypes,
 	}
 	return WRAP_TYPE(
 	    llvm::StructType::get(*UNWRAP_CONTEXT(ctx), types, packed));
+}
+
+JamTypeRef JamLLVMStructCreateNamed(JamContextRef ctx, const char *name) {
+	return WRAP_TYPE(llvm::StructType::create(*UNWRAP_CONTEXT(ctx), name));
+}
+
+void JamLLVMStructSetBody(JamTypeRef structType, JamTypeRef *elementTypes,
+                          unsigned elementCount, bool packed) {
+	std::vector<llvm::Type *> types;
+	for (unsigned i = 0; i < elementCount; i++) {
+		types.push_back(UNWRAP_TYPE(elementTypes[i]));
+	}
+	llvm::cast<llvm::StructType>(UNWRAP_TYPE(structType))->setBody(types, packed);
 }
 
 JamTypeRef JamLLVMFunctionType(JamTypeRef returnType, JamTypeRef *paramTypes,
@@ -215,6 +236,10 @@ bool JamLLVMTypeIsInteger(JamTypeRef type) {
 	return UNWRAP_TYPE(type)->isIntegerTy();
 }
 
+bool JamLLVMTypeIsFloat(JamTypeRef type) {
+	return UNWRAP_TYPE(type)->isFloatingPointTy();
+}
+
 JamTypeRef JamLLVMArrayType(JamTypeRef elementType, unsigned elementCount) {
 	return WRAP_TYPE(
 	    llvm::ArrayType::get(UNWRAP_TYPE(elementType), elementCount));
@@ -231,6 +256,10 @@ unsigned JamLLVMGetIntTypeWidth(JamTypeRef type) {
 JamValueRef JamLLVMConstInt(JamTypeRef type, uint64_t val, bool signExtend) {
 	return WRAP_VALUE(
 	    llvm::ConstantInt::get(UNWRAP_TYPE(type), val, signExtend));
+}
+
+JamValueRef JamLLVMConstReal(JamTypeRef type, double val) {
+	return WRAP_VALUE(llvm::ConstantFP::get(UNWRAP_TYPE(type), val));
 }
 
 JamValueRef JamLLVMConstNull(JamTypeRef type) {
@@ -566,6 +595,24 @@ JamValueRef JamLLVMBuildIntCast(JamBuilderRef builder, JamValueRef val,
                                 const char *name) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateIntCast(
 	    UNWRAP_VALUE(val), UNWRAP_TYPE(destType), isSigned, name));
+}
+
+JamValueRef JamLLVMBuildSIToFP(JamBuilderRef builder, JamValueRef val,
+                               JamTypeRef destType, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateSIToFP(
+	    UNWRAP_VALUE(val), UNWRAP_TYPE(destType), name));
+}
+
+JamValueRef JamLLVMBuildUIToFP(JamBuilderRef builder, JamValueRef val,
+                               JamTypeRef destType, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateUIToFP(
+	    UNWRAP_VALUE(val), UNWRAP_TYPE(destType), name));
+}
+
+JamValueRef JamLLVMBuildFPCast(JamBuilderRef builder, JamValueRef val,
+                               JamTypeRef destType, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateFPCast(
+	    UNWRAP_VALUE(val), UNWRAP_TYPE(destType), name));
 }
 
 // ============================================================================

@@ -34,9 +34,11 @@ class Parser {
 	std::unique_ptr<ExprAST> parseLogicalAnd();
 	std::unique_ptr<ExprAST> parseComparison();
 	std::unique_ptr<ExprAST> parseAddition();
+	std::unique_ptr<ExprAST> parseStructLiteral();
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<ImportDeclAST> parseImportDecl();
 	std::unique_ptr<DestructuringImportDeclAST> parseDestructuringImport();
+	std::unique_ptr<StructDeclAST> parseStructDecl();
 
   public:
 	explicit Parser(std::vector<Token> tokens);

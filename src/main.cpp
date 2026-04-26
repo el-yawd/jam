@@ -104,6 +104,40 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
+	// Register struct types from imported modules and main module first so
+	// that codegen has the struct registry available. Two phases so structs
+	// can reference each other regardless of declaration order.
+	auto declareStructs = [&](ModuleAST *m) {
+		for (auto &s : m->Structs) {
+			JamTypeRef structType = JamLLVMStructCreateNamed(
+			    codegenCtx.getContext(), s->Name.c_str());
+			codegenCtx.registerStruct(s->Name, structType, s->Fields);
+		}
+	};
+	auto fillStructBodies = [&](ModuleAST *m) {
+		for (auto &s : m->Structs) {
+			std::vector<JamTypeRef> fieldTypes;
+			fieldTypes.reserve(s->Fields.size());
+			for (auto &f : s->Fields) {
+				fieldTypes.push_back(codegenCtx.getTypeFromString(f.second));
+			}
+			const auto *info = codegenCtx.getStruct(s->Name);
+			JamLLVMStructSetBody(info->type, fieldTypes.data(),
+			                     static_cast<unsigned>(fieldTypes.size()),
+			                     false);
+		}
+	};
+	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
+		if (path == "std") continue;
+		declareStructs(importedModule.get());
+	}
+	declareStructs(module.get());
+	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
+		if (path == "std") continue;
+		fillStructBodies(importedModule.get());
+	}
+	fillStructBodies(module.get());
+
 	// Generate code for imported modules first
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;  // Skip std

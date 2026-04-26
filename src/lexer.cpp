@@ -120,10 +120,12 @@ void Lexer::identifier() {
 		addToken(TOK_OR, text);
 	} else if (text == "tfn") {
 		addToken(TOK_TFN, text);
+	} else if (text == "struct") {
+		addToken(TOK_STRUCT, text);
 	} else if (text == "u1" || text == "u8" || text == "u16" || text == "u32" ||
 	           text == "u64" || text == "i8" || text == "i16" ||
-	           text == "i32" || text == "i64" || text == "bool" ||
-	           text == "str") {
+	           text == "i32" || text == "i64" || text == "f32" ||
+	           text == "f64" || text == "bool" || text == "str") {
 		addToken(TOK_TYPE, text);
 	} else {
 		addToken(TOK_IDENTIFIER, text);

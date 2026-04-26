@@ -35,8 +35,14 @@ JamCodegenContext::getTypeFromString(const std::string &typeStr) const {
 		return getInt32Type();
 	} else if (typeStr == "u64" || typeStr == "i64") {
 		return getInt64Type();
+	} else if (typeStr == "f32") {
+		return getFloatType();
+	} else if (typeStr == "f64") {
+		return getDoubleType();
 	} else if (typeStr == "bool" || typeStr == "u1") {
 		return getInt1Type();
+	} else if (auto *info = getStruct(typeStr)) {
+		return info->type;
 	} else if (typeStr == "str") {
 		// String slice: struct { ptr: *u8, len: usize }
 		// Equivalent to []const u8 in Zig
@@ -68,8 +74,50 @@ JamValueRef JamCodegenContext::getVariable(const std::string &name) const {
 	return nullptr;
 }
 
-void JamCodegenContext::clearVariables() { namedValues.clear(); }
+void JamCodegenContext::clearVariables() {
+	namedValues.clear();
+	namedValueTypes.clear();
+}
 
 bool JamCodegenContext::hasVariable(const std::string &name) const {
 	return namedValues.find(name) != namedValues.end();
+}
+
+void JamCodegenContext::setVariableType(const std::string &name,
+                                        const std::string &typeName) {
+	namedValueTypes[name] = typeName;
+}
+
+std::string
+JamCodegenContext::getVariableType(const std::string &name) const {
+	auto it = namedValueTypes.find(name);
+	if (it != namedValueTypes.end()) return it->second;
+	return "";
+}
+
+void JamCodegenContext::registerStruct(
+    const std::string &name, JamTypeRef type,
+    std::vector<std::pair<std::string, std::string>> fields) {
+	StructInfo info;
+	info.name = name;
+	info.type = type;
+	info.fields = std::move(fields);
+	structs[name] = std::move(info);
+}
+
+const JamCodegenContext::StructInfo *
+JamCodegenContext::getStruct(const std::string &name) const {
+	auto it = structs.find(name);
+	if (it != structs.end()) return &it->second;
+	return nullptr;
+}
+
+int JamCodegenContext::getFieldIndex(const std::string &structName,
+                                     const std::string &fieldName) const {
+	const StructInfo *info = getStruct(structName);
+	if (!info) return -1;
+	for (size_t i = 0; i < info->fields.size(); i++) {
+		if (info->fields[i].first == fieldName) return static_cast<int>(i);
+	}
+	return -1;
 }
