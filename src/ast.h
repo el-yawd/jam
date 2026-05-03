@@ -237,6 +237,30 @@ class MemberAccessExprAST : public ExprAST {
 	ExprAST *getObject() const { return Object.get(); }
 };
 
+// Address-of: &expr — yields a pointer to the operand's storage. Operand
+// must be an lvalue (variable, member chain, or indexed location).
+class AddressOfExprAST : public ExprAST {
+	std::unique_ptr<ExprAST> Operand;
+
+  public:
+	AddressOfExprAST(std::unique_ptr<ExprAST> Operand)
+	    : Operand(std::move(Operand)) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+	ExprAST *getOperand() const { return Operand.get(); }
+};
+
+// Pointer dereference: ptr.* — loads the pointee. Works on both *T and
+// [*]T. As an lvalue (`p.* = v`), stores through the pointer.
+class DerefExprAST : public ExprAST {
+	std::unique_ptr<ExprAST> Operand;
+
+  public:
+	DerefExprAST(std::unique_ptr<ExprAST> Operand)
+	    : Operand(std::move(Operand)) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+	ExprAST *getOperand() const { return Operand.get(); }
+};
+
 // Array indexing: obj[idx]
 class IndexExprAST : public ExprAST {
 	std::unique_ptr<ExprAST> Object;
@@ -278,21 +302,23 @@ class FunctionAST {
 	std::vector<std::pair<std::string, std::string>> Args;  // (name, type)
 	std::string ReturnType;
 	std::vector<std::unique_ptr<ExprAST>> Body;
-	bool isExtern;  // extern function (no body, import from C)
-	bool isExport;  // export function (C ABI export)
-	bool isPub;     // pub function (visible to Jam modules, like Zig)
-	bool isTest;    // test function (tfn)
+	bool isExtern;   // extern function (no body, import from C)
+	bool isExport;   // export function (C ABI export)
+	bool isPub;      // pub function (visible to Jam modules, like Zig)
+	bool isTest;     // test function (tfn)
+	bool isVarArgs;  // trailing ... in param list (only valid for extern)
 
 	FunctionAST(std::string Name,
 	            std::vector<std::pair<std::string, std::string>> Args,
 	            std::string ReturnType,
 	            std::vector<std::unique_ptr<ExprAST>> Body,
 	            bool isExtern = false, bool isExport = false,
-	            bool isPub = false, bool isTest = false)
+	            bool isPub = false, bool isTest = false,
+	            bool isVarArgs = false)
 	    : Name(std::move(Name)), Args(std::move(Args)),
 	      ReturnType(std::move(ReturnType)), Body(std::move(Body)),
-	      isExtern(isExtern), isExport(isExport), isPub(isPub), isTest(isTest) {
-	}
+	      isExtern(isExtern), isExport(isExport), isPub(isPub), isTest(isTest),
+	      isVarArgs(isVarArgs) {}
 
 	JamFunctionRef codegen(JamCodegenContext &ctx);
 };

@@ -349,7 +349,13 @@ std::vector<Token> Lexer::scanTokens() {
 			addToken(TOK_PLUS, "+");
 			break;
 		case '.':
-			addToken(TOK_DOT, ".");
+			if (peek() == '.' && peekNext() == '.') {
+				advance();
+				advance();
+				addToken(TOK_ELLIPSIS, "...");
+			} else {
+				addToken(TOK_DOT, ".");
+			}
 			break;
 		case '"':
 			stringLiteral();
@@ -391,6 +397,9 @@ std::vector<Token> Lexer::scanTokens() {
 			}
 			break;
 
+		case '*':
+			addToken(TOK_STAR, "*");
+			break;
 		case '&':
 			addToken(TOK_AMP, "&");
 			break;

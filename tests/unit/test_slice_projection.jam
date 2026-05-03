@@ -1,0 +1,52 @@
+const { assert } = import("test");
+
+fn sliceLenLiteral() u64 {
+    const s: []u8 = "hello";
+    return s.len;
+}
+
+fn strLenLiteral() u64 {
+    const s: str = "world!";
+    return s.len;
+}
+
+fn sliceFirstByte() u8 {
+    const s: []u8 = "hi";
+    var p: [*]u8 = s.ptr;
+    return p[0];
+}
+
+fn sliceSecondByte() u8 {
+    const s: []u8 = "hi";
+    var p: [*]u8 = s.ptr;
+    return p[1];
+}
+
+fn loadFirstByte(p: [*]u8) u8 {
+    return p[0];
+}
+
+fn passSlicePtrToFn() u8 {
+    const s: []u8 = "X";
+    return loadFirstByte(s.ptr);
+}
+
+tfn sliceLenLiteral() {
+    assert(sliceLenLiteral(), 5);
+}
+
+tfn strLenLiteral() {
+    assert(strLenLiteral(), 6);
+}
+
+tfn sliceFirstByte() {
+    assert(sliceFirstByte(), 104);
+}
+
+tfn sliceSecondByte() {
+    assert(sliceSecondByte(), 105);
+}
+
+tfn passSlicePtrToFn() {
+    assert(passSlicePtrToFn(), 88);
+}

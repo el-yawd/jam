@@ -1,0 +1,33 @@
+extern fn snprintf(buf: [*]u8, size: u64, format: [*]const u8, ...) i32;
+
+fn snprintfNoExtra() i32 {
+    var buf: [16]u8 = undefined;
+    const fmt: []u8 = "hi";
+    return snprintf(&buf[0], 16, fmt.ptr);
+}
+
+fn snprintfWithInt() i32 {
+    var buf: [16]u8 = undefined;
+    const fmt: []u8 = "n=%d";
+    var n: i32 = 42;
+    return snprintf(&buf[0], 16, fmt.ptr, n);
+}
+
+fn snprintfWithStr() i32 {
+    var buf: [32]u8 = undefined;
+    const fmt: []u8 = "s=%s";
+    const arg: []u8 = "hi";
+    return snprintf(&buf[0], 32, fmt.ptr, arg.ptr);
+}
+
+tfn snprintfNoExtra() {
+    assert(snprintfNoExtra(), 2);
+}
+
+tfn snprintfWithInt() {
+    assert(snprintfWithInt(), 4);
+}
+
+tfn snprintfWithStr() {
+    assert(snprintfWithStr(), 4);
+}

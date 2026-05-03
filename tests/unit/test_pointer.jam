@@ -1,0 +1,111 @@
+const { assert } = import("test");
+
+fn pointerToLocal() u8 {
+    var x: u8 = 99;
+    var p: *u8 = &x;
+    return p.*;
+}
+
+fn writeThroughPointer() u8 {
+    var x: u8 = 0;
+    var p: *u8 = &x;
+    p.* = 77;
+    return x;
+}
+
+fn pointerToArrayElement() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 11;
+    arr[1] = 22;
+    arr[2] = 33;
+    arr[3] = 44;
+    var p: *u8 = &arr[2];
+    return p.*;
+}
+
+fn writeThroughArrayElementPointer() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 1;
+    arr[1] = 2;
+    arr[2] = 3;
+    arr[3] = 4;
+    var p: *u8 = &arr[1];
+    p.* = 99;
+    return arr[1];
+}
+
+fn loadFromPtrParam(p: *u8) u8 {
+    return p.*;
+}
+
+fn callWithPtrArg() u8 {
+    var x: u8 = 50;
+    return loadFromPtrParam(&x);
+}
+
+const Point = struct {
+    x: u8,
+    y: u8,
+};
+
+fn addressOfStructField() u8 {
+    var pt: Point = undefined;
+    pt.x = 10;
+    pt.y = 20;
+    var px: *u8 = &pt.x;
+    px.* = 200;
+    return pt.x;
+}
+
+fn manyItemPointerIndex() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 5;
+    arr[1] = 6;
+    arr[2] = 7;
+    arr[3] = 8;
+    var p: [*]u8 = &arr[1];
+    return p[2];
+}
+
+fn manyItemPointerWrite() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 1;
+    arr[1] = 2;
+    arr[2] = 3;
+    arr[3] = 4;
+    var p: [*]u8 = &arr[0];
+    p[3] = 88;
+    return arr[3];
+}
+
+tfn pointerToLocal() {
+    assert(pointerToLocal(), 99);
+}
+
+tfn writeThroughPointer() {
+    assert(writeThroughPointer(), 77);
+}
+
+tfn pointerToArrayElement() {
+    assert(pointerToArrayElement(), 33);
+}
+
+tfn writeThroughArrayElementPointer() {
+    assert(writeThroughArrayElementPointer(), 99);
+}
+
+tfn callWithPtrArg() {
+    assert(callWithPtrArg(), 50);
+}
+
+tfn addressOfStructField() {
+    assert(addressOfStructField(), 200);
+}
+
+tfn manyItemPointerIndex() {
+    assert(manyItemPointerIndex(), 8);
+}
+
+tfn manyItemPointerWrite() {
+    assert(manyItemPointerWrite(), 88);
+}

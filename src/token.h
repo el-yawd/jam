@@ -58,13 +58,15 @@ enum TokenType {
 	TOK_NOT,     // ! (logical NOT)
 	TOK_TFN,     // tfn keyword (test function)
 	TOK_STRUCT,  // struct keyword
-	TOK_AMP,        // & (bitwise AND)
+	TOK_STAR,       // * (pointer prefix; future: multiplication)
+	TOK_AMP,        // & (bitwise AND; address-of)
 	TOK_PIPE,       // | (bitwise OR)
 	TOK_CARET,      // ^ (bitwise XOR)
 	TOK_TILDE,      // ~ (bitwise NOT)
 	TOK_LSHIFT,     // << (left shift)
 	TOK_RSHIFT,     // >> (right shift)
 	TOK_UNDEFINED,  // undefined keyword (uninitialized storage marker)
+	TOK_ELLIPSIS,   // ... (variadic marker in extern fn parameters)
 };
 
 // Token structure

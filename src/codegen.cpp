@@ -51,6 +51,16 @@ JamCodegenContext::getTypeFromString(const std::string &typeStr) const {
 		JamTypeRef usizeType = getInt64Type();
 		JamTypeRef elementTypes[2] = {i8PtrType, usizeType};
 		return JamLLVMStructType(ctx, elementTypes, 2, false);
+	} else if (typeStr.length() >= 2 && typeStr[0] == '*') {
+		// Single-item pointer: *T
+		std::string elementTypeStr = typeStr.substr(1);
+		JamTypeRef elemType = getTypeFromString(elementTypeStr);
+		return JamLLVMPointerType(elemType, 0);
+	} else if (typeStr.length() >= 3 && typeStr.substr(0, 3) == "[*]") {
+		// Many-item pointer: [*]T (indexable, no length)
+		std::string elementTypeStr = typeStr.substr(3);
+		JamTypeRef elemType = getTypeFromString(elementTypeStr);
+		return JamLLVMPointerType(elemType, 0);
 	} else if (typeStr.length() >= 2 && typeStr.substr(0, 2) == "[]") {
 		// Slice type: []T or []const T -> struct { ptr: *T, len: usize }
 		std::string elementTypeStr = typeStr.substr(2);  // Remove "[]"

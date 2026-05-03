@@ -81,12 +81,16 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		std::string name = previous().lexeme;
 		std::unique_ptr<ExprAST> expr = std::make_unique<VariableExprAST>(name);
 
-		// Handle member access chain (std.fmt.println)
+		// Handle member access chain (std.fmt.println) and pointer deref `.*`.
 		while (match(TOK_DOT)) {
-			consume(TOK_IDENTIFIER, "Expected member name after '.'");
-			std::string member = previous().lexeme;
-			expr =
-			    std::make_unique<MemberAccessExprAST>(std::move(expr), member);
+			if (match(TOK_STAR)) {
+				expr = std::make_unique<DerefExprAST>(std::move(expr));
+			} else {
+				consume(TOK_IDENTIFIER, "Expected member name after '.'");
+				std::string member = previous().lexeme;
+				expr = std::make_unique<MemberAccessExprAST>(std::move(expr),
+				                                             member);
+			}
 		}
 
 		// Check if this is a function call
@@ -131,7 +135,13 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 }
 
 std::string Parser::parseType() {
-	// Handle bracket-prefixed types: []T (slice) or [N]T (fixed array)
+	// Single-item pointer: *T (cannot be indexed — use `.*` to dereference).
+	if (match(TOK_STAR)) {
+		std::string innerType = parseType();
+		return "*" + innerType;
+	}
+	// Handle bracket-prefixed types: []T (slice), [*]T (many-item ptr),
+	// or [N]T (fixed array).
 	if (match(TOK_OPEN_BRACKET)) {
 		if (match(TOK_CLOSE_BRACKET)) {
 			// Slice: []T or []const T
@@ -139,6 +149,12 @@ std::string Parser::parseType() {
 			std::string elementType = parseType();
 			if (isConst) { return "[]const " + elementType; }
 			return "[]" + elementType;
+		}
+		if (match(TOK_STAR)) {
+			// Many-item pointer: [*]T (indexable, no length).
+			consume(TOK_CLOSE_BRACKET, "Expected ']' after '[*'");
+			std::string elementType = parseType();
+			return "[*]" + elementType;
 		}
 		// Fixed-size array: [N]T
 		consume(TOK_NUMBER, "Expected size or ']' after '['");
@@ -405,6 +421,13 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 		auto operand = parseUnary();
 		return std::make_unique<UnaryExprAST>("~", std::move(operand));
 	}
+	// Address-of (prefix &). Binary `&` (bitwise AND) is parsed in
+	// parseBitwise, which sits above parseUnary in the precedence chain, so
+	// the unary form here only fires when `&` appears in operand position.
+	if (match(TOK_AMP)) {
+		auto operand = parseUnary();
+		return std::make_unique<AddressOfExprAST>(std::move(operand));
+	}
 
 	return parsePrimary();
 }
@@ -433,8 +456,19 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	consume(TOK_OPEN_PAREN, "Expected '(' after function name");
 
 	std::vector<std::pair<std::string, std::string>> args;
+	bool isVarArgs = false;
 	if (!check(TOK_CLOSE_PAREN)) {
 		do {
+			// Trailing `...` marks the function as variadic. Must be the
+			// final entry in the parameter list and only valid on extern.
+			if (match(TOK_ELLIPSIS)) {
+				if (!isExtern) {
+					throw std::runtime_error(
+					    "`...` is only allowed in extern fn declarations");
+				}
+				isVarArgs = true;
+				break;
+			}
 			consume(TOK_IDENTIFIER, "Expected parameter name");
 			std::string paramName = previous().lexeme;
 
@@ -450,7 +484,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Parse the return type (directly after closing paren, no arrow)
 	std::string returnType;
 	if (check(TOK_TYPE) || check(TOK_OPEN_BRACKET) || check(TOK_CONST) ||
-	    check(TOK_IDENTIFIER)) {
+	    check(TOK_IDENTIFIER) || check(TOK_STAR)) {
 		returnType = parseType();
 	}
 
@@ -460,7 +494,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		std::vector<std::unique_ptr<ExprAST>> emptyBody;
 		return std::make_unique<FunctionAST>(name, std::move(args), returnType,
 		                                     std::move(emptyBody), true, false,
-		                                     false);
+		                                     false, false, isVarArgs);
 	}
 
 	consume(TOK_OPEN_BRACE, "Expected '{' before function body");
@@ -474,7 +508,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	return std::make_unique<FunctionAST>(name, std::move(args), returnType,
 	                                     std::move(body), false, isExport,
-	                                     isPub, isTest);
+	                                     isPub, isTest, false);
 }
 
 std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {

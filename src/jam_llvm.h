@@ -139,6 +139,8 @@ JAM_EXTERN_C bool JamLLVMTypeIsVoid(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsStruct(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsInteger(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsFloat(JamTypeRef type);
+JAM_EXTERN_C bool JamLLVMTypeIsPointer(JamTypeRef type);
+JAM_EXTERN_C bool JamLLVMTypeIsArray(JamTypeRef type);
 JAM_EXTERN_C unsigned JamLLVMGetIntTypeWidth(JamTypeRef type);
 
 // ============================================================================
@@ -186,6 +188,13 @@ JAM_EXTERN_C void JamLLVMSetFunctionCallConv(JamFunctionRef func,
 JAM_EXTERN_C void JamLLVMSetLinkage(JamValueRef global, JamLinkage linkage);
 JAM_EXTERN_C unsigned JamLLVMCountParams(JamFunctionRef func);
 JAM_EXTERN_C JamValueRef JamLLVMGetParam(JamFunctionRef func, unsigned index);
+JAM_EXTERN_C bool JamLLVMFunctionIsVarArg(JamFunctionRef func);
+// Attach the LLVM `zeroext` attribute to a function parameter / return slot.
+// Used to satisfy the C ABI when an i1 (Jam bool) crosses the extern/export
+// boundary — C's _Bool is conventionally zero-extended to int.
+JAM_EXTERN_C void JamLLVMAddParamAttrZeroExt(JamFunctionRef func,
+                                             unsigned argIdx);
+JAM_EXTERN_C void JamLLVMAddRetAttrZeroExt(JamFunctionRef func);
 JAM_EXTERN_C void JamLLVMSetValueName(JamValueRef val, const char *name);
 JAM_EXTERN_C JamTypeRef JamLLVMGetReturnType(JamFunctionRef func);
 JAM_EXTERN_C bool JamLLVMVerifyFunction(JamFunctionRef func);
@@ -225,6 +234,13 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildStructGEP(JamBuilderRef builder,
                                                JamValueRef ptr,
                                                unsigned fieldIdx,
                                                const char *name);
+// Pointer GEP: single-index `gep T, ptr, idx` for stepping by element-sized
+// strides through a many-item pointer (no leading 0). `elemType` is the
+// pointee type (T).
+JAM_EXTERN_C JamValueRef JamLLVMBuildPtrGEP(JamBuilderRef builder,
+                                            JamTypeRef elemType,
+                                            JamValueRef ptr, JamValueRef idx,
+                                            const char *name);
 // Returns the element type of an array type (e.g. [200 x i8] -> i8).
 JAM_EXTERN_C JamTypeRef JamLLVMGetArrayElementType(JamTypeRef arrayType);
 

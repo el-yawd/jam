@@ -240,6 +240,14 @@ bool JamLLVMTypeIsFloat(JamTypeRef type) {
 	return UNWRAP_TYPE(type)->isFloatingPointTy();
 }
 
+bool JamLLVMTypeIsPointer(JamTypeRef type) {
+	return UNWRAP_TYPE(type)->isPointerTy();
+}
+
+bool JamLLVMTypeIsArray(JamTypeRef type) {
+	return UNWRAP_TYPE(type)->isArrayTy();
+}
+
 JamTypeRef JamLLVMArrayType(JamTypeRef elementType, unsigned elementCount) {
 	return WRAP_TYPE(
 	    llvm::ArrayType::get(UNWRAP_TYPE(elementType), elementCount));
@@ -389,6 +397,18 @@ JamValueRef JamLLVMGetParam(JamFunctionRef func, unsigned index) {
 	return WRAP_VALUE(UNWRAP_FUNCTION(func)->getArg(index));
 }
 
+bool JamLLVMFunctionIsVarArg(JamFunctionRef func) {
+	return UNWRAP_FUNCTION(func)->getFunctionType()->isVarArg();
+}
+
+void JamLLVMAddParamAttrZeroExt(JamFunctionRef func, unsigned argIdx) {
+	UNWRAP_FUNCTION(func)->addParamAttr(argIdx, llvm::Attribute::ZExt);
+}
+
+void JamLLVMAddRetAttrZeroExt(JamFunctionRef func) {
+	UNWRAP_FUNCTION(func)->addRetAttr(llvm::Attribute::ZExt);
+}
+
 void JamLLVMSetValueName(JamValueRef val, const char *name) {
 	UNWRAP_VALUE(val)->setName(name);
 }
@@ -464,6 +484,17 @@ JamValueRef JamLLVMBuildStructGEP(JamBuilderRef builder, JamTypeRef structType,
                                   const char *name) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateStructGEP(
 	    UNWRAP_TYPE(structType), UNWRAP_VALUE(ptr), fieldIdx, name));
+}
+
+JamValueRef JamLLVMBuildPtrGEP(JamBuilderRef builder, JamTypeRef elemType,
+                               JamValueRef ptr, JamValueRef idx,
+                               const char *name) {
+	auto *b = UNWRAP_BUILDER(builder);
+	llvm::Value *indices[1] = {UNWRAP_VALUE(idx)};
+	return WRAP_VALUE(b->CreateInBoundsGEP(UNWRAP_TYPE(elemType),
+	                                       UNWRAP_VALUE(ptr),
+	                                       llvm::ArrayRef<llvm::Value *>(indices, 1),
+	                                       name));
 }
 
 // ============================================================================

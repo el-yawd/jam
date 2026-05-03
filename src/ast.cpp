@@ -20,6 +20,23 @@ JamBasicBlockRef CurrentLoopBreak = nullptr;
 static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
                             JamTypeRef expected);
 
+// If `expr` is an integer literal, materialize it directly at `expectedType`
+// so the resulting Value has the right width and signedness from the start.
+// No-op for any other expression (those go through coerceTo as a fallback).
+static void hintIntLiteral(ExprAST *expr, JamTypeRef expectedType) {
+	if (!expectedType) return;
+	if (auto *numExpr = dynamic_cast<NumberExprAST *>(expr)) {
+		if (JamLLVMTypeIsInteger(expectedType)) {
+			numExpr->setExpectedType(expectedType);
+		}
+	}
+}
+
+// Forward declaration: defined later in this file. Strips `*` (single) or
+// `[*]` (many) prefix from a pointer-type string and returns the pointee
+// type string. Returns "" if the input isn't a pointer type.
+static std::string pointeeTypeOf(std::string ptrType);
+
 JamValueRef NumberExprAST::codegen(JamCodegenContext &ctx) {
 	// If a use site fixed our type, materialize the constant at that type
 	// directly. This avoids downstream sext/zext ambiguity on the resulting
@@ -235,24 +252,34 @@ JamValueRef CallExprAST::codegen(JamCodegenContext &ctx) {
 	if (!CalleeF)
 		throw std::runtime_error("Unknown function referenced: " + Callee);
 
-	if (JamLLVMCountParams(CalleeF) != Args.size())
-		throw std::runtime_error("Incorrect number of arguments passed");
+	unsigned declaredParamCount = JamLLVMCountParams(CalleeF);
+	bool isVarArg = JamLLVMFunctionIsVarArg(CalleeF);
+	if (isVarArg ? Args.size() < declaredParamCount
+	             : Args.size() != declaredParamCount) {
+		throw std::runtime_error("Incorrect number of arguments passed to " +
+		                         Callee);
+	}
 
 	std::vector<JamValueRef> ArgsV;
 	for (unsigned i = 0, e = Args.size(); i != e; ++i) {
-		JamTypeRef expected = JamLLVMTypeOf(JamLLVMGetParam(CalleeF, i));
-		// Integer literals adapt to the callee's expected type so the
-		// constant is materialized at the right width and signedness from
-		// the start, avoiding sext/zext guesswork after the fact.
-		if (auto *numExpr = dynamic_cast<NumberExprAST *>(Args[i].get())) {
-			numExpr->setExpectedType(expected);
+		// For declared params, materialize integer literals at the param's
+		// type and coerce non-literals as a safety net. For extra varargs
+		// args (i >= declaredParamCount), there is no declared type — let
+		// the value materialize at its natural type and trust the caller.
+		if (i < declaredParamCount) {
+			JamTypeRef expected = JamLLVMTypeOf(JamLLVMGetParam(CalleeF, i));
+			if (auto *numExpr = dynamic_cast<NumberExprAST *>(Args[i].get())) {
+				numExpr->setExpectedType(expected);
+			}
+			JamValueRef argVal = Args[i]->codegen(ctx);
+			if (!argVal) return nullptr;
+			argVal = coerceTo(ctx, argVal, expected);
+			ArgsV.push_back(argVal);
+		} else {
+			JamValueRef argVal = Args[i]->codegen(ctx);
+			if (!argVal) return nullptr;
+			ArgsV.push_back(argVal);
 		}
-		JamValueRef argVal = Args[i]->codegen(ctx);
-		if (!argVal) return nullptr;
-		// Non-literal args (variables, expressions) still need coerceTo as a
-		// safety net for type-width drift.
-		argVal = coerceTo(ctx, argVal, expected);
-		ArgsV.push_back(argVal);
 	}
 
 	return JamLLVMBuildCall(ctx.getBuilder(), CalleeF, ArgsV.data(),
@@ -484,9 +511,35 @@ resolveIndexedElementPtr(JamCodegenContext &ctx, ExprAST *object,
 		if (!alloca) {
 			throw std::runtime_error("Unknown variable: " + name);
 		}
-		JamTypeRef arrayType = JamLLVMGetAllocatedType(alloca);
-		outElemType = JamLLVMGetArrayElementType(arrayType);
-		return JamLLVMBuildArrayGEP(ctx.getBuilder(), arrayType, alloca,
+		JamTypeRef allocatedType = JamLLVMGetAllocatedType(alloca);
+
+		// Pointer indexing: only `[*]T` (many-item pointers) are indexable.
+		// `*T` (single-item) must be dereferenced via `.*` instead. Load the
+		// alloca to get the pointer value, then single-index GEP (no leading
+		// 0 — different from array GEP).
+		if (JamLLVMTypeIsPointer(allocatedType)) {
+			std::string varType = ctx.getVariableType(name);
+			if (varType.length() >= 6 &&
+			    varType.substr(0, 6) == "const ") {
+				varType = varType.substr(6);
+			}
+			if (varType.length() < 3 || varType.substr(0, 3) != "[*]") {
+				throw std::runtime_error(
+				    "Cannot index single-item pointer `" + varType +
+				    "`; use `.* ` to dereference, or declare as `[*]T` for "
+				    "many-item indexing");
+			}
+			std::string elemTypeStr = varType.substr(3);
+			outElemType = ctx.getTypeFromString(elemTypeStr);
+			JamValueRef ptrVal = JamLLVMBuildLoad(
+			    ctx.getBuilder(), allocatedType, alloca, name.c_str());
+			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, ptrVal,
+			                          idxVal, "ptrgep");
+		}
+
+		// Array indexing: variable is `[N]T`.
+		outElemType = JamLLVMGetArrayElementType(allocatedType);
+		return JamLLVMBuildArrayGEP(ctx.getBuilder(), allocatedType, alloca,
 		                            idxVal, "idxgep");
 	}
 
@@ -574,9 +627,6 @@ static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
 }
 
 JamValueRef AssignExprAST::codegen(JamCodegenContext &ctx) {
-	JamValueRef rhsVal = Value->codegen(ctx);
-	if (!rhsVal) return nullptr;
-
 	// Plain variable target: x = value;
 	if (auto *varExpr = dynamic_cast<VariableExprAST *>(Target.get())) {
 		const std::string &name = varExpr->getName();
@@ -585,10 +635,46 @@ JamValueRef AssignExprAST::codegen(JamCodegenContext &ctx) {
 			throw std::runtime_error("Unknown variable: " + name);
 		}
 		JamTypeRef expected = JamLLVMGetAllocatedType(alloca);
+		hintIntLiteral(Value.get(), expected);
+		JamValueRef rhsVal = Value->codegen(ctx);
+		if (!rhsVal) return nullptr;
 		rhsVal = coerceTo(ctx, rhsVal, expected);
 		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, alloca);
 		return rhsVal;
 	}
+
+	// `p.* = value` — store through a pointer.
+	if (auto *derefExpr = dynamic_cast<DerefExprAST *>(Target.get())) {
+		auto *varExpr =
+		    dynamic_cast<VariableExprAST *>(derefExpr->getOperand());
+		if (!varExpr) {
+			throw std::runtime_error(
+			    "`.* =` is only supported on a pointer-typed variable");
+		}
+		const std::string &name = varExpr->getName();
+		JamValueRef alloca = ctx.getVariable(name);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + name);
+		}
+		std::string pointeeStr = pointeeTypeOf(ctx.getVariableType(name));
+		if (pointeeStr.empty()) {
+			throw std::runtime_error("Cannot dereference non-pointer: " +
+			                         name);
+		}
+		JamTypeRef pointeeType = ctx.getTypeFromString(pointeeStr);
+		JamTypeRef ptrType = JamLLVMGetAllocatedType(alloca);
+		JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(), ptrType,
+		                                      alloca, name.c_str());
+		hintIntLiteral(Value.get(), pointeeType);
+		JamValueRef rhsVal = Value->codegen(ctx);
+		if (!rhsVal) return nullptr;
+		rhsVal = coerceTo(ctx, rhsVal, pointeeType);
+		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, ptrVal);
+		return rhsVal;
+	}
+
+	JamValueRef rhsVal = Value->codegen(ctx);
+	if (!rhsVal) return nullptr;
 
 	// Struct field target, possibly nested: a.b.c = value;
 	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(Target.get())) {
@@ -701,6 +787,121 @@ JamValueRef IndexExprAST::codegen(JamCodegenContext &ctx) {
 	return JamLLVMBuildLoad(ctx.getBuilder(), elemType, elemPtr, "idxload");
 }
 
+// Helper: given a pointer-typed variable's Jam type string, return the
+// pointee type string. Strips the `*` (single-item) or `[*]` (many-item)
+// prefix. Returns empty if the type isn't a pointer.
+static std::string pointeeTypeOf(std::string ptrType) {
+	if (ptrType.length() >= 6 && ptrType.substr(0, 6) == "const ") {
+		ptrType = ptrType.substr(6);
+	}
+	if (ptrType.length() >= 3 && ptrType.substr(0, 3) == "[*]") {
+		return ptrType.substr(3);
+	}
+	if (ptrType.length() >= 1 && ptrType[0] == '*') {
+		return ptrType.substr(1);
+	}
+	return "";
+}
+
+JamValueRef DerefExprAST::codegen(JamCodegenContext &ctx) {
+	auto *varExpr = dynamic_cast<VariableExprAST *>(Operand.get());
+	if (!varExpr) {
+		throw std::runtime_error(
+		    "`.* ` is only supported on a pointer-typed variable");
+	}
+	const std::string &name = varExpr->getName();
+	JamValueRef alloca = ctx.getVariable(name);
+	if (!alloca) {
+		throw std::runtime_error("Unknown variable: " + name);
+	}
+	std::string pointeeStr = pointeeTypeOf(ctx.getVariableType(name));
+	if (pointeeStr.empty()) {
+		throw std::runtime_error("Cannot dereference non-pointer: " + name);
+	}
+	JamTypeRef pointeeType = ctx.getTypeFromString(pointeeStr);
+	JamTypeRef ptrType = JamLLVMGetAllocatedType(alloca);
+	JamValueRef ptrVal =
+	    JamLLVMBuildLoad(ctx.getBuilder(), ptrType, alloca, name.c_str());
+	return JamLLVMBuildLoad(ctx.getBuilder(), pointeeType, ptrVal, "deref");
+}
+
+JamValueRef AddressOfExprAST::codegen(JamCodegenContext &ctx) {
+	// &local — alloca itself is already a *T.
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(Operand.get())) {
+		const std::string &name = varExpr->getName();
+		JamValueRef alloca = ctx.getVariable(name);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + name);
+		}
+		return alloca;
+	}
+
+	// &arr[i] / &p[i] / &g.board[i] — compute the element pointer.
+	if (auto *idxExpr = dynamic_cast<IndexExprAST *>(Operand.get())) {
+		JamValueRef idxVal = idxExpr->getIndex()->codegen(ctx);
+		if (!idxVal) return nullptr;
+		idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
+		JamTypeRef elemType = nullptr;
+		return resolveIndexedElementPtr(ctx, idxExpr->getObject(), idxVal,
+		                                elemType);
+	}
+
+	// &x.f.g — walk the struct field chain via struct GEPs.
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(Operand.get())) {
+		std::vector<std::string> chain;
+		chain.push_back(memberExpr->getMember());
+		ExprAST *cur = memberExpr->getObject();
+		while (auto *ma = dynamic_cast<MemberAccessExprAST *>(cur)) {
+			chain.push_back(ma->getMember());
+			cur = ma->getObject();
+		}
+		auto *leafVar = dynamic_cast<VariableExprAST *>(cur);
+		if (!leafVar) {
+			throw std::runtime_error(
+			    "Address-of a non-variable lvalue is not supported");
+		}
+		const std::string &varName = leafVar->getName();
+		JamValueRef alloca = ctx.getVariable(varName);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + varName);
+		}
+		std::string typeAtLevel = ctx.getVariableType(varName);
+		if (typeAtLevel.length() >= 6 &&
+		    typeAtLevel.substr(0, 6) == "const ") {
+			typeAtLevel = typeAtLevel.substr(6);
+		}
+		std::vector<std::string> path(chain.rbegin(), chain.rend());
+		JamValueRef currentPtr = alloca;
+		JamTypeRef currentType = ctx.getTypeFromString(typeAtLevel);
+		for (size_t i = 0; i < path.size(); i++) {
+			const auto *info = ctx.getStruct(typeAtLevel);
+			if (!info) {
+				throw std::runtime_error("Cannot take address of field '" +
+				                         path[i] + "' on non-struct: " +
+				                         typeAtLevel);
+			}
+			int idx = ctx.getFieldIndex(typeAtLevel, path[i]);
+			if (idx < 0) {
+				throw std::runtime_error("Unknown field '" + path[i] +
+				                         "' in struct " + typeAtLevel);
+			}
+			currentPtr = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), currentType, currentPtr,
+			    static_cast<unsigned>(idx), path[i].c_str());
+			std::string fieldType = info->fields[idx].second;
+			if (fieldType.length() >= 6 &&
+			    fieldType.substr(0, 6) == "const ") {
+				fieldType = fieldType.substr(6);
+			}
+			typeAtLevel = fieldType;
+			currentType = ctx.getTypeFromString(typeAtLevel);
+		}
+		return currentPtr;
+	}
+
+	throw std::runtime_error("Cannot take address of this expression");
+}
+
 JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 	JamTypeRef VarType = ctx.getTypeFromString(Type);
 	JamValueRef Alloca =
@@ -714,9 +915,13 @@ JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 		if (auto *structLit = dynamic_cast<StructLiteralExprAST *>(Init.get())) {
 			structLit->setTypeName(Type);
 		}
+		// If the initializer is a number literal, materialize it at the
+		// declared variable type rather than at smallest-fit.
+		hintIntLiteral(Init.get(), VarType);
 
 		JamValueRef InitVal = Init->codegen(ctx);
 		if (!InitVal) return nullptr;
+		InitVal = coerceTo(ctx, InitVal, VarType);
 		JamLLVMBuildStore(ctx.getBuilder(), InitVal, Alloca);
 	}
 
@@ -1054,6 +1259,28 @@ JamValueRef MemberAccessExprAST::codegen(JamCodegenContext &ctx) {
 	if (varType.length() >= 6 && varType.substr(0, 6) == "const ") {
 		varType = varType.substr(6);
 	}
+
+	// Slice projection: `slice.ptr` extracts the pointer half (returns *T),
+	// `slice.len` extracts the length half (returns usize). Single-level
+	// access only — chain.size() == 1.
+	bool isSlice =
+	    (varType.length() >= 2 && varType.substr(0, 2) == "[]") ||
+	    varType == "str";
+	if (isSlice && chain.size() == 1) {
+		const std::string &member = chain[0];
+		if (member != "ptr" && member != "len") {
+			throw std::runtime_error("Slice has no field '" + member +
+			                         "' (only .ptr and .len)");
+		}
+		JamValueRef alloca = ctx.getVariable(varName);
+		JamTypeRef sliceType = ctx.getTypeFromString(varType);
+		JamValueRef sliceVal = JamLLVMBuildLoad(
+		    ctx.getBuilder(), sliceType, alloca, varName.c_str());
+		unsigned fieldIdx = (member == "ptr") ? 0 : 1;
+		return JamLLVMBuildExtractValue(ctx.getBuilder(), sliceVal, fieldIdx,
+		                                member.c_str());
+	}
+
 	const auto *info = ctx.getStruct(varType);
 	if (!info) {
 		throw std::runtime_error(
@@ -1106,10 +1333,8 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 	                         ? ctx.getVoidType()
 	                         : ctx.getTypeFromString(ReturnType);
 
-	JamTypeRef FT =
-	    JamLLVMFunctionType(RetType, ArgTypes.data(), ArgTypes.size(),
-	                        false  // Not vararg
-	    );
+	JamTypeRef FT = JamLLVMFunctionType(RetType, ArgTypes.data(),
+	                                    ArgTypes.size(), isVarArgs);
 
 	// Create the function with appropriate linkage
 	JamFunctionRef F =
@@ -1126,6 +1351,25 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 	// Set calling convention to C for extern/export functions and main
 	if (isExtern || isExport || Name == "main") {
 		JamLLVMSetFunctionCallConv(F, JAM_CALLCONV_C);
+
+		// At the C ABI boundary, Jam's `bool` (i1) needs `zeroext` so it
+		// reaches the C side as a properly-widened _Bool. Applies to top-level
+		// bool params and bool returns; inner struct fields are handled by
+		// the struct ABI rules.
+		auto stripConst = [](std::string s) {
+			if (s.length() >= 6 && s.substr(0, 6) == "const ") {
+				return s.substr(6);
+			}
+			return s;
+		};
+		for (unsigned i = 0; i < Args.size(); i++) {
+			std::string t = stripConst(Args[i].second);
+			if (t == "bool" || t == "u1") {
+				JamLLVMAddParamAttrZeroExt(F, i);
+			}
+		}
+		std::string rt = stripConst(ReturnType);
+		if (rt == "bool" || rt == "u1") { JamLLVMAddRetAttrZeroExt(F); }
 	}
 
 	// Set names for all arguments
