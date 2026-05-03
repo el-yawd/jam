@@ -14,11 +14,28 @@
 JamBasicBlockRef CurrentLoopContinue = nullptr;
 JamBasicBlockRef CurrentLoopBreak = nullptr;
 
+// Forward declaration: defined later in this file. Used by CallExprAST to
+// coerce each argument to the callee's parameter type before emitting the
+// call (prevents bogus IR like `call i32 @abs(i8 -7)`).
+static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
+                            JamTypeRef expected);
+
 JamValueRef NumberExprAST::codegen(JamCodegenContext &ctx) {
-	// Choose appropriate type based on value range
+	// If a use site fixed our type, materialize the constant at that type
+	// directly. This avoids downstream sext/zext ambiguity on the resulting
+	// Value when the literal is consumed by a wider/narrower context.
+	if (ExpectedType && JamLLVMTypeIsInteger(ExpectedType)) {
+		if (IsNegative) {
+			int64_t signedVal = -static_cast<int64_t>(Val);
+			return JamLLVMConstInt(ExpectedType,
+			                       static_cast<uint64_t>(signedVal), true);
+		}
+		return JamLLVMConstInt(ExpectedType, Val, false);
+	}
+
+	// Fallback: smallest integer type that fits.
 	JamTypeRef IntType;
 	if (IsNegative) {
-		// For negative values, use signed ranges
 		if (Val <= 128) {
 			IntType = ctx.getInt8Type();
 		} else if (Val <= 32768) {
@@ -28,11 +45,9 @@ JamValueRef NumberExprAST::codegen(JamCodegenContext &ctx) {
 		} else {
 			IntType = ctx.getInt64Type();
 		}
-		// Create two's complement representation
 		int64_t signedVal = -static_cast<int64_t>(Val);
 		return JamLLVMConstInt(IntType, static_cast<uint64_t>(signedVal), true);
 	} else {
-		// For positive values, use unsigned ranges
 		if (Val <= 255) {
 			IntType = ctx.getInt8Type();
 		} else if (Val <= 65535) {
@@ -48,6 +63,11 @@ JamValueRef NumberExprAST::codegen(JamCodegenContext &ctx) {
 
 JamValueRef BooleanExprAST::codegen(JamCodegenContext &ctx) {
 	return JamLLVMConstInt(ctx.getInt1Type(), Val ? 1 : 0, false);
+}
+
+JamValueRef UndefinedExprAST::codegen(JamCodegenContext &) {
+	throw std::runtime_error(
+	    "`undefined` is only valid as a `var` declaration initializer");
 }
 
 JamValueRef UnaryExprAST::codegen(JamCodegenContext &ctx) {
@@ -220,8 +240,19 @@ JamValueRef CallExprAST::codegen(JamCodegenContext &ctx) {
 
 	std::vector<JamValueRef> ArgsV;
 	for (unsigned i = 0, e = Args.size(); i != e; ++i) {
-		ArgsV.push_back(Args[i]->codegen(ctx));
-		if (!ArgsV.back()) return nullptr;
+		JamTypeRef expected = JamLLVMTypeOf(JamLLVMGetParam(CalleeF, i));
+		// Integer literals adapt to the callee's expected type so the
+		// constant is materialized at the right width and signedness from
+		// the start, avoiding sext/zext guesswork after the fact.
+		if (auto *numExpr = dynamic_cast<NumberExprAST *>(Args[i].get())) {
+			numExpr->setExpectedType(expected);
+		}
+		JamValueRef argVal = Args[i]->codegen(ctx);
+		if (!argVal) return nullptr;
+		// Non-literal args (variables, expressions) still need coerceTo as a
+		// safety net for type-width drift.
+		argVal = coerceTo(ctx, argVal, expected);
+		ArgsV.push_back(argVal);
 	}
 
 	return JamLLVMBuildCall(ctx.getBuilder(), CalleeF, ArgsV.data(),
@@ -339,11 +370,22 @@ JamValueRef CallExprAST::generateAssertCall(JamCodegenContext &ctx) {
 	}
 
 	JamValueRef actual = Args[0]->codegen(ctx);
-	JamValueRef expected = Args[1]->codegen(ctx);
-	if (!actual || !expected) return nullptr;
-
-	// Ensure both values have the same type
+	if (!actual) return nullptr;
 	JamTypeRef actualType = JamLLVMTypeOf(actual);
+
+	// If the expected arg is an integer literal, materialize it directly at
+	// the actual's type so we never have to guess sext vs zext later.
+	if (auto *numExpr = dynamic_cast<NumberExprAST *>(Args[1].get())) {
+		if (JamLLVMTypeIsInteger(actualType)) {
+			numExpr->setExpectedType(actualType);
+		}
+	}
+	JamValueRef expected = Args[1]->codegen(ctx);
+	if (!expected) return nullptr;
+
+	// Fallback widening for non-literal expected (variables, expressions).
+	// We don't track signedness on values, so this is best-effort and only
+	// safe for non-negative ranges.
 	JamTypeRef expectedType = JamLLVMTypeOf(expected);
 	if (actualType != expectedType) {
 		if (JamLLVMTypeIsInteger(actualType) &&
@@ -422,6 +464,95 @@ JamValueRef ReturnExprAST::codegen(JamCodegenContext &ctx) {
 
 	JamLLVMBuildRet(ctx.getBuilder(), RetVal);
 	return RetVal;
+}
+
+// Walks an indexable lvalue expression (the Object inside an IndexExprAST)
+// and returns a pointer to the indexed array element, plus the element type
+// via the out-parameter. Supports:
+//   - Plain locals:       var arr: [N]T;        arr[i]
+//   - Struct field chain: var g: Game; ...      g.board[i], g.inner.cells[i]
+//
+// For struct chains we GEP through each field rather than load-then-extract,
+// which is essential for arrays-in-structs (loading a 200-byte board to read
+// one byte would be terrible).
+static JamValueRef
+resolveIndexedElementPtr(JamCodegenContext &ctx, ExprAST *object,
+                         JamValueRef idxVal, JamTypeRef &outElemType) {
+	if (auto *varExpr = dynamic_cast<VariableExprAST *>(object)) {
+		const std::string &name = varExpr->getName();
+		JamValueRef alloca = ctx.getVariable(name);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + name);
+		}
+		JamTypeRef arrayType = JamLLVMGetAllocatedType(alloca);
+		outElemType = JamLLVMGetArrayElementType(arrayType);
+		return JamLLVMBuildArrayGEP(ctx.getBuilder(), arrayType, alloca,
+		                            idxVal, "idxgep");
+	}
+
+	if (auto *memberExpr = dynamic_cast<MemberAccessExprAST *>(object)) {
+		// Collect the field chain from outer-most member back to the leaf
+		// variable. memberExpr->getMember() is the innermost field.
+		std::vector<std::string> chain;
+		chain.push_back(memberExpr->getMember());
+		ExprAST *cur = memberExpr->getObject();
+		while (auto *ma = dynamic_cast<MemberAccessExprAST *>(cur)) {
+			chain.push_back(ma->getMember());
+			cur = ma->getObject();
+		}
+		auto *leafVar = dynamic_cast<VariableExprAST *>(cur);
+		if (!leafVar) {
+			throw std::runtime_error(
+			    "Indexing into a non-variable lvalue is not supported");
+		}
+		const std::string &varName = leafVar->getName();
+		JamValueRef alloca = ctx.getVariable(varName);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + varName);
+		}
+		std::string typeAtLevel = ctx.getVariableType(varName);
+		if (typeAtLevel.length() >= 6 &&
+		    typeAtLevel.substr(0, 6) == "const ") {
+			typeAtLevel = typeAtLevel.substr(6);
+		}
+
+		// Reverse so path[0] is the outermost field on the leaf variable.
+		std::vector<std::string> path(chain.rbegin(), chain.rend());
+
+		JamValueRef currentPtr = alloca;
+		JamTypeRef currentType = ctx.getTypeFromString(typeAtLevel);
+		for (size_t i = 0; i < path.size(); i++) {
+			const auto *info = ctx.getStruct(typeAtLevel);
+			if (!info) {
+				throw std::runtime_error(
+				    "Cannot index through field '" + path[i] +
+				    "' on non-struct: " + typeAtLevel);
+			}
+			int idx = ctx.getFieldIndex(typeAtLevel, path[i]);
+			if (idx < 0) {
+				throw std::runtime_error("Unknown field '" + path[i] +
+				                         "' in struct " + typeAtLevel);
+			}
+			currentPtr = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), currentType, currentPtr,
+			    static_cast<unsigned>(idx), path[i].c_str());
+			std::string fieldType = info->fields[idx].second;
+			if (fieldType.length() >= 6 &&
+			    fieldType.substr(0, 6) == "const ") {
+				fieldType = fieldType.substr(6);
+			}
+			typeAtLevel = fieldType;
+			currentType = ctx.getTypeFromString(typeAtLevel);
+		}
+
+		// currentType is now the array type [N x T]; currentPtr points at it.
+		outElemType = JamLLVMGetArrayElementType(currentType);
+		return JamLLVMBuildArrayGEP(ctx.getBuilder(), currentType, currentPtr,
+		                            idxVal, "idxgep");
+	}
+
+	throw std::runtime_error(
+	    "Indexing supports only locals and struct field chains");
 }
 
 static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
@@ -543,7 +674,31 @@ JamValueRef AssignExprAST::codegen(JamCodegenContext &ctx) {
 		return rhsVal;
 	}
 
+	// Array element target: arr[i] = value; or game.board[i] = value;
+	if (auto *idxExpr = dynamic_cast<IndexExprAST *>(Target.get())) {
+		JamValueRef idxVal = idxExpr->getIndex()->codegen(ctx);
+		if (!idxVal) return nullptr;
+		idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
+		JamTypeRef elemType = nullptr;
+		JamValueRef elemPtr =
+		    resolveIndexedElementPtr(ctx, idxExpr->getObject(), idxVal,
+		                             elemType);
+		rhsVal = coerceTo(ctx, rhsVal, elemType);
+		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, elemPtr);
+		return rhsVal;
+	}
+
 	throw std::runtime_error("Invalid assignment target");
+}
+
+JamValueRef IndexExprAST::codegen(JamCodegenContext &ctx) {
+	JamValueRef idxVal = Index->codegen(ctx);
+	if (!idxVal) return nullptr;
+	idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
+	JamTypeRef elemType = nullptr;
+	JamValueRef elemPtr =
+	    resolveIndexedElementPtr(ctx, Object.get(), idxVal, elemType);
+	return JamLLVMBuildLoad(ctx.getBuilder(), elemType, elemPtr, "idxload");
 }
 
 JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
@@ -551,7 +706,9 @@ JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 	JamValueRef Alloca =
 	    JamLLVMBuildAlloca(ctx.getBuilder(), VarType, Name.c_str());
 
-	if (Init) {
+	// `var x: T = undefined;` leaves the alloca uninitialized.
+	// All other initializers are evaluated and stored.
+	if (Init && !dynamic_cast<UndefinedExprAST *>(Init.get())) {
 		// If the initializer is a struct literal, propagate the target type so
 		// it can build the right struct and coerce field values.
 		if (auto *structLit = dynamic_cast<StructLiteralExprAST *>(Init.get())) {
@@ -561,10 +718,6 @@ JamValueRef VarDeclAST::codegen(JamCodegenContext &ctx) {
 		JamValueRef InitVal = Init->codegen(ctx);
 		if (!InitVal) return nullptr;
 		JamLLVMBuildStore(ctx.getBuilder(), InitVal, Alloca);
-	} else {
-		// Initialize with zero/null value
-		JamValueRef ZeroVal = JamLLVMConstNull(VarType);
-		JamLLVMBuildStore(ctx.getBuilder(), ZeroVal, Alloca);
 	}
 
 	ctx.setVariable(Name, Alloca);

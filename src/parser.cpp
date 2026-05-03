@@ -60,6 +60,8 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 		return std::make_unique<BooleanExprAST>(true);
 	} else if (match(TOK_FALSE)) {
 		return std::make_unique<BooleanExprAST>(false);
+	} else if (match(TOK_UNDEFINED)) {
+		return std::make_unique<UndefinedExprAST>();
 	} else if (match(TOK_STRING_LITERAL)) {
 		return std::make_unique<StringLiteralExprAST>(previous().lexeme);
 	} else if (match(TOK_IMPORT)) {
@@ -114,6 +116,14 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 			return std::make_unique<CallExprAST>(callee, std::move(args));
 		}
 
+		// Postfix indexing: arr[i] (and chains arr[i][j])
+		while (match(TOK_OPEN_BRACKET)) {
+			auto idx = parseLogicalOr();
+			consume(TOK_CLOSE_BRACKET, "Expected ']' after index");
+			expr =
+			    std::make_unique<IndexExprAST>(std::move(expr), std::move(idx));
+		}
+
 		return expr;
 	}
 
@@ -121,14 +131,21 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 }
 
 std::string Parser::parseType() {
-	// Handle slice types: []T or []const T
+	// Handle bracket-prefixed types: []T (slice) or [N]T (fixed array)
 	if (match(TOK_OPEN_BRACKET)) {
-		consume(TOK_CLOSE_BRACKET, "Expected ']' after '['");
-		// Check for []const T (like Zig)
-		bool isConst = match(TOK_CONST);
+		if (match(TOK_CLOSE_BRACKET)) {
+			// Slice: []T or []const T
+			bool isConst = match(TOK_CONST);
+			std::string elementType = parseType();
+			if (isConst) { return "[]const " + elementType; }
+			return "[]" + elementType;
+		}
+		// Fixed-size array: [N]T
+		consume(TOK_NUMBER, "Expected size or ']' after '['");
+		std::string sizeLit = previous().lexeme;
+		consume(TOK_CLOSE_BRACKET, "Expected ']' after array size");
 		std::string elementType = parseType();
-		if (isConst) { return "[]const " + elementType; }
-		return "[]" + elementType;
+		return "[" + sizeLit + "]" + elementType;
 	}
 	// Handle const T (like Zig)
 	if (match(TOK_CONST)) {
@@ -171,8 +188,11 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 		std::string type = "u8";  // Default type
 		if (match(TOK_COLON)) { type = parseType(); }
 
-		std::unique_ptr<ExprAST> init = nullptr;
-		if (match(TOK_EQUAL)) { init = parseLogicalOr(); }
+		// Initializer is required. Use `= undefined` to leave storage
+		// uninitialized.
+		consume(TOK_EQUAL,
+		        "Expected '=' (use `= undefined` to leave uninitialized)");
+		std::unique_ptr<ExprAST> init = parseLogicalOr();
 		consume(TOK_SEMI, "Expected ';' after variable declaration");
 
 		return std::make_unique<VarDeclAST>(name, type, isConst,
@@ -318,7 +338,7 @@ std::unique_ptr<ExprAST> Parser::parseComparison() {
 	return LHS;
 }
 
-// Bitwise &, |, ^ — same precedence level, left associative (Zig-style)
+// Bitwise &, |, ^ — same precedence level, left associative
 std::unique_ptr<ExprAST> Parser::parseBitwise() {
 	auto LHS = parseShift();
 

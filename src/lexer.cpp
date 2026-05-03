@@ -122,6 +122,8 @@ void Lexer::identifier() {
 		addToken(TOK_TFN, text);
 	} else if (text == "struct") {
 		addToken(TOK_STRUCT, text);
+	} else if (text == "undefined") {
+		addToken(TOK_UNDEFINED, text);
 	} else if (text == "u1" || text == "u8" || text == "u16" || text == "u32" ||
 	           text == "u64" || text == "i8" || text == "i16" ||
 	           text == "i32" || text == "i64" || text == "f32" ||

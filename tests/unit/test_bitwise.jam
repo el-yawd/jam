@@ -1,0 +1,95 @@
+const { assert } = import("test");
+
+fn bandU8(a: u8, b: u8) u8 {
+    return a & b;
+}
+
+fn borU8(a: u8, b: u8) u8 {
+    return a | b;
+}
+
+fn bxorU8(a: u8, b: u8) u8 {
+    return a ^ b;
+}
+
+fn bnotU8(a: u8) u8 {
+    return ~a;
+}
+
+fn shlU8(a: u8, b: u8) u8 {
+    return a << b;
+}
+
+fn shrU8(a: u8, b: u8) u8 {
+    return a >> b;
+}
+
+fn bandU32(a: u32, b: u32) u32 {
+    return a & b;
+}
+
+fn shlU32(a: u32, b: u32) u32 {
+    return a << b;
+}
+
+fn shrU32(a: u32, b: u32) u32 {
+    return a >> b;
+}
+
+fn bnotU32(a: u32) u32 {
+    return ~a;
+}
+
+tfn bandU8() {
+    assert(bandU8(255, 15), 15);
+    assert(bandU8(170, 85), 0);
+    assert(bandU8(204, 170), 136);
+}
+
+tfn borU8() {
+    assert(borU8(240, 15), 255);
+    assert(borU8(0, 0), 0);
+    assert(borU8(170, 85), 255);
+}
+
+tfn bxorU8() {
+    assert(bxorU8(255, 15), 240);
+    assert(bxorU8(170, 170), 0);
+    assert(bxorU8(204, 170), 102);
+}
+
+tfn bnotU8() {
+    assert(bnotU8(0), 255);
+    assert(bnotU8(15), 240);
+    assert(bnotU8(255), 0);
+}
+
+tfn shlU8() {
+    assert(shlU8(1, 4), 16);
+    assert(shlU8(3, 2), 12);
+    assert(shlU8(1, 7), 128);
+}
+
+tfn shrU8() {
+    assert(shrU8(255, 4), 15);
+    assert(shrU8(16, 1), 8);
+    assert(shrU8(128, 7), 1);
+}
+
+tfn bandU32() {
+    assert(bandU32(4294967295, 16711935), 16711935);
+}
+
+tfn shlU32() {
+    assert(shlU32(1, 16), 65536);
+    assert(shlU32(7, 20), 7340032);
+}
+
+tfn shrU32() {
+    assert(shrU32(65536, 16), 1);
+    assert(shrU32(4294967295, 24), 255);
+}
+
+tfn bnotU32() {
+    assert(bnotU32(0), 4294967295);
+}

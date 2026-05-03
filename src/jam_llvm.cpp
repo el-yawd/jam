@@ -245,6 +245,11 @@ JamTypeRef JamLLVMArrayType(JamTypeRef elementType, unsigned elementCount) {
 	    llvm::ArrayType::get(UNWRAP_TYPE(elementType), elementCount));
 }
 
+JamTypeRef JamLLVMGetArrayElementType(JamTypeRef arrayType) {
+	auto *aT = llvm::cast<llvm::ArrayType>(UNWRAP_TYPE(arrayType));
+	return WRAP_TYPE(aT->getElementType());
+}
+
 unsigned JamLLVMGetIntTypeWidth(JamTypeRef type) {
 	return UNWRAP_TYPE(type)->getIntegerBitWidth();
 }
@@ -439,6 +444,26 @@ JamValueRef JamLLVMBuildStore(JamBuilderRef builder, JamValueRef val,
                               JamValueRef ptr) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateStore(UNWRAP_VALUE(val),
 	                                                       UNWRAP_VALUE(ptr)));
+}
+
+JamValueRef JamLLVMBuildArrayGEP(JamBuilderRef builder, JamTypeRef arrayType,
+                                 JamValueRef ptr, JamValueRef idx,
+                                 const char *name) {
+	auto *b = UNWRAP_BUILDER(builder);
+	llvm::Value *zero =
+	    llvm::ConstantInt::get(llvm::Type::getInt32Ty(b->getContext()), 0);
+	llvm::Value *indices[2] = {zero, UNWRAP_VALUE(idx)};
+	return WRAP_VALUE(b->CreateInBoundsGEP(UNWRAP_TYPE(arrayType),
+	                                       UNWRAP_VALUE(ptr),
+	                                       llvm::ArrayRef<llvm::Value *>(indices, 2),
+	                                       name));
+}
+
+JamValueRef JamLLVMBuildStructGEP(JamBuilderRef builder, JamTypeRef structType,
+                                  JamValueRef ptr, unsigned fieldIdx,
+                                  const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateStructGEP(
+	    UNWRAP_TYPE(structType), UNWRAP_VALUE(ptr), fieldIdx, name));
 }
 
 // ============================================================================

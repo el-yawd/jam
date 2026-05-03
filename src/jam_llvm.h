@@ -212,6 +212,21 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildLoad(JamBuilderRef builder,
                                           const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildStore(JamBuilderRef builder,
                                            JamValueRef val, JamValueRef ptr);
+// In-bounds GEP for indexing into a fixed-size array: gep [N x T], ptr, 0, idx.
+// `arrayType` must be the array aggregate type that `ptr` points to.
+JAM_EXTERN_C JamValueRef JamLLVMBuildArrayGEP(JamBuilderRef builder,
+                                              JamTypeRef arrayType,
+                                              JamValueRef ptr, JamValueRef idx,
+                                              const char *name);
+// Struct field GEP: returns a pointer to field `fieldIdx` of the struct
+// pointed to by `ptr`. `structType` must be the struct type `ptr` points to.
+JAM_EXTERN_C JamValueRef JamLLVMBuildStructGEP(JamBuilderRef builder,
+                                               JamTypeRef structType,
+                                               JamValueRef ptr,
+                                               unsigned fieldIdx,
+                                               const char *name);
+// Returns the element type of an array type (e.g. [200 x i8] -> i8).
+JAM_EXTERN_C JamTypeRef JamLLVMGetArrayElementType(JamTypeRef arrayType);
 
 // ============================================================================
 // Instructions - Arithmetic

@@ -1,0 +1,127 @@
+const { assert } = import("test");
+
+const Game = struct {
+    score: u8,
+    board: [10]u8,
+};
+
+fn writeThenReadU8() u8 {
+    var arr: [10]u8 = undefined;
+    arr[0] = 42;
+    arr[1] = 7;
+    arr[9] = 200;
+    return arr[0];
+}
+
+fn secondElement() u8 {
+    var arr: [10]u8 = undefined;
+    arr[0] = 42;
+    arr[1] = 7;
+    arr[9] = 200;
+    return arr[1];
+}
+
+fn lastElement() u8 {
+    var arr: [10]u8 = undefined;
+    arr[0] = 42;
+    arr[1] = 7;
+    arr[9] = 200;
+    return arr[9];
+}
+
+fn sumFirstFour() u32 {
+    var arr: [10]u32 = undefined;
+    arr[0] = 100;
+    arr[1] = 200;
+    arr[2] = 300;
+    arr[3] = 400;
+    return arr[0] + arr[1];
+}
+
+fn dynamicIndexRead() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    var i: u8 = 2;
+    return arr[i];
+}
+
+fn loopFillThenRead() u8 {
+    var arr: [16]u8 = undefined;
+    for i in 0:16 {
+        arr[i] = i;
+    }
+    return arr[7];
+}
+
+fn loopFillThenReadLast() u8 {
+    var arr: [16]u8 = undefined;
+    for i in 0:16 {
+        arr[i] = i;
+    }
+    return arr[15];
+}
+
+fn structFieldArrayWrite() u8 {
+    var g: Game = undefined;
+    g.board[3] = 42;
+    return g.board[3];
+}
+
+fn structFieldArrayLoopFill() u8 {
+    var g: Game = undefined;
+    for i in 0:10 {
+        g.board[i] = i;
+    }
+    return g.board[7];
+}
+
+fn structFieldArrayMixed() u8 {
+    var g: Game = undefined;
+    g.score = 99;
+    g.board[0] = g.score;
+    g.board[1] = 50;
+    return g.board[0];
+}
+
+tfn writeThenReadU8() {
+    assert(writeThenReadU8(), 42);
+}
+
+tfn secondElement() {
+    assert(secondElement(), 7);
+}
+
+tfn lastElement() {
+    assert(lastElement(), 200);
+}
+
+tfn sumFirstFour() {
+    assert(sumFirstFour(), 300);
+}
+
+tfn dynamicIndexRead() {
+    assert(dynamicIndexRead(), 30);
+}
+
+tfn loopFillThenRead() {
+    assert(loopFillThenRead(), 7);
+}
+
+tfn loopFillThenReadLast() {
+    assert(loopFillThenReadLast(), 15);
+}
+
+tfn structFieldArrayWrite() {
+    assert(structFieldArrayWrite(), 42);
+}
+
+tfn structFieldArrayLoopFill() {
+    assert(structFieldArrayLoopFill(), 7);
+}
+
+tfn structFieldArrayMixed() {
+    assert(structFieldArrayMixed(), 99);
+}

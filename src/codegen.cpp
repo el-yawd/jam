@@ -59,6 +59,17 @@ JamCodegenContext::getTypeFromString(const std::string &typeStr) const {
 		JamTypeRef usizeType = getInt64Type();
 		JamTypeRef elementTypes[2] = {elemPtrType, usizeType};
 		return JamLLVMStructType(ctx, elementTypes, 2, false);
+	} else if (typeStr.length() >= 3 && typeStr[0] == '[') {
+		// Fixed-size array: [N]T
+		size_t closeBracket = typeStr.find(']');
+		if (closeBracket == std::string::npos || closeBracket == 1) {
+			throw std::runtime_error("Malformed array type: " + typeStr);
+		}
+		std::string sizeStr = typeStr.substr(1, closeBracket - 1);
+		std::string elementTypeStr = typeStr.substr(closeBracket + 1);
+		unsigned long long size = std::stoull(sizeStr);
+		JamTypeRef elemType = getTypeFromString(elementTypeStr);
+		return JamLLVMArrayType(elemType, static_cast<unsigned>(size));
 	}
 	throw std::runtime_error("Unknown type: " + typeStr);
 }

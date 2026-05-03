@@ -25,14 +25,18 @@ class ExprAST {
 	virtual JamValueRef codegen(JamCodegenContext &ctx) = 0;
 };
 
-// Number literal
+// Number literal — stays untyped until the use site sets an expected type.
+// If no expected type is set, falls back to the smallest integer type that
+// fits the literal value.
 class NumberExprAST : public ExprAST {
 	uint64_t Val;
 	bool IsNegative;
+	JamTypeRef ExpectedType = nullptr;
 
   public:
 	NumberExprAST(uint64_t Val, bool IsNegative = false)
 	    : Val(Val), IsNegative(IsNegative) {}
+	void setExpectedType(JamTypeRef ty) { ExpectedType = ty; }
 	JamValueRef codegen(JamCodegenContext &ctx) override;
 };
 
@@ -42,6 +46,15 @@ class BooleanExprAST : public ExprAST {
 
   public:
 	BooleanExprAST(bool Val) : Val(Val) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+};
+
+// `undefined` literal — marks a binding's storage as left uninitialized.
+// Only meaningful as a VarDeclAST initializer; calling codegen() directly
+// throws.
+class UndefinedExprAST : public ExprAST {
+  public:
+	UndefinedExprAST() {}
 	JamValueRef codegen(JamCodegenContext &ctx) override;
 };
 
@@ -222,6 +235,21 @@ class MemberAccessExprAST : public ExprAST {
 
 	const std::string &getMember() const { return Member; }
 	ExprAST *getObject() const { return Object.get(); }
+};
+
+// Array indexing: obj[idx]
+class IndexExprAST : public ExprAST {
+	std::unique_ptr<ExprAST> Object;
+	std::unique_ptr<ExprAST> Index;
+
+  public:
+	IndexExprAST(std::unique_ptr<ExprAST> Object,
+	             std::unique_ptr<ExprAST> Index)
+	    : Object(std::move(Object)), Index(std::move(Index)) {}
+	JamValueRef codegen(JamCodegenContext &ctx) override;
+
+	ExprAST *getObject() const { return Object.get(); }
+	ExprAST *getIndex() const { return Index.get(); }
 };
 
 // Struct literal expression - { x: 0, y: 100, z: 50 }

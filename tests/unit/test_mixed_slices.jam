@@ -20,17 +20,17 @@ fn test_string_functions(input: str) str {
 
 // Test complex slice types
 fn test_i8_slice() []i8 {
-    var data: []i8;
+    var data: []i8 = undefined;
     return data;
 }
 
 fn test_i16_slice() []i16 {
-    var data: []i16;
+    var data: []i16 = undefined;
     return data;
 }
 
 fn test_i32_slice() []i32 {
-    var data: []i32;
+    var data: []i32 = undefined;
     return data;
 }
 
