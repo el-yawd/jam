@@ -372,6 +372,8 @@ std::vector<Token> Lexer::scanTokens() {
 		case '<':
 			if (match('=')) {
 				addToken(TOK_LESS_EQUAL, "<=");
+			} else if (match('<')) {
+				addToken(TOK_LSHIFT, "<<");
 			} else {
 				addToken(TOK_LESS, "<");
 			}
@@ -380,9 +382,24 @@ std::vector<Token> Lexer::scanTokens() {
 		case '>':
 			if (match('=')) {
 				addToken(TOK_GREATER_EQUAL, ">=");
+			} else if (match('>')) {
+				addToken(TOK_RSHIFT, ">>");
 			} else {
 				addToken(TOK_GREATER, ">");
 			}
+			break;
+
+		case '&':
+			addToken(TOK_AMP, "&");
+			break;
+		case '|':
+			addToken(TOK_PIPE, "|");
+			break;
+		case '^':
+			addToken(TOK_CARET, "^");
+			break;
+		case '~':
+			addToken(TOK_TILDE, "~");
 			break;
 
 		case '-':

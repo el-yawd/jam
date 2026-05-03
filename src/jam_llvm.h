@@ -229,6 +229,11 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildOr(JamBuilderRef builder, JamValueRef lhs,
                                         JamValueRef rhs, const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildXor(JamBuilderRef builder, JamValueRef lhs,
                                          JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildShl(JamBuilderRef builder, JamValueRef lhs,
+                                         JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildLShr(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
 
 // ============================================================================
 // Instructions - Comparison

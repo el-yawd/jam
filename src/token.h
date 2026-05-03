@@ -58,6 +58,12 @@ enum TokenType {
 	TOK_NOT,     // ! (logical NOT)
 	TOK_TFN,     // tfn keyword (test function)
 	TOK_STRUCT,  // struct keyword
+	TOK_AMP,     // & (bitwise AND)
+	TOK_PIPE,    // | (bitwise OR)
+	TOK_CARET,   // ^ (bitwise XOR)
+	TOK_TILDE,   // ~ (bitwise NOT)
+	TOK_LSHIFT,  // << (left shift)
+	TOK_RSHIFT,  // >> (right shift)
 };
 
 // Token structure

@@ -481,6 +481,18 @@ JamValueRef JamLLVMBuildXor(JamBuilderRef builder, JamValueRef lhs,
 	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
 
+JamValueRef JamLLVMBuildShl(JamBuilderRef builder, JamValueRef lhs,
+                            JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateShl(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
+JamValueRef JamLLVMBuildLShr(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateLShr(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
 // ============================================================================
 // Instructions - Comparison
 // ============================================================================

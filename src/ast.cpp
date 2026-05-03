@@ -61,6 +61,13 @@ JamValueRef UnaryExprAST::codegen(JamCodegenContext &ctx) {
 		                       "nottmp");
 	}
 
+	if (Op == "~") {
+		// Bitwise NOT: XOR with all-ones of the operand's type
+		JamTypeRef ty = JamLLVMTypeOf(operandVal);
+		JamValueRef allOnes = JamLLVMConstInt(ty, ~0ULL, false);
+		return JamLLVMBuildXor(ctx.getBuilder(), operandVal, allOnes, "nottmp");
+	}
+
 	throw std::runtime_error("Invalid unary operator: " + Op);
 }
 
@@ -164,6 +171,17 @@ JamValueRef BinaryExprAST::codegen(JamCodegenContext &ctx) {
 	if (!L || !R) return nullptr;
 
 	if (Op == "+") return JamLLVMBuildAdd(ctx.getBuilder(), L, R, "addtmp");
+	else if (Op == "&")
+		return JamLLVMBuildAnd(ctx.getBuilder(), L, R, "andtmp");
+	else if (Op == "|")
+		return JamLLVMBuildOr(ctx.getBuilder(), L, R, "ortmp");
+	else if (Op == "^")
+		return JamLLVMBuildXor(ctx.getBuilder(), L, R, "xortmp");
+	else if (Op == "<<")
+		return JamLLVMBuildShl(ctx.getBuilder(), L, R, "shltmp");
+	else if (Op == ">>")
+		// Logical (zero-extend) shift right; matches u8/u16/u32/u64 semantics.
+		return JamLLVMBuildLShr(ctx.getBuilder(), L, R, "shrtmp");
 	else if (Op == "==")
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, L, R, "cmptmp");
 	else if (Op == "!=")

@@ -287,32 +287,78 @@ std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
 }
 
 std::unique_ptr<ExprAST> Parser::parseComparison() {
-	auto LHS = parseAddition();
+	auto LHS = parseBitwise();
 
 	if (match(TOK_EQUAL_EQUAL)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>("==", std::move(LHS),
 		                                       std::move(RHS));
 	} else if (match(TOK_NOT_EQUAL)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>("!=", std::move(LHS),
 		                                       std::move(RHS));
 	} else if (match(TOK_LESS)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>("<", std::move(LHS),
 		                                       std::move(RHS));
 	} else if (match(TOK_LESS_EQUAL)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>("<=", std::move(LHS),
 		                                       std::move(RHS));
 	} else if (match(TOK_GREATER)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>(">", std::move(LHS),
 		                                       std::move(RHS));
 	} else if (match(TOK_GREATER_EQUAL)) {
-		auto RHS = parseAddition();
+		auto RHS = parseBitwise();
 		return std::make_unique<BinaryExprAST>(">=", std::move(LHS),
 		                                       std::move(RHS));
+	}
+
+	return LHS;
+}
+
+// Bitwise &, |, ^ — same precedence level, left associative (Zig-style)
+std::unique_ptr<ExprAST> Parser::parseBitwise() {
+	auto LHS = parseShift();
+
+	while (true) {
+		if (match(TOK_AMP)) {
+			auto RHS = parseShift();
+			LHS = std::make_unique<BinaryExprAST>("&", std::move(LHS),
+			                                      std::move(RHS));
+		} else if (match(TOK_PIPE)) {
+			auto RHS = parseShift();
+			LHS = std::make_unique<BinaryExprAST>("|", std::move(LHS),
+			                                      std::move(RHS));
+		} else if (match(TOK_CARET)) {
+			auto RHS = parseShift();
+			LHS = std::make_unique<BinaryExprAST>("^", std::move(LHS),
+			                                      std::move(RHS));
+		} else {
+			break;
+		}
+	}
+
+	return LHS;
+}
+
+// Shift << and >>, higher precedence than bitwise, left associative
+std::unique_ptr<ExprAST> Parser::parseShift() {
+	auto LHS = parseAddition();
+
+	while (true) {
+		if (match(TOK_LSHIFT)) {
+			auto RHS = parseAddition();
+			LHS = std::make_unique<BinaryExprAST>("<<", std::move(LHS),
+			                                      std::move(RHS));
+		} else if (match(TOK_RSHIFT)) {
+			auto RHS = parseAddition();
+			LHS = std::make_unique<BinaryExprAST>(">>", std::move(LHS),
+			                                      std::move(RHS));
+		} else {
+			break;
+		}
 	}
 
 	return LHS;
@@ -334,6 +380,10 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 	if (match(TOK_NOT)) {
 		auto operand = parseUnary();
 		return std::make_unique<UnaryExprAST>("!", std::move(operand));
+	}
+	if (match(TOK_TILDE)) {
+		auto operand = parseUnary();
+		return std::make_unique<UnaryExprAST>("~", std::move(operand));
 	}
 
 	return parsePrimary();

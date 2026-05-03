@@ -33,6 +33,8 @@ class Parser {
 	std::unique_ptr<ExprAST> parseLogicalOr();
 	std::unique_ptr<ExprAST> parseLogicalAnd();
 	std::unique_ptr<ExprAST> parseComparison();
+	std::unique_ptr<ExprAST> parseBitwise();
+	std::unique_ptr<ExprAST> parseShift();
 	std::unique_ptr<ExprAST> parseAddition();
 	std::unique_ptr<ExprAST> parseStructLiteral();
 	std::unique_ptr<FunctionAST> parseFunction();
