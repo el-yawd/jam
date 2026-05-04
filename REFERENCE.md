@@ -126,9 +126,11 @@ fn fillFirstThree() u8 {
 }
 ```
 
-A many-item pointer to slices is written `*const[] []T` or `*mut[] []T` —
-the inner `[]T` is just a slice, with mutability following the binding
-that ultimately holds it.
+For a collection of slices, prefer `[]*const T` / `[]*mut T` (a slice
+of pointers, which carries a length) over composing many-item pointer
+with slice element type. The latter is grammatically valid but rarely
+the right shape; a length-bearing slice of pointers is almost always
+what you actually want.
 
 #### 3.3.3 Slice
 
@@ -189,9 +191,9 @@ const Game = struct {
 | `*mut T`       | single-item ptr | `var p: *mut u8 = &x; p.* = 5;`               |
 | `*const[] T`   | many-item ptr   | `fn f(p: *const[] u8) u8 { return p[0]; }`    |
 | `*mut[] T`     | many-item ptr   | `var p: *mut[] u8 = &arr[0]; p[0] = 1;`       |
-| `*const[] []T` | many-item to slc| (each element is a slice)                     |
-| `*mut[] []T`   | many-item to slc| (mutable variant)                             |
 | `[]T`          | slice           | `var s: []u32 = undefined;`                   |
+| `[]*const T`   | slice of ptrs   | `fn f(rows: []*const u8) u8 { ... }`          |
+| `[]*mut T`     | slice of ptrs   | `fn f(rows: []*mut u8) { rows[0].* = 0; }`    |
 | `[N]T`         | owned array     | `var b: [10]u8 = undefined;`                  |
 
 #### 3.3.6 Grammar Properties
