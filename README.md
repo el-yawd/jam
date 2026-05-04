@@ -88,16 +88,16 @@ English is encouraged, but not required. You are welcome to post in your native 
 - [x] strings
     - [x] tests
     - [x] docs
-- [ ] functions
-    - [ ] tests
+- [x] functions (incl. forward references — define in any order)
+    - [x] tests
     - [ ] docs
-- [ ] for/while
-    - [ ] tests
+- [x] for/while
+    - [x] tests
     - [ ] docs
-- [ ] Be cabaple to use C abi
-    - [ ] tests
+- [x] Be capable to use C abi (extern fn, varargs, zeroext bool)
+    - [x] tests
     - [ ] docs
-- [ ] Stack memory
+- [x] Stack memory (alloca-backed locals, structs, fixed arrays)
 - [ ] Smart pointers (inspiration https://doc.rust-lang.org/book/ch15-00-smart-pointers.html , https://learn.microsoft.com/en-us/cpp/cpp/smart-pointers-modern-cpp?view=msvc-170)
 - [ ] Allocators
     - [ ] Linear/Bump Allocators
@@ -113,7 +113,7 @@ English is encouraged, but not required. You are welcome to post in your native 
         - [ ] Buddy allocators
         - [ ] Tailored to specific workload patterns
 - [ ] Decent Microsoft Windows support (self note)
-- [ ] Capable of creating a TUI app
+- [x] Capable of creating a TUI app (Tetris demo via ncurses)
 - [ ] spirv
 
 ## todo
