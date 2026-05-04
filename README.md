@@ -142,6 +142,7 @@ In the future Jam indeed will go to an org, but now is mostly me maintaining the
 ## References
 
 - Chris Lattner et al., "MLIR: A Compiler Infrastructure for the End of Moore's Law", 2020. https://arxiv.org/abs/2002.11054
+- Zig v0.10 — referenced for its flat, tag-dispatched AST, type interning, and Debug-by-default codegen approach. https://github.com/ziglang/zig/tree/0.10.x
 
 ## Artwork
 
