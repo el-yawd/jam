@@ -400,6 +400,9 @@ std::vector<Token> Lexer::scanTokens() {
 		case '*':
 			addToken(TOK_STAR, "*");
 			break;
+		case '%':
+			addToken(TOK_PERCENT, "%");
+			break;
 		case '&':
 			addToken(TOK_AMP, "&");
 			break;

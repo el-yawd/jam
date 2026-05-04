@@ -254,6 +254,9 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildSub(JamBuilderRef builder, JamValueRef lhs,
                                          JamValueRef rhs, const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildMul(JamBuilderRef builder, JamValueRef lhs,
                                          JamValueRef rhs, const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildURem(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildAnd(JamBuilderRef builder, JamValueRef lhs,
                                          JamValueRef rhs, const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildOr(JamBuilderRef builder, JamValueRef lhs,

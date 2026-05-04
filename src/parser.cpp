@@ -192,6 +192,10 @@ std::unique_ptr<ExprAST> Parser::parseStructLiteral() {
 
 std::unique_ptr<ExprAST> Parser::parseExpression() {
 	if (match(TOK_RETURN)) {
+		// Bare `return;` (no value) is valid in void functions.
+		if (match(TOK_SEMI)) {
+			return std::make_unique<ReturnExprAST>(nullptr);
+		}
 		auto expr = parseLogicalOr();
 		consume(TOK_SEMI, "Expected ';' after return statement");
 		return std::make_unique<ReturnExprAST>(std::move(expr));
@@ -227,11 +231,18 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 
 		std::vector<std::unique_ptr<ExprAST>> elseBody;
 		if (match(TOK_ELSE)) {
-			consume(TOK_OPEN_BRACE, "Expected '{' after 'else'");
-			while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+			if (check(TOK_IF)) {
+				// `else if` — recurse via parseExpression so the inner
+				// if/else parses as a single statement that becomes this
+				// branch's else body.
 				elseBody.push_back(parseExpression());
+			} else {
+				consume(TOK_OPEN_BRACE, "Expected '{' or 'if' after 'else'");
+				while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+					elseBody.push_back(parseExpression());
+				}
+				consume(TOK_CLOSE_BRACE, "Expected '}' after else body");
 			}
-			consume(TOK_CLOSE_BRACE, "Expected '}' after else body");
 		}
 
 		return std::make_unique<IfExprAST>(
@@ -401,14 +412,38 @@ std::unique_ptr<ExprAST> Parser::parseShift() {
 }
 
 std::unique_ptr<ExprAST> Parser::parseAddition() {
-	auto LHS = parseUnary();
-
-	if (match(TOK_PLUS)) {
-		auto RHS = parseUnary();
-		return std::make_unique<BinaryExprAST>("+", std::move(LHS),
-		                                       std::move(RHS));
+	auto LHS = parseMultiplication();
+	while (true) {
+		if (match(TOK_PLUS)) {
+			auto RHS = parseMultiplication();
+			LHS = std::make_unique<BinaryExprAST>("+", std::move(LHS),
+			                                      std::move(RHS));
+		} else if (match(TOK_MINUS)) {
+			auto RHS = parseMultiplication();
+			LHS = std::make_unique<BinaryExprAST>("-", std::move(LHS),
+			                                      std::move(RHS));
+		} else {
+			break;
+		}
 	}
+	return LHS;
+}
 
+std::unique_ptr<ExprAST> Parser::parseMultiplication() {
+	auto LHS = parseUnary();
+	while (true) {
+		if (match(TOK_STAR)) {
+			auto RHS = parseUnary();
+			LHS = std::make_unique<BinaryExprAST>("*", std::move(LHS),
+			                                      std::move(RHS));
+		} else if (match(TOK_PERCENT)) {
+			auto RHS = parseUnary();
+			LHS = std::make_unique<BinaryExprAST>("%", std::move(LHS),
+			                                      std::move(RHS));
+		} else {
+			break;
+		}
+	}
 	return LHS;
 }
 
@@ -427,6 +462,12 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 	if (match(TOK_AMP)) {
 		auto operand = parseUnary();
 		return std::make_unique<AddressOfExprAST>(std::move(operand));
+	}
+	// Unary minus (negation). Negative number literals (`-7`) are handled
+	// in the lexer; this fires for `-x` where x is a non-literal expression.
+	if (match(TOK_MINUS)) {
+		auto operand = parseUnary();
+		return std::make_unique<UnaryExprAST>("-", std::move(operand));
 	}
 
 	return parsePrimary();

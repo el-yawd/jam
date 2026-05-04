@@ -519,6 +519,12 @@ JamValueRef JamLLVMBuildMul(JamBuilderRef builder, JamValueRef lhs,
 	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
 
+JamValueRef JamLLVMBuildURem(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateURem(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
 JamValueRef JamLLVMBuildAnd(JamBuilderRef builder, JamValueRef lhs,
                             JamValueRef rhs, const char *name) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateAnd(

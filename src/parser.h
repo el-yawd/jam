@@ -36,6 +36,7 @@ class Parser {
 	std::unique_ptr<ExprAST> parseBitwise();
 	std::unique_ptr<ExprAST> parseShift();
 	std::unique_ptr<ExprAST> parseAddition();
+	std::unique_ptr<ExprAST> parseMultiplication();
 	std::unique_ptr<ExprAST> parseStructLiteral();
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<ImportDeclAST> parseImportDecl();

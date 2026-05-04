@@ -105,6 +105,13 @@ JamValueRef UnaryExprAST::codegen(JamCodegenContext &ctx) {
 		return JamLLVMBuildXor(ctx.getBuilder(), operandVal, allOnes, "nottmp");
 	}
 
+	if (Op == "-") {
+		// Negation: 0 - val, preserves the operand's type.
+		JamTypeRef ty = JamLLVMTypeOf(operandVal);
+		JamValueRef zero = JamLLVMConstInt(ty, 0, false);
+		return JamLLVMBuildSub(ctx.getBuilder(), zero, operandVal, "negtmp");
+	}
+
 	throw std::runtime_error("Invalid unary operator: " + Op);
 }
 
@@ -201,13 +208,57 @@ JamValueRef BinaryExprAST::codegen(JamCodegenContext &ctx) {
 		return phi;
 	}
 
-	// For other operators, evaluate both sides
-	JamValueRef L = LHS->codegen(ctx);
-	JamValueRef R = RHS->codegen(ctx);
+	// For other operators, evaluate both sides. If exactly one side is an
+	// integer literal, codegen the concrete side first and hint the literal
+	// to materialize at the same type — this avoids width/signedness drift
+	// across the binary op. If both sides are literals or both are concrete,
+	// fall back to plain codegen and a width-aligning coerceTo afterwards.
+	auto *lNum = dynamic_cast<NumberExprAST *>(LHS.get());
+	auto *rNum = dynamic_cast<NumberExprAST *>(RHS.get());
+
+	JamValueRef L = nullptr;
+	JamValueRef R = nullptr;
+	if (lNum && !rNum) {
+		R = RHS->codegen(ctx);
+		if (R) hintIntLiteral(LHS.get(), JamLLVMTypeOf(R));
+		L = LHS->codegen(ctx);
+	} else if (!lNum && rNum) {
+		L = LHS->codegen(ctx);
+		if (L) hintIntLiteral(RHS.get(), JamLLVMTypeOf(L));
+		R = RHS->codegen(ctx);
+	} else {
+		L = LHS->codegen(ctx);
+		R = RHS->codegen(ctx);
+	}
 
 	if (!L || !R) return nullptr;
 
+	// Width-align both sides if they're still mismatched integer types
+	// (e.g. two literals of different widths, or two vars of different
+	// declared widths). Widen the narrower to the wider.
+	{
+		JamTypeRef lt = JamLLVMTypeOf(L);
+		JamTypeRef rt = JamLLVMTypeOf(R);
+		if (lt != rt && JamLLVMTypeIsInteger(lt) &&
+		    JamLLVMTypeIsInteger(rt)) {
+			unsigned lw = JamLLVMGetIntTypeWidth(lt);
+			unsigned rw = JamLLVMGetIntTypeWidth(rt);
+			if (lw > rw) {
+				R = coerceTo(ctx, R, lt);
+			} else {
+				L = coerceTo(ctx, L, rt);
+			}
+		}
+	}
+
 	if (Op == "+") return JamLLVMBuildAdd(ctx.getBuilder(), L, R, "addtmp");
+	else if (Op == "-")
+		return JamLLVMBuildSub(ctx.getBuilder(), L, R, "subtmp");
+	else if (Op == "*")
+		return JamLLVMBuildMul(ctx.getBuilder(), L, R, "multmp");
+	else if (Op == "%")
+		// Unsigned remainder; matches u8/u16/u32/u64 expectations.
+		return JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
 	else if (Op == "&")
 		return JamLLVMBuildAnd(ctx.getBuilder(), L, R, "andtmp");
 	else if (Op == "|")
@@ -282,8 +333,12 @@ JamValueRef CallExprAST::codegen(JamCodegenContext &ctx) {
 		}
 	}
 
+	// LLVM rejects naming the result of a void call. Pass an empty name when
+	// the callee returns void.
+	const char *callName =
+	    JamLLVMTypeIsVoid(JamLLVMGetReturnType(CalleeF)) ? "" : "calltmp";
 	return JamLLVMBuildCall(ctx.getBuilder(), CalleeF, ArgsV.data(),
-	                        ArgsV.size(), "calltmp");
+	                        ArgsV.size(), callName);
 }
 
 JamValueRef CallExprAST::generatePrintCall(JamCodegenContext &ctx) {
@@ -486,9 +541,25 @@ JamValueRef CallExprAST::generateAssertCall(JamCodegenContext &ctx) {
 }
 
 JamValueRef ReturnExprAST::codegen(JamCodegenContext &ctx) {
+	// Bare `return;` — emit ret void. Valid only in functions with no
+	// declared return type; LLVM's verifier will catch the rest.
+	if (!this->RetVal) {
+		JamLLVMBuildRetVoid(ctx.getBuilder());
+		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+	}
+	// Use the enclosing function's declared return type as the expected
+	// type for an integer literal, and coerce non-literals as a width-
+	// aligning safety net. Without this, `return 11;` in an i32 function
+	// would emit `ret i8 11` and fail LLVM verification.
+	JamFunctionRef func = JamLLVMGetBasicBlockParent(
+	    JamLLVMGetInsertBlock(ctx.getBuilder()));
+	JamTypeRef expected = JamLLVMGetReturnType(func);
+	hintIntLiteral(this->RetVal.get(), expected);
 	JamValueRef RetVal = this->RetVal->codegen(ctx);
 	if (!RetVal) return nullptr;
-
+	if (JamLLVMTypeIsInteger(expected)) {
+		RetVal = coerceTo(ctx, RetVal, expected);
+	}
 	JamLLVMBuildRet(ctx.getBuilder(), RetVal);
 	return RetVal;
 }
@@ -1411,8 +1482,10 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 		JamLLVMBuildRetVoid(ctx.getBuilder());
 	}
 
-	// Validate the generated code, checking for consistency
-	JamLLVMVerifyFunction(F);
+	// Per-function verification ran here previously. It's expensive
+	// (linear in the function's instruction count) and runs once per fn
+	// during compile. The module-level verifier in main() catches the
+	// same problems at the end with a single pass.
 
 	return F;
 }

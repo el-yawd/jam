@@ -6,6 +6,8 @@
  */
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -13,6 +15,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "ast.h"
@@ -26,11 +30,61 @@
 #include "target.h"
 #include <filesystem>
 
+// Charm-gum-style "dot" spinner (Braille pattern frames) drawn in pink to
+// stderr while a build is running. RAII-managed: scope-guards stop the
+// thread on early returns / exceptions.
+static std::atomic<bool> gSpinnerActive{false};
+
+static void runSpinner(std::string title) {
+	static const char *frames[8] = {
+	    "\xE2\xA3\xBE", "\xE2\xA3\xBD", "\xE2\xA3\xBB", "\xE2\xA2\xBF",
+	    "\xE2\xA1\xBF", "\xE2\xA3\x9F", "\xE2\xA3\xAF", "\xE2\xA3\xB7",
+	};
+	int i = 0;
+	while (gSpinnerActive.load()) {
+		// 256-color hot pink (#FF5FAF) for the spinner glyph; default
+		// foreground for the title text. \033[K clears any residual.
+		std::cerr << "\r\033[38;5;205m" << frames[i] << "\033[0m " << title
+		          << "\033[K" << std::flush;
+		i = (i + 1) % 8;
+		std::this_thread::sleep_for(std::chrono::milliseconds(80));
+	}
+	std::cerr << "\r\033[K" << std::flush;
+}
+
+class SpinnerGuard {
+	std::thread t;
+	bool started = false;
+
+  public:
+	SpinnerGuard(bool enabled, std::string title) {
+		if (!enabled) return;
+		if (!isatty(STDERR_FILENO)) return;
+		gSpinnerActive = true;
+		t = std::thread(runSpinner, std::move(title));
+		started = true;
+	}
+	~SpinnerGuard() { stop(); }
+	void stop() {
+		if (started) {
+			gSpinnerActive = false;
+			if (t.joinable()) t.join();
+			started = false;
+		}
+	}
+};
+
 static int compileAndRun(const std::string &filename,
                          const std::string &outputName, bool runFlag,
-                         bool emitIR, bool testMode) {
+                         bool emitIR, bool testMode,
+                         const std::vector<std::string> &linkLibs) {
+	// Show a pink dot spinner during build/run; suppress for test mode (the
+	// per-test logging is its own progress indicator).
+	SpinnerGuard spinner(!testMode, "Jam Making");
+
 	std::ifstream file(filename);
 	if (!file.is_open()) {
+		spinner.stop();
 		std::cerr << "Could not open file: " << filename << std::endl;
 		return 1;
 	}
@@ -273,8 +327,13 @@ static int compileAndRun(const std::string &filename,
 		return 1;
 	}
 
-	// Link to create executable using system compiler
+	// Link to create executable using system compiler. Append any -l flags
+	// the user passed (`-lncurses`, `-l ncurses`, `--library ncurses`) so
+	// extern fns from system libraries resolve.
 	std::string linkCmd = "clang " + objectFile + " -o " + outputName;
+	for (const auto &lib : linkLibs) {
+		linkCmd += " -l" + lib;
+	}
 	int linkResult = system(linkCmd.c_str());
 	if (linkResult != 0) {
 		std::cerr << "Linking failed" << std::endl;
@@ -284,8 +343,12 @@ static int compileAndRun(const std::string &filename,
 	// Clean up object file
 	std::remove(objectFile.c_str());
 
+	// Stop the spinner thread before either handing the terminal to the
+	// child process or printing the success line — otherwise the spinner
+	// would keep redrawing on top of whatever the program prints.
+	spinner.stop();
+
 	if (testMode || runFlag) {
-		// Execute the compiled program (like Zig does)
 		std::string runCmd = "./" + outputName;
 		int exitCode = system(runCmd.c_str());
 
@@ -325,16 +388,25 @@ static void printHelp(const char *prog) {
 	          << " [OPTIONS] <file|directory>\n"
 	             "       "
 	          << prog
+	          << " run [LINKER-FLAGS] <file>\n"
+	             "       "
+	          << prog
 	          << " test [<file|directory>]\n"
 	             "\n"
+	             "Subcommands:\n"
+	             "  run             Compile, run, and clean up the executable. "
+	             "Only linker\n"
+	             "                  flags (-l<name>) may accompany it.\n"
+	             "  test            Test mode: compile test functions and "
+	             "run them\n"
+	             "\n"
 	             "Options:\n"
-	             "  --run           Compile, run, and clean up the executable\n"
 	             "  --emit-ir       Print LLVM IR to stdout\n"
 	             "  --target-info   Show host target info (arch, triple, "
 	             "pointer size, ...)\n"
 	             "  -o <name>       Output binary name (default: output)\n"
-	             "  test, --test    Test mode: compile test functions (tfn) "
-	             "and run them\n"
+	             "  -l<name>, --library <name>\n"
+	             "                  Link against system library <name>\n"
 	             "  -h, --help      Show this help and exit\n"
 	             "\n"
 	             "Examples:\n"
@@ -343,7 +415,10 @@ static void printHelp(const char *prog) {
 	          << " hello.jam                 # compile to ./output\n"
 	             "  "
 	          << prog
-	          << " --run hello.jam           # compile and run\n"
+	          << " run hello.jam             # compile and run\n"
+	             "  "
+	          << prog
+	          << " run -lncurses tetris.jam  # compile, link with ncurses, run\n"
 	             "  "
 	          << prog
 	          << " test                      # run tests in cwd (recursive)\n"
@@ -385,32 +460,67 @@ int main(int argc, char *argv[]) {
 	bool testMode = false;
 	std::string filename;
 	std::string outputName = "output";
+	std::vector<std::string> linkLibs;
 
 	if (argc < 2) {
 		printHelp(argv[0]);
 		return 1;
 	}
 
-	// Parse flags
+	// Parse subcommand + flags. `run` and `test` are subcommands; everything
+	// else is either a flag or the filename. When `run` is in effect, only
+	// linker flags (`-l<name>`, `-l <name>`, `--library <name>`) are
+	// permitted alongside it.
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
-		if (arg == "--help" || arg == "-h") {
-			printHelp(argv[0]);
-			return 0;
-		} else if (arg == "--run") {
+		if (arg == "run") {
 			runFlag = true;
-		} else if (arg == "--target-info") {
-			showTarget = true;
-		} else if (arg == "--emit-ir") {
-			emitIR = true;
-		} else if (arg == "test" || arg == "--test") {
+			continue;
+		}
+		if (arg == "test") {
 			testMode = true;
-		} else if (arg == "-o" && i + 1 < argc) {
-			outputName = argv[++i];
-		} else {
+			continue;
+		}
+		// Linker flags — accepted in every mode.
+		if ((arg == "-l" || arg == "--library") && i + 1 < argc) {
+			linkLibs.push_back(argv[++i]);
+			continue;
+		}
+		if (arg.length() > 2 && arg.substr(0, 2) == "-l") {
+			linkLibs.push_back(arg.substr(2));
+			continue;
+		}
+		// Inside `run`, anything else flag-shaped is an error.
+		if (runFlag) {
+			if (!arg.empty() && arg[0] == '-') {
+				std::cerr
+				    << "Error: `run` only accepts linker flags "
+				       "(-l<name>, -l <name>, --library <name>); got `"
+				    << arg << "`" << std::endl;
+				return 1;
+			}
 			filename = arg;
 			break;
 		}
+		// Compile-only / test-mode flags.
+		if (arg == "--help" || arg == "-h") {
+			printHelp(argv[0]);
+			return 0;
+		}
+		if (arg == "--target-info") {
+			showTarget = true;
+			continue;
+		}
+		if (arg == "--emit-ir") {
+			emitIR = true;
+			continue;
+		}
+		if (arg == "-o" && i + 1 < argc) {
+			outputName = argv[++i];
+			continue;
+		}
+		filename = arg;
+		break;
 	}
 
 	// `jam test` with no path means "run every test under cwd".
@@ -474,7 +584,7 @@ int main(int argc, char *argv[]) {
 			std::cout << std::endl << "@" << f << std::endl;
 			std::filesystem::path p(f);
 			std::string perFileOutput = "jam_test_" + p.stem().string();
-			int rc = compileAndRun(f, perFileOutput, runFlag, emitIR, testMode);
+			int rc = compileAndRun(f, perFileOutput, runFlag, emitIR, testMode, linkLibs);
 			if (rc != 0) failed++;
 			else passed++;
 		}
@@ -487,5 +597,6 @@ int main(int argc, char *argv[]) {
 		return failed == 0 ? 0 : 1;
 	}
 
-	return compileAndRun(filename, outputName, runFlag, emitIR, testMode);
+	return compileAndRun(filename, outputName, runFlag, emitIR, testMode,
+	                     linkLibs);
 }
