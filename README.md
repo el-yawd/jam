@@ -13,6 +13,8 @@
     ·
     <a href="https://github.com/raphamorim/jam/blob/main/CHANGELOG.md">Changelog</a>
     ·
+    <a href="https://github.com/raphamorim/jam/blob/main/REFERENCE.md">Reference</a>
+    ·
     <a href="https://github.com/sponsors/raphamorim">Sponsor</a>
   </p>
 </p>

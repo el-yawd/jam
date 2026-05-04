@@ -12,17 +12,17 @@ fn strLenLiteral() u64 {
 
 fn sliceFirstByte() u8 {
     const s: []u8 = "hi";
-    var p: [*]u8 = s.ptr;
+    var p: *const[] u8 = s.ptr;
     return p[0];
 }
 
 fn sliceSecondByte() u8 {
     const s: []u8 = "hi";
-    var p: [*]u8 = s.ptr;
+    var p: *const[] u8 = s.ptr;
     return p[1];
 }
 
-fn loadFirstByte(p: [*]u8) u8 {
+fn loadFirstByte(p: *const[] u8) u8 {
     return p[0];
 }
 

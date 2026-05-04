@@ -1,4 +1,4 @@
-extern fn snprintf(buf: [*]u8, size: u64, format: [*]const u8, ...) i32;
+extern fn snprintf(buf: *mut[] u8, size: u64, format: *const[] u8, ...) i32;
 
 fn snprintfNoExtra() i32 {
     var buf: [16]u8 = undefined;

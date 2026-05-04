@@ -28,6 +28,7 @@ enum TokenType {
 	TOK_NUMBER,
 	TOK_CONST,
 	TOK_VAR,
+	TOK_MUT,
 	TOK_EQUAL,
 	TOK_TYPE,
 	TOK_IF,

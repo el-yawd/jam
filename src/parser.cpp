@@ -168,23 +168,65 @@ NodeIdx Parser::parsePrimary() {
 	throw std::runtime_error("Expected primary expression");
 }
 
+// Type grammar:
+//
+//   *const T     — single-item pointer, read-only pointee
+//   *mut T       — single-item pointer, writable pointee
+//   *const[] T   — many-item pointer, read-only pointee
+//   *mut[] T     — many-item pointer, writable pointee
+//   []T          — slice (mutability follows the binding)
+//   [N]T         — fixed-size array (mutability follows the binding;
+//                  `N` is part of the type)
+//
+// Pointer types require a `const` or `mut` qualifier (the type
+// alone cannot say whether the pointee is writable; the binding's
+// `var` / `const` only governs reassignment of the pointer itself).
+// An optional `[]` between the qualifier and the element type promotes
+// the pointer to many-item form.
+//
+// Slices `[]T` and fixed arrays `[N]T` take no qualifier — their
+// element mutability follows the binding (`var x: []u8` permits
+// `x[i] = …`; `const x: []u8` does not).
 TypeIdx Parser::parseType() {
-	if (match(TOK_STAR)) { return typePool->internPtrSingle(parseType()); }
+	if (match(TOK_STAR)) {
+		bool ptrConst = false;
+		if (match(TOK_CONST)) {
+			ptrConst = true;
+		} else if (!match(TOK_MUT)) {
+			throw std::runtime_error(
+			    "Expected `const` or `mut` after `*` (e.g. `*const T`, "
+			    "`*mut T`)");
+		}
+		// Optional `[]` promotes to many-item form. We need to commit to
+		// "many" only when the next two tokens are exactly `[ ]`; a `[`
+		// followed by a number is the start of a `[N]T` element type
+		// (single-item pointer to a fixed array).
+		bool isMany = false;
+		if (check(TOK_OPEN_BRACKET)) {
+			int saved = current;
+			advance();  // consume `[`
+			if (match(TOK_CLOSE_BRACKET)) {
+				isMany = true;
+			} else {
+				current = saved;  // rewind: `[` belongs to element type
+			}
+		}
+		TypeIdx elem = parseType();
+		(void)ptrConst;  // mutability not enforced yet
+		return isMany ? typePool->internPtrMany(elem)
+		             : typePool->internPtrSingle(elem);
+	}
 	if (match(TOK_OPEN_BRACKET)) {
+		// `[]T` — slice. No tag.
 		if (match(TOK_CLOSE_BRACKET)) {
-			(void)match(TOK_CONST);
 			return typePool->internSlice(parseType());
 		}
-		if (match(TOK_STAR)) {
-			consume(TOK_CLOSE_BRACKET, "Expected ']' after '[*'");
-			return typePool->internPtrMany(parseType());
-		}
-		consume(TOK_NUMBER, "Expected size or ']' after '['");
+		// `[N]T` — fixed-size array. No tag.
+		consume(TOK_NUMBER, "Expected size or `]` after `[`");
 		uint32_t len = static_cast<uint32_t>(std::stoul(previous().lexeme));
-		consume(TOK_CLOSE_BRACKET, "Expected ']' after array size");
+		consume(TOK_CLOSE_BRACKET, "Expected `]` after array size");
 		return typePool->internArray(parseType(), len);
 	}
-	if (match(TOK_CONST)) { return parseType(); }
 	if (match(TOK_TYPE)) {
 		const std::string &s = previous().lexeme;
 		if (s == "u8") return BuiltinType::U8;

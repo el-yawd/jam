@@ -5,7 +5,6 @@ fn test_string_and_slice_params(message: str, data: []u8) str {
 
 fn test_string_slice_conversion() []u8 {
     const text: str = "convert me";
-    // In the future, this would convert str to []u8
     const bytes: []u8 = text;
     return bytes;
 }

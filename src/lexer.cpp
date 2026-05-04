@@ -88,6 +88,8 @@ void Lexer::identifier() {
 		addToken(TOK_CONST, text);
 	} else if (text == "var") {
 		addToken(TOK_VAR, text);
+	} else if (text == "mut") {
+		addToken(TOK_MUT, text);
 	} else if (text == "if") {
 		addToken(TOK_IF, text);
 	} else if (text == "else") {

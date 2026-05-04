@@ -72,12 +72,12 @@ The previous `run_cabi_tests.sh` was removed — it masked failures with a final
 
 ```jam
 // Future syntax for calling C functions
-extern "C" fn printf(format: *u8, ...) i32;
-extern "C" fn malloc(size: u64) *u8;
-extern "C" fn free(ptr: *u8);
+extern "C" fn printf(format: *const u8, ...) i32;
+extern "C" fn malloc(size: u64) *var u8;
+extern "C" fn free(ptr: *var u8);
 
 fn main() u8 {
-    var msg: *u8 = "Hello from Jam!\n";
+    var msg: *const u8 = "Hello from Jam!\n";
     printf(msg);
     return 0;
 }
