@@ -9,6 +9,7 @@
 #define PARSER_H
 
 #include "ast.h"
+#include "ast_flat.h"
 #include "token.h"
 #include <memory>
 #include <vector>
@@ -17,6 +18,9 @@ class Parser {
   private:
 	std::vector<Token> tokens;
 	int current = 0;
+	TypePool *typePool;
+	StringPool *stringPool;
+	NodeStore *nodes;
 
 	Token peek() const;
 	Token previous() const;
@@ -26,25 +30,33 @@ class Parser {
 	bool match(TokenType type);
 	void consume(TokenType type, const std::string &message);
 
-	std::unique_ptr<ExprAST> parsePrimary();
-	std::unique_ptr<ExprAST> parseUnary();
-	std::string parseType();
-	std::unique_ptr<ExprAST> parseExpression();
-	std::unique_ptr<ExprAST> parseLogicalOr();
-	std::unique_ptr<ExprAST> parseLogicalAnd();
-	std::unique_ptr<ExprAST> parseComparison();
-	std::unique_ptr<ExprAST> parseBitwise();
-	std::unique_ptr<ExprAST> parseShift();
-	std::unique_ptr<ExprAST> parseAddition();
-	std::unique_ptr<ExprAST> parseMultiplication();
-	std::unique_ptr<ExprAST> parseStructLiteral();
+	NodeIdx emit(AstNode n);
+
+	NodeIdx parsePrimary();
+	NodeIdx parseUnary();
+	TypeIdx parseType();
+	NodeIdx parseExpression();
+	NodeIdx parseLogicalOr();
+	NodeIdx parseLogicalAnd();
+	NodeIdx parseComparison();
+	NodeIdx parseBitwise();
+	NodeIdx parseShift();
+	NodeIdx parseAddition();
+	NodeIdx parseMultiplication();
+	NodeIdx parseStructLiteral();
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<ImportDeclAST> parseImportDecl();
 	std::unique_ptr<DestructuringImportDeclAST> parseDestructuringImport();
 	std::unique_ptr<StructDeclAST> parseStructDecl();
 
+	// Helper to walk a member-access chain at parse time and produce the
+	// fully qualified name (e.g. "std.fmt.println") from a chain whose root
+	// is a Variable node.
+	std::string qualifiedName(NodeIdx chainRoot) const;
+
   public:
-	explicit Parser(std::vector<Token> tokens);
+	Parser(std::vector<Token> tokens, TypePool &typePool,
+	       StringPool &stringPool, NodeStore &nodes);
 	std::unique_ptr<ModuleAST> parse();
 };
 

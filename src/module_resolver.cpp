@@ -15,7 +15,10 @@
 
 namespace fs = std::filesystem;
 
-ModuleResolver::ModuleResolver(const std::string &baseDir) : baseDir(baseDir) {}
+ModuleResolver::ModuleResolver(const std::string &baseDir, TypePool &typePool_,
+                               StringPool &stringPool_, NodeStore &nodeStore_)
+    : baseDir(baseDir), typePool(&typePool_), stringPool(&stringPool_),
+      nodeStore(&nodeStore_) {}
 
 std::string ModuleResolver::resolve(const std::string &importPath) const {
 	// Handle builtin modules (no file resolution needed)
@@ -56,7 +59,7 @@ std::unique_ptr<ModuleAST>
 ModuleResolver::parseSource(const std::string &source) const {
 	Lexer lexer(source);
 	std::vector<Token> tokens = lexer.scanTokens();
-	Parser parser(tokens);
+	Parser parser(tokens, *typePool, *stringPool, *nodeStore);
 	return parser.parse();
 }
 
@@ -114,8 +117,10 @@ ModuleAST *ModuleResolver::getOrLoadModule(const std::string &importPath) {
 			fs::path modulePath(resolvedPath);
 			std::string moduleDir = modulePath.parent_path().string();
 
-			// Create a temporary resolver for nested imports
-			ModuleResolver nestedResolver(moduleDir);
+			// Create a temporary resolver for nested imports, sharing the
+			// same type/string/node pools.
+			ModuleResolver nestedResolver(moduleDir, *typePool, *stringPool,
+			                              *nodeStore);
 
 			// Try to resolve relative to module's directory
 			std::string nestedResolved = nestedResolver.resolve(import->Path);

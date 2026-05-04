@@ -9,6 +9,7 @@
 #define MODULE_RESOLVER_H
 
 #include "ast.h"
+#include "ast_flat.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -17,8 +18,11 @@
 
 class ModuleResolver {
   public:
-	// Construct with base directory (directory of main source file)
-	explicit ModuleResolver(const std::string &baseDir);
+	// Construct with base directory and the shared type/string/node pools
+	// so imported modules' types and AST nodes intern into the same pools
+	// as the main one.
+	ModuleResolver(const std::string &baseDir, TypePool &typePool,
+	               StringPool &stringPool, NodeStore &nodeStore);
 
 	// Resolve import path to absolute file path
 	// Returns empty string if not found
@@ -40,6 +44,9 @@ class ModuleResolver {
 
   private:
 	std::string baseDir;
+	TypePool *typePool;
+	StringPool *stringPool;
+	NodeStore *nodeStore;
 	std::unordered_map<std::string, std::unique_ptr<ModuleAST>> loadedModules;
 	std::unordered_set<std::string>
 	    currentlyLoading;  // For circular import detection

@@ -8,6 +8,7 @@
 #ifndef CODEGEN_H
 #define CODEGEN_H
 
+#include "ast_flat.h"
 #include "jam_llvm.h"
 #include <map>
 #include <string>
@@ -37,8 +38,22 @@ class JamCodegenContext {
 	JamTypeRef getDoubleType() const { return JamLLVMDoubleType(ctx); }
 	JamTypeRef getVoidType() const { return JamLLVMVoidType(ctx); }
 
-	// Get type from Jam type string
+	// Get type from Jam type string. Internally parses once, interns into
+	// the TypePool, then resolves to an LLVM type via getLLVMType(TypeIdx).
 	JamTypeRef getTypeFromString(const std::string &typeStr) const;
+
+	// First-class type-pool entry points. internFromString parses a type
+	// syntax fragment into a canonical TypeIdx; getLLVMType resolves that
+	// TypeIdx to its LLVM type (cached). Once the parser/AST migrate to
+	// TypeIdx, getTypeFromString becomes a thin wrapper.
+	TypeIdx internFromString(const std::string &typeStr) const;
+	JamTypeRef getLLVMType(TypeIdx ty) const;
+	TypePool &getTypePool() { return typePool; }
+	const TypePool &getTypePool() const { return typePool; }
+	StringPool &getStringPool() { return stringPool; }
+	const StringPool &getStringPool() const { return stringPool; }
+	NodeStore &getNodeStore() { return nodeStore; }
+	const NodeStore &getNodeStore() const { return nodeStore; }
 
 	// Variable management
 	void setVariable(const std::string &name, JamValueRef value);
@@ -46,19 +61,23 @@ class JamCodegenContext {
 	void clearVariables();
 	bool hasVariable(const std::string &name) const;
 
-	// Variable type tracking (for struct field access)
-	void setVariableType(const std::string &name, const std::string &typeName);
-	std::string getVariableType(const std::string &name) const;
+	// Variable type tracking. Types are interned TypeIdx; kNoType means
+	// "unknown" (caller must handle).
+	void setVariableType(const std::string &name, TypeIdx type);
+	TypeIdx getVariableType(const std::string &name) const;
 
-	// Struct registry
+	// Struct registry. Field names stay as std::string for now (struct
+	// fields are queried by name); field types are TypeIdx.
 	struct StructInfo {
 		std::string name;
 		JamTypeRef type;
-		std::vector<std::pair<std::string, std::string>> fields;  // (name, type)
+		std::vector<std::pair<std::string, TypeIdx>> fields;
 	};
 	void registerStruct(const std::string &name, JamTypeRef type,
-	                    std::vector<std::pair<std::string, std::string>> fields);
+	                    std::vector<std::pair<std::string, TypeIdx>> fields);
 	const StructInfo *getStruct(const std::string &name) const;
+	// Convenience: resolve a TypeIdx of kind Struct back to its StructInfo.
+	const StructInfo *lookupStruct(TypeIdx ty) const;
 	int getFieldIndex(const std::string &structName,
 	                  const std::string &fieldName) const;
 
@@ -67,8 +86,13 @@ class JamCodegenContext {
 	JamModuleRef mod;
 	JamBuilderRef builder;
 	std::map<std::string, JamValueRef> namedValues;
-	std::map<std::string, std::string> namedValueTypes;
+	std::map<std::string, TypeIdx> namedValueTypes;
 	std::map<std::string, StructInfo> structs;
+	mutable TypePool typePool;
+	mutable StringPool stringPool;
+	mutable NodeStore nodeStore;
+	// Lazy LLVM type per TypeIdx (built once, reused). Indexed by TypeIdx.
+	mutable std::vector<JamTypeRef> llvmTypeCache;
 };
 
 #endif  // CODEGEN_H

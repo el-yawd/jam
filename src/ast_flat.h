@@ -1,0 +1,375 @@
+/*
+ * Copyright (c) 2026-present Raphael Amorim
+ *
+ * This file is part of jam.
+ * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
+ */
+
+// Flat, tag-dispatched AST. AstNode is a 16-byte plain struct, indices
+// replace pointers, complex payloads spill into a side `extra` pool.
+// The flat layout keeps nodes packed in a single contiguous vector so
+// codegen walks a cache-friendly array via switch dispatch on tag.
+//
+// Conventions:
+//   - NodeIdx 0 is the "null"/absent node. The store reserves slot 0 with
+//     tag = AstTag::Invalid so a 0-init AstNode is a sentinel.
+//   - For nodes that need more than two u32 payload slots, lhs/rhs index
+//     into NodeStore.extra; layout per tag is documented below.
+//   - StringPool / TypePool ids are 32-bit. 0 = empty string / void type.
+
+#ifndef AST_FLAT_H
+#define AST_FLAT_H
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+using NodeIdx = uint32_t;
+using StringIdx = uint32_t;
+using TypeIdx = uint32_t;
+using TokenIndex = uint32_t;
+using ExtraIdx = uint32_t;
+
+constexpr NodeIdx kNoNode = 0;
+constexpr StringIdx kNoString = 0;
+constexpr TypeIdx kNoType = 0;
+
+// --------------------------------------------------------------------------
+// Node tags. One byte; switched on in codegen.
+// --------------------------------------------------------------------------
+
+enum class AstTag : uint8_t {
+	Invalid = 0,
+
+	// Literals
+	NumberLit,     // d.lhs = lo32(val), d.rhs = hi32(val); flags bit 0 = isNeg
+	BoolLit,       // d.lhs = 0|1
+	StringLit,     // d.lhs = StringIdx
+	UndefinedLit,
+
+	// Lvalues / refs
+	Variable,      // d.lhs = StringIdx (name)
+	MemberAccess,  // d.lhs = NodeIdx (object), d.rhs = StringIdx (member)
+	Index,         // d.lhs = NodeIdx (object), d.rhs = NodeIdx (index)
+	Deref,         // d.lhs = NodeIdx (operand)
+	AddressOf,     // d.lhs = NodeIdx (operand)
+
+	// Operators
+	UnaryOp,       // d.lhs = NodeIdx (operand); op kind in `op`
+	BinaryOp,      // d.lhs = NodeIdx (lhs), d.rhs = NodeIdx (rhs); op in `op`
+
+	// Calls
+	// d.lhs = StringIdx (callee fully qualified, e.g. "std.fmt.println")
+	// d.rhs = ExtraIdx → [argCount, arg0, arg1, ...]
+	Call,
+
+	// Statements
+	Return,        // d.lhs = NodeIdx (operand) or kNoNode for bare `return;`
+	Assign,        // d.lhs = NodeIdx (target), d.rhs = NodeIdx (value)
+	// d.lhs = ExtraIdx → [StringIdx name, TypeIdx type, NodeIdx init]
+	// d.rhs = flags (bit 0 = isConst)
+	VarDecl,
+	// d.lhs = NodeIdx (cond), d.rhs = ExtraIdx →
+	//   [thenCount, elseCount, then0, then1, ..., else0, else1, ...]
+	IfNode,
+	// d.lhs = NodeIdx (cond), d.rhs = ExtraIdx → [bodyCount, body0, body1, ...]
+	WhileNode,
+	// d.lhs = ExtraIdx → [StringIdx var, NodeIdx start, NodeIdx end,
+	//                     bodyCount, body0, body1, ...]
+	ForNode,
+	Break,
+	Continue,
+
+	// Module-level
+	ImportLit,     // d.lhs = StringIdx (module path)
+	// d.lhs = TypeIdx (struct type, kNoType if inferred from var-decl context)
+	// d.rhs = ExtraIdx → [fieldCount, fieldName0, fieldExpr0, fieldName1, ...]
+	StructLit,
+
+	// Sentinel for table sizing
+	Count,
+};
+
+// Binary operator kinds (one slot in AstNode.op for BinaryOp tag).
+enum class BinOp : uint8_t {
+	Invalid = 0,
+	Add,
+	Sub,
+	Mul,
+	Mod,
+	BitAnd,
+	BitOr,
+	BitXor,
+	Shl,
+	Shr,
+	LogAnd,
+	LogOr,
+	Eq,
+	Ne,
+	Lt,
+	Le,
+	Gt,
+	Ge,
+};
+
+// Unary operator kinds (one slot in AstNode.op for UnaryOp tag).
+enum class UnaryOp : uint8_t {
+	Invalid = 0,
+	Neg,     // -x
+	LogNot,  // !x
+	BitNot,  // ~x
+};
+
+// 16 bytes total: tag + op + flags + main_token + two u32 data slots.
+struct AstNode {
+	AstTag tag;
+	uint8_t op;            // BinOp / UnaryOp encoded as u8
+	uint16_t flags;        // tag-specific bit field (e.g. NumberLit isNeg)
+	TokenIndex mainToken;  // token index for error reporting
+	uint32_t lhs;          // generic data slot
+	uint32_t rhs;          // generic data slot
+};
+
+static_assert(sizeof(AstNode) == 16,
+              "AstNode is sized to one cache-friendly slot");
+
+// --------------------------------------------------------------------------
+// Storage. NodeStore owns the flat node array + the `extra` u32 pool used
+// for variadic payloads (call args, block bodies, struct literal fields).
+// --------------------------------------------------------------------------
+
+class NodeStore {
+	std::vector<AstNode> nodes_;
+	std::vector<uint32_t> extra_;
+
+  public:
+	NodeStore() {
+		// Reserve slot 0 as the null sentinel so kNoNode is a no-op.
+		nodes_.push_back(AstNode{AstTag::Invalid, 0, 0, 0, 0, 0});
+	}
+
+	NodeIdx addNode(AstNode n) {
+		NodeIdx id = static_cast<NodeIdx>(nodes_.size());
+		nodes_.push_back(n);
+		return id;
+	}
+
+	const AstNode &get(NodeIdx id) const { return nodes_[id]; }
+	AstNode &getMut(NodeIdx id) { return nodes_[id]; }
+
+	std::size_t size() const { return nodes_.size(); }
+
+	// Append a single u32 to the extra pool, return its index.
+	ExtraIdx pushExtra(uint32_t v) {
+		ExtraIdx i = static_cast<ExtraIdx>(extra_.size());
+		extra_.push_back(v);
+		return i;
+	}
+
+	// Append `len` u32s starting at `data`, return the index of the first.
+	ExtraIdx pushExtraSpan(const uint32_t *data, std::size_t len) {
+		ExtraIdx start = static_cast<ExtraIdx>(extra_.size());
+		extra_.insert(extra_.end(), data, data + len);
+		return start;
+	}
+
+	// Reserve `len` u32s; caller fills via setExtra(idx + i, ...).
+	ExtraIdx reserveExtra(std::size_t len) {
+		ExtraIdx start = static_cast<ExtraIdx>(extra_.size());
+		extra_.resize(extra_.size() + len, 0);
+		return start;
+	}
+
+	uint32_t getExtra(ExtraIdx i) const { return extra_[i]; }
+	void setExtra(ExtraIdx i, uint32_t v) { extra_[i] = v; }
+
+	const std::vector<uint32_t> &extra() const { return extra_; }
+};
+
+// --------------------------------------------------------------------------
+// Interned identifiers + string literals. deque<string> keeps references
+// stable across pushes so the string_view keys in `idx_` don't dangle.
+// --------------------------------------------------------------------------
+
+class StringPool {
+	std::deque<std::string> strings_;
+	std::unordered_map<std::string_view, uint32_t> idx_;
+
+  public:
+	StringPool() {
+		// Slot 0 reserved for kNoString (the empty string).
+		strings_.emplace_back();
+		idx_.emplace(strings_.back(), 0);
+	}
+
+	StringIdx intern(std::string_view s) {
+		auto it = idx_.find(s);
+		if (it != idx_.end()) return it->second;
+		StringIdx id = static_cast<StringIdx>(strings_.size());
+		strings_.emplace_back(s);
+		idx_.emplace(strings_.back(), id);
+		return id;
+	}
+
+	const std::string &get(StringIdx id) const { return strings_[id]; }
+	std::size_t size() const { return strings_.size(); }
+};
+
+// --------------------------------------------------------------------------
+// Type interning. Types are first-class structured values, never strings.
+// Built-ins (void, bool, u8..u64, i8..i64, f32, f64, str) live at fixed
+// pre-interned indices so callers can refer to them without a lookup.
+// --------------------------------------------------------------------------
+
+enum class TypeKind : uint8_t {
+	Invalid = 0,
+	Void,
+	Bool,
+	Int,         // intT.bits, intT.isSigned
+	Float,       // floatT.bits
+	PtrSingle,   // *T   — ptrT.elem (no indexing on this kind)
+	PtrMany,     // [*]T — ptrT.elem (indexable)
+	Slice,       // []T  — sliceT.elem  (lowered to {ptr, len} struct)
+	Array,       // [N]T — arrayT.elem, arrayT.len
+	Struct,      // structT.name (StringIdx)
+};
+
+struct TypeKey {
+	TypeKind kind;
+	uint8_t pad0;
+	uint16_t pad1;
+	uint32_t a;
+	uint32_t b;
+
+	// Layout per kind (a/b serve as named slots — accessed via the
+	// helpers below to keep the discriminated semantics explicit).
+	//   Int:    a = bits, b = isSigned (0/1)
+	//   Float:  a = bits (32 or 64)
+	//   PtrSingle / PtrMany: a = elem TypeIdx
+	//   Slice:  a = elem TypeIdx
+	//   Array:  a = elem TypeIdx, b = length
+	//   Struct: a = StringIdx (struct name)
+};
+
+inline bool operator==(const TypeKey &x, const TypeKey &y) {
+	if (x.kind != y.kind) return false;
+	switch (x.kind) {
+	case TypeKind::Invalid:
+	case TypeKind::Void:
+	case TypeKind::Bool:
+		return true;
+	case TypeKind::Int:
+		return x.a == y.a && x.b == y.b;
+	case TypeKind::Float:
+		return x.a == y.a;
+	case TypeKind::PtrSingle:
+	case TypeKind::PtrMany:
+	case TypeKind::Slice:
+		return x.a == y.a;
+	case TypeKind::Array:
+		return x.a == y.a && x.b == y.b;
+	case TypeKind::Struct:
+		return x.a == y.a;
+	}
+	return false;
+}
+
+struct TypeKeyHash {
+	std::size_t operator()(const TypeKey &k) const noexcept {
+		// Simple FNV-style mix; uniqueness only needs to be per-key.
+		std::size_t h = static_cast<std::size_t>(k.kind) * 1099511628211ULL;
+		h ^= static_cast<std::size_t>(k.a);
+		h *= 1099511628211ULL;
+		h ^= static_cast<std::size_t>(k.b);
+		return h;
+	}
+};
+
+// Built-in type indices. The TypePool constructor pre-interns these so
+// callers can refer to them without going through intern().
+namespace BuiltinType {
+constexpr TypeIdx Void = 1;
+constexpr TypeIdx Bool = 2;
+constexpr TypeIdx U8 = 3;
+constexpr TypeIdx I8 = 4;
+constexpr TypeIdx U16 = 5;
+constexpr TypeIdx I16 = 6;
+constexpr TypeIdx U32 = 7;
+constexpr TypeIdx I32 = 8;
+constexpr TypeIdx U64 = 9;
+constexpr TypeIdx I64 = 10;
+constexpr TypeIdx F32 = 11;
+constexpr TypeIdx F64 = 12;
+constexpr TypeIdx U1 = Bool;  // alias
+}  // namespace BuiltinType
+
+class TypePool {
+	std::vector<TypeKey> keys_;
+	std::unordered_map<TypeKey, TypeIdx, TypeKeyHash> idx_;
+
+	TypeIdx pushKey(TypeKey k) {
+		TypeIdx id = static_cast<TypeIdx>(keys_.size());
+		keys_.push_back(k);
+		idx_.emplace(k, id);
+		return id;
+	}
+
+  public:
+	TypePool() {
+		// Slot 0 = invalid sentinel.
+		keys_.push_back(TypeKey{TypeKind::Invalid, 0, 0, 0, 0});
+		// Pre-intern built-ins. Order matches the constants above so the
+		// TypeIdx values are stable.
+		pushKey(TypeKey{TypeKind::Void, 0, 0, 0, 0});
+		pushKey(TypeKey{TypeKind::Bool, 0, 0, 0, 0});
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 8, 0});   // u8
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 8, 1});   // i8
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 16, 0});  // u16
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 16, 1});  // i16
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 32, 0});  // u32
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 32, 1});  // i32
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 64, 0});  // u64
+		pushKey(TypeKey{TypeKind::Int, 0, 0, 64, 1});  // i64
+		pushKey(TypeKey{TypeKind::Float, 0, 0, 32, 0});
+		pushKey(TypeKey{TypeKind::Float, 0, 0, 64, 0});
+	}
+
+	TypeIdx intern(TypeKey k) {
+		auto it = idx_.find(k);
+		if (it != idx_.end()) return it->second;
+		return pushKey(k);
+	}
+
+	const TypeKey &get(TypeIdx i) const { return keys_[i]; }
+	std::size_t size() const { return keys_.size(); }
+
+	// Convenience constructors that intern in one call.
+	TypeIdx internInt(uint16_t bits, bool isSigned) {
+		return intern(TypeKey{TypeKind::Int, 0, 0, bits, isSigned ? 1u : 0u});
+	}
+	TypeIdx internFloat(uint16_t bits) {
+		return intern(TypeKey{TypeKind::Float, 0, 0, bits, 0});
+	}
+	TypeIdx internPtrSingle(TypeIdx elem) {
+		return intern(TypeKey{TypeKind::PtrSingle, 0, 0, elem, 0});
+	}
+	TypeIdx internPtrMany(TypeIdx elem) {
+		return intern(TypeKey{TypeKind::PtrMany, 0, 0, elem, 0});
+	}
+	TypeIdx internSlice(TypeIdx elem) {
+		return intern(TypeKey{TypeKind::Slice, 0, 0, elem, 0});
+	}
+	TypeIdx internArray(TypeIdx elem, uint32_t len) {
+		return intern(TypeKey{TypeKind::Array, 0, 0, elem, len});
+	}
+	TypeIdx internStruct(StringIdx nameId) {
+		return intern(TypeKey{TypeKind::Struct, 0, 0, nameId, 0});
+	}
+};
+
+#endif  // AST_FLAT_H

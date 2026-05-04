@@ -100,8 +100,11 @@ static int compileAndRun(const std::string &filename,
 	Lexer lexer(source);
 	std::vector<Token> tokens = lexer.scanTokens();
 
-	// Parse the tokens into an AST
-	Parser parser(tokens);
+	// Parse the tokens into an AST. The parser shares the codegen
+	// context's TypePool / StringPool so types are interned at parse time
+	// instead of being repeatedly re-parsed from strings during codegen.
+	Parser parser(tokens, codegenCtx.getTypePool(),
+	              codegenCtx.getStringPool(), codegenCtx.getNodeStore());
 	std::unique_ptr<ModuleAST> module = parser.parse();
 
 	// Get base directory for module resolution
@@ -109,8 +112,11 @@ static int compileAndRun(const std::string &filename,
 	std::string baseDir = sourcePath.parent_path().string();
 	if (baseDir.empty()) { baseDir = "."; }
 
-	// Create module resolver and symbol table
-	ModuleResolver resolver(baseDir);
+	// Create module resolver (sharing the codegen pools so imports intern
+	// into the same TypePool / StringPool as the main module).
+	ModuleResolver resolver(baseDir, codegenCtx.getTypePool(),
+	                        codegenCtx.getStringPool(),
+	                        codegenCtx.getNodeStore());
 	SymbolTable symbolTable;
 
 	// Register builtin test module symbols
@@ -173,7 +179,7 @@ static int compileAndRun(const std::string &filename,
 			std::vector<JamTypeRef> fieldTypes;
 			fieldTypes.reserve(s->Fields.size());
 			for (auto &f : s->Fields) {
-				fieldTypes.push_back(codegenCtx.getTypeFromString(f.second));
+				fieldTypes.push_back(codegenCtx.getLLVMType(f.second));
 			}
 			const auto *info = codegenCtx.getStruct(s->Name);
 			JamLLVMStructSetBody(info->type, fieldTypes.data(),
@@ -298,11 +304,13 @@ static int compileAndRun(const std::string &filename,
 	char *tripleStr = JamLLVMGetDefaultTargetTriple();
 	JamLLVMSetTargetTriple(codegenCtx.getModule(), tripleStr);
 
-	// Create target machine
+	// Create target machine. Default to JAM_OPT_NONE (Zig Debug-equivalent)
+	// — LLVM's machine codegen at -O2 dominates compile time. Debug builds
+	// drop compile time roughly 5–10×; release builds opt in via -O2/-O3.
 	JamTargetMachineRef tm =
 	    JamLLVMCreateTargetMachine(tripleStr, "generic", "",
-	                               false  // not PIC for now
-	    );
+	                               false,  // not PIC for now
+	                               JAM_OPT_NONE);
 	JamLLVMDisposeMessage(tripleStr);
 
 	if (!tm) {

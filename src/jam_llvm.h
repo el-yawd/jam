@@ -354,9 +354,20 @@ JAM_EXTERN_C char *JamLLVMGetDefaultTargetTriple(void);
 JAM_EXTERN_C char *JamLLVMGetHostCPUName(void);
 JAM_EXTERN_C char *JamLLVMGetHostCPUFeatures(void);
 
+// Optimization levels mirror llvm::CodeGenOpt::Level. Default for jam is
+// `None` to match Zig's Debug mode — Debug compiles 5-10× faster than -O2
+// because LLVM's machine codegen is the dominant cost.
+typedef enum {
+	JAM_OPT_NONE = 0,        // -O0 (Zig "Debug")
+	JAM_OPT_LESS = 1,        // -O1
+	JAM_OPT_DEFAULT = 2,     // -O2 (LLVM default)
+	JAM_OPT_AGGRESSIVE = 3,  // -O3 (Zig "ReleaseFast")
+} JamOptLevel;
+
 JAM_EXTERN_C JamTargetMachineRef
 JamLLVMCreateTargetMachine(const char *triple, const char *cpu,
-                           const char *features, bool isRelocationPIC);
+                           const char *features, bool isRelocationPIC,
+                           JamOptLevel optLevel);
 JAM_EXTERN_C void JamLLVMDisposeTargetMachine(JamTargetMachineRef tm);
 
 JAM_EXTERN_C bool JamLLVMEmitObjectFile(JamModuleRef mod,

@@ -8,7 +8,10 @@
 #include "parser.h"
 #include <stdexcept>
 
-Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
+Parser::Parser(std::vector<Token> tokens, TypePool &typePool_,
+               StringPool &stringPool_, NodeStore &nodes_)
+    : tokens(std::move(tokens)), typePool(&typePool_),
+      stringPool(&stringPool_), nodes(&nodes_) {}
 
 Token Parser::peek() const { return tokens[current]; }
 
@@ -39,93 +42,124 @@ void Parser::consume(TokenType type, const std::string &message) {
 		advance();
 		return;
 	}
-
 	throw std::runtime_error(message);
 }
 
-std::unique_ptr<ExprAST> Parser::parsePrimary() {
+NodeIdx Parser::emit(AstNode n) { return nodes->addNode(n); }
+
+// Walk a chain of MemberAccess nodes back to its root Variable and produce
+// the dotted qualified name. Used to resolve `std.fmt.println`-style call
+// targets at parse time so the codegen can switch on the full name.
+std::string Parser::qualifiedName(NodeIdx chainRoot) const {
+	const AstNode &n = nodes->get(chainRoot);
+	if (n.tag == AstTag::Variable) {
+		return stringPool->get(static_cast<StringIdx>(n.lhs));
+	}
+	if (n.tag == AstTag::MemberAccess) {
+		std::string base = qualifiedName(static_cast<NodeIdx>(n.lhs));
+		const std::string &member =
+		    stringPool->get(static_cast<StringIdx>(n.rhs));
+		return base + "." + member;
+	}
+	throw std::runtime_error("Invalid member access chain");
+}
+
+NodeIdx Parser::parsePrimary() {
 	if (match(TOK_NUMBER)) {
-		std::string numStr = previous().lexeme;
+		const std::string &numStr = previous().lexeme;
 		bool isNegative = !numStr.empty() && numStr[0] == '-';
+		uint64_t val;
 		if (isNegative) {
-			// For negative numbers, parse with stoll and convert
 			int64_t signedVal = std::stoll(numStr);
-			return std::make_unique<NumberExprAST>(
-			    static_cast<uint64_t>(-signedVal), true);
+			val = static_cast<uint64_t>(-signedVal);
 		} else {
-			// For positive numbers, use stoull to handle full u64 range
-			return std::make_unique<NumberExprAST>(std::stoull(numStr), false);
+			val = std::stoull(numStr);
 		}
-	} else if (match(TOK_TRUE)) {
-		return std::make_unique<BooleanExprAST>(true);
-	} else if (match(TOK_FALSE)) {
-		return std::make_unique<BooleanExprAST>(false);
-	} else if (match(TOK_UNDEFINED)) {
-		return std::make_unique<UndefinedExprAST>();
-	} else if (match(TOK_STRING_LITERAL)) {
-		return std::make_unique<StringLiteralExprAST>(previous().lexeme);
-	} else if (match(TOK_IMPORT)) {
-		// import("path") expression
+		AstNode n{AstTag::NumberLit, 0, isNegative ? uint16_t{1} : uint16_t{0},
+		          0, static_cast<uint32_t>(val & 0xFFFFFFFFu),
+		          static_cast<uint32_t>(val >> 32)};
+		return emit(n);
+	}
+	if (match(TOK_TRUE)) {
+		return emit(AstNode{AstTag::BoolLit, 0, 0, 0, 1, 0});
+	}
+	if (match(TOK_FALSE)) {
+		return emit(AstNode{AstTag::BoolLit, 0, 0, 0, 0, 0});
+	}
+	if (match(TOK_UNDEFINED)) {
+		return emit(AstNode{AstTag::UndefinedLit, 0, 0, 0, 0, 0});
+	}
+	if (match(TOK_STRING_LITERAL)) {
+		StringIdx s = stringPool->intern(previous().lexeme);
+		return emit(AstNode{AstTag::StringLit, 0, 0, 0, s, 0});
+	}
+	if (match(TOK_IMPORT)) {
 		consume(TOK_OPEN_PAREN, "Expected '(' after 'import'");
 		consume(TOK_STRING_LITERAL, "Expected string literal for import path");
-		std::string path = previous().lexeme;
+		StringIdx path = stringPool->intern(previous().lexeme);
 		consume(TOK_CLOSE_PAREN, "Expected ')' after import path");
-		return std::make_unique<ImportExprAST>(path);
-	} else if (match(TOK_OPEN_PAREN)) {
-		auto expr = parseLogicalOr();
+		return emit(AstNode{AstTag::ImportLit, 0, 0, 0, path, 0});
+	}
+	if (match(TOK_OPEN_PAREN)) {
+		NodeIdx expr = parseLogicalOr();
 		consume(TOK_CLOSE_PAREN, "Expected ')' after expression");
 		return expr;
-	} else if (match(TOK_OPEN_BRACE)) {
-		return parseStructLiteral();
-	} else if (match(TOK_IDENTIFIER)) {
+	}
+	if (match(TOK_OPEN_BRACE)) { return parseStructLiteral(); }
+	if (match(TOK_IDENTIFIER)) {
 		std::string name = previous().lexeme;
-		std::unique_ptr<ExprAST> expr = std::make_unique<VariableExprAST>(name);
+		StringIdx nameId = stringPool->intern(name);
+		NodeIdx expr = emit(AstNode{AstTag::Variable, 0, 0, 0, nameId, 0});
 
-		// Handle member access chain (std.fmt.println) and pointer deref `.*`.
+		// Member access chain (foo.bar.baz) and pointer deref (.*).
 		while (match(TOK_DOT)) {
 			if (match(TOK_STAR)) {
-				expr = std::make_unique<DerefExprAST>(std::move(expr));
+				expr = emit(AstNode{AstTag::Deref, 0, 0, 0,
+				                    static_cast<uint32_t>(expr), 0});
 			} else {
 				consume(TOK_IDENTIFIER, "Expected member name after '.'");
-				std::string member = previous().lexeme;
-				expr = std::make_unique<MemberAccessExprAST>(std::move(expr),
-				                                             member);
+				StringIdx mem = stringPool->intern(previous().lexeme);
+				expr = emit(AstNode{AstTag::MemberAccess, 0, 0, 0,
+				                    static_cast<uint32_t>(expr), mem});
 			}
 		}
 
-		// Check if this is a function call
+		// Function call.
 		if (match(TOK_OPEN_PAREN)) {
-			std::vector<std::unique_ptr<ExprAST>> args;
-
+			std::vector<NodeIdx> args;
 			if (!check(TOK_CLOSE_PAREN)) {
 				do {
 					args.push_back(parseComparison());
 				} while (match(TOK_COMMA));
 			}
-
 			consume(TOK_CLOSE_PAREN, "Expected ')' after function arguments");
 
-			// Get the qualified name from the expression chain
 			std::string callee;
-			if (auto *memberAccess =
-			        dynamic_cast<MemberAccessExprAST *>(expr.get())) {
-				callee = memberAccess->getQualifiedName();
-			} else if (auto *varExpr =
-			               dynamic_cast<VariableExprAST *>(expr.get())) {
-				callee = name;
+			const AstNode &en = nodes->get(expr);
+			if (en.tag == AstTag::MemberAccess) {
+				callee = qualifiedName(expr);
 			} else {
-				callee = name;
+				callee = std::move(name);
 			}
+			StringIdx calleeId = stringPool->intern(callee);
 
-			return std::make_unique<CallExprAST>(callee, std::move(args));
+			// extra layout: [argCount, arg0, arg1, ...]
+			ExtraIdx extra = nodes->reserveExtra(1 + args.size());
+			nodes->setExtra(extra, static_cast<uint32_t>(args.size()));
+			for (size_t i = 0; i < args.size(); i++) {
+				nodes->setExtra(extra + 1 + i, args[i]);
+			}
+			return emit(
+			    AstNode{AstTag::Call, 0, 0, 0, calleeId, extra});
 		}
 
-		// Postfix indexing: arr[i] (and chains arr[i][j])
+		// Postfix indexing chain: arr[i], arr[i][j], etc.
 		while (match(TOK_OPEN_BRACKET)) {
-			auto idx = parseLogicalOr();
+			NodeIdx idx = parseLogicalOr();
 			consume(TOK_CLOSE_BRACKET, "Expected ']' after index");
-			expr =
-			    std::make_unique<IndexExprAST>(std::move(expr), std::move(idx));
+			expr = emit(AstNode{AstTag::Index, 0, 0, 0,
+			                    static_cast<uint32_t>(expr),
+			                    static_cast<uint32_t>(idx)});
 		}
 
 		return expr;
@@ -134,107 +168,116 @@ std::unique_ptr<ExprAST> Parser::parsePrimary() {
 	throw std::runtime_error("Expected primary expression");
 }
 
-std::string Parser::parseType() {
-	// Single-item pointer: *T (cannot be indexed — use `.*` to dereference).
-	if (match(TOK_STAR)) {
-		std::string innerType = parseType();
-		return "*" + innerType;
-	}
-	// Handle bracket-prefixed types: []T (slice), [*]T (many-item ptr),
-	// or [N]T (fixed array).
+TypeIdx Parser::parseType() {
+	if (match(TOK_STAR)) { return typePool->internPtrSingle(parseType()); }
 	if (match(TOK_OPEN_BRACKET)) {
 		if (match(TOK_CLOSE_BRACKET)) {
-			// Slice: []T or []const T
-			bool isConst = match(TOK_CONST);
-			std::string elementType = parseType();
-			if (isConst) { return "[]const " + elementType; }
-			return "[]" + elementType;
+			(void)match(TOK_CONST);
+			return typePool->internSlice(parseType());
 		}
 		if (match(TOK_STAR)) {
-			// Many-item pointer: [*]T (indexable, no length).
 			consume(TOK_CLOSE_BRACKET, "Expected ']' after '[*'");
-			std::string elementType = parseType();
-			return "[*]" + elementType;
+			return typePool->internPtrMany(parseType());
 		}
-		// Fixed-size array: [N]T
 		consume(TOK_NUMBER, "Expected size or ']' after '['");
-		std::string sizeLit = previous().lexeme;
+		uint32_t len = static_cast<uint32_t>(std::stoul(previous().lexeme));
 		consume(TOK_CLOSE_BRACKET, "Expected ']' after array size");
-		std::string elementType = parseType();
-		return "[" + sizeLit + "]" + elementType;
+		return typePool->internArray(parseType(), len);
 	}
-	// Handle const T (like Zig)
-	if (match(TOK_CONST)) {
-		std::string innerType = parseType();
-		return "const " + innerType;
+	if (match(TOK_CONST)) { return parseType(); }
+	if (match(TOK_TYPE)) {
+		const std::string &s = previous().lexeme;
+		if (s == "u8") return BuiltinType::U8;
+		if (s == "i8") return BuiltinType::I8;
+		if (s == "u16") return BuiltinType::U16;
+		if (s == "i16") return BuiltinType::I16;
+		if (s == "u32") return BuiltinType::U32;
+		if (s == "i32") return BuiltinType::I32;
+		if (s == "u64") return BuiltinType::U64;
+		if (s == "i64") return BuiltinType::I64;
+		if (s == "f32") return BuiltinType::F32;
+		if (s == "f64") return BuiltinType::F64;
+		if (s == "bool" || s == "u1") return BuiltinType::Bool;
+		if (s == "str") return typePool->internSlice(BuiltinType::U8);
+		throw std::runtime_error("Unknown base type: " + s);
 	}
-	// Handle base types
-	if (match(TOK_TYPE)) { return previous().lexeme; }
-	// Handle user-defined types (struct names)
-	if (match(TOK_IDENTIFIER)) { return previous().lexeme; }
+	if (match(TOK_IDENTIFIER)) {
+		return typePool->internStruct(stringPool->intern(previous().lexeme));
+	}
 	throw std::runtime_error("Expected type");
 }
 
-std::unique_ptr<ExprAST> Parser::parseStructLiteral() {
-	// Caller has already consumed '{'
-	std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> fields;
+NodeIdx Parser::parseStructLiteral() {
+	// Caller has consumed '{'. Layout in extra:
+	//   [fieldCount, name0, expr0, name1, expr1, ...]
+	std::vector<std::pair<StringIdx, NodeIdx>> fields;
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 		consume(TOK_IDENTIFIER, "Expected field name in struct literal");
-		std::string fieldName = previous().lexeme;
+		StringIdx fieldName = stringPool->intern(previous().lexeme);
 		consume(TOK_COLON, "Expected ':' after field name");
-		auto value = parseLogicalOr();
-		fields.emplace_back(fieldName, std::move(value));
+		NodeIdx value = parseLogicalOr();
+		fields.emplace_back(fieldName, value);
 		if (!match(TOK_COMMA)) break;
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct literal");
-	return std::make_unique<StructLiteralExprAST>(std::move(fields));
+
+	ExtraIdx extra = nodes->reserveExtra(1 + fields.size() * 2);
+	nodes->setExtra(extra, static_cast<uint32_t>(fields.size()));
+	for (size_t i = 0; i < fields.size(); i++) {
+		nodes->setExtra(extra + 1 + i * 2, fields[i].first);
+		nodes->setExtra(extra + 2 + i * 2, fields[i].second);
+	}
+	// d.lhs holds the struct TypeIdx; codegen fills it from the use site
+	// (var-decl target type or enclosing struct field type).
+	return emit(AstNode{AstTag::StructLit, 0, 0, 0, kNoType, extra});
 }
 
-std::unique_ptr<ExprAST> Parser::parseExpression() {
+NodeIdx Parser::parseExpression() {
 	if (match(TOK_RETURN)) {
-		// Bare `return;` (no value) is valid in void functions.
 		if (match(TOK_SEMI)) {
-			return std::make_unique<ReturnExprAST>(nullptr);
+			return emit(AstNode{AstTag::Return, 0, 0, 0, kNoNode, 0});
 		}
-		auto expr = parseLogicalOr();
+		NodeIdx expr = parseLogicalOr();
 		consume(TOK_SEMI, "Expected ';' after return statement");
-		return std::make_unique<ReturnExprAST>(std::move(expr));
-	} else if (match(TOK_CONST) || match(TOK_VAR)) {
+		return emit(
+		    AstNode{AstTag::Return, 0, 0, 0, static_cast<uint32_t>(expr), 0});
+	}
+	if (match(TOK_CONST) || match(TOK_VAR)) {
 		bool isConst = previous().type == TOK_CONST;
 		consume(TOK_IDENTIFIER, "Expected variable name");
-		std::string name = previous().lexeme;
+		StringIdx name = stringPool->intern(previous().lexeme);
 
-		// Optional type annotation
-		std::string type = "u8";  // Default type
+		TypeIdx type = BuiltinType::U8;
 		if (match(TOK_COLON)) { type = parseType(); }
 
-		// Initializer is required. Use `= undefined` to leave storage
-		// uninitialized.
 		consume(TOK_EQUAL,
 		        "Expected '=' (use `= undefined` to leave uninitialized)");
-		std::unique_ptr<ExprAST> init = parseLogicalOr();
+		NodeIdx init = parseLogicalOr();
 		consume(TOK_SEMI, "Expected ';' after variable declaration");
 
-		return std::make_unique<VarDeclAST>(name, type, isConst,
-		                                    std::move(init));
-	} else if (match(TOK_IF)) {
+		// extra layout: [name StringIdx, type TypeIdx, init NodeIdx]
+		ExtraIdx extra = nodes->reserveExtra(3);
+		nodes->setExtra(extra, name);
+		nodes->setExtra(extra + 1, type);
+		nodes->setExtra(extra + 2, init);
+		return emit(AstNode{AstTag::VarDecl, 0, 0, 0, extra,
+		                    isConst ? 1u : 0u});
+	}
+	if (match(TOK_IF)) {
 		consume(TOK_OPEN_PAREN, "Expected '(' after 'if'");
-		auto condition = parseLogicalOr();
+		NodeIdx cond = parseLogicalOr();
 		consume(TOK_CLOSE_PAREN, "Expected ')' after if condition");
 
 		consume(TOK_OPEN_BRACE, "Expected '{' after if condition");
-		std::vector<std::unique_ptr<ExprAST>> thenBody;
+		std::vector<NodeIdx> thenBody;
 		while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 			thenBody.push_back(parseExpression());
 		}
 		consume(TOK_CLOSE_BRACE, "Expected '}' after if body");
 
-		std::vector<std::unique_ptr<ExprAST>> elseBody;
+		std::vector<NodeIdx> elseBody;
 		if (match(TOK_ELSE)) {
 			if (check(TOK_IF)) {
-				// `else if` — recurse via parseExpression so the inner
-				// if/else parses as a single statement that becomes this
-				// branch's else body.
 				elseBody.push_back(parseExpression());
 			} else {
 				consume(TOK_OPEN_BRACE, "Expected '{' or 'if' after 'else'");
@@ -245,250 +288,245 @@ std::unique_ptr<ExprAST> Parser::parseExpression() {
 			}
 		}
 
-		return std::make_unique<IfExprAST>(
-		    std::move(condition), std::move(thenBody), std::move(elseBody));
-	} else if (match(TOK_WHILE)) {
+		// extra layout: [thenCount, elseCount, then..., else...]
+		ExtraIdx extra =
+		    nodes->reserveExtra(2 + thenBody.size() + elseBody.size());
+		nodes->setExtra(extra, static_cast<uint32_t>(thenBody.size()));
+		nodes->setExtra(extra + 1, static_cast<uint32_t>(elseBody.size()));
+		for (size_t i = 0; i < thenBody.size(); i++) {
+			nodes->setExtra(extra + 2 + i, thenBody[i]);
+		}
+		for (size_t i = 0; i < elseBody.size(); i++) {
+			nodes->setExtra(extra + 2 + thenBody.size() + i, elseBody[i]);
+		}
+		return emit(AstNode{AstTag::IfNode, 0, 0, 0,
+		                    static_cast<uint32_t>(cond), extra});
+	}
+	if (match(TOK_WHILE)) {
 		consume(TOK_OPEN_PAREN, "Expected '(' after 'while'");
-		auto condition = parseLogicalOr();
+		NodeIdx cond = parseLogicalOr();
 		consume(TOK_CLOSE_PAREN, "Expected ')' after while condition");
 
 		consume(TOK_OPEN_BRACE, "Expected '{' after while condition");
-		std::vector<std::unique_ptr<ExprAST>> body;
+		std::vector<NodeIdx> body;
 		while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 			body.push_back(parseExpression());
 		}
 		consume(TOK_CLOSE_BRACE, "Expected '}' after while body");
 
-		return std::make_unique<WhileExprAST>(std::move(condition),
-		                                      std::move(body));
-	} else if (match(TOK_FOR)) {
+		ExtraIdx extra = nodes->reserveExtra(1 + body.size());
+		nodes->setExtra(extra, static_cast<uint32_t>(body.size()));
+		for (size_t i = 0; i < body.size(); i++) {
+			nodes->setExtra(extra + 1 + i, body[i]);
+		}
+		return emit(AstNode{AstTag::WhileNode, 0, 0, 0,
+		                    static_cast<uint32_t>(cond), extra});
+	}
+	if (match(TOK_FOR)) {
 		consume(TOK_IDENTIFIER, "Expected variable name after 'for'");
-		std::string varName = previous().lexeme;
+		StringIdx varName = stringPool->intern(previous().lexeme);
 
 		consume(TOK_IN, "Expected 'in' after for variable");
-		auto start = parseComparison();
+		NodeIdx start = parseComparison();
 		consume(TOK_COLON, "Expected ':' in for range");
-		auto end = parseComparison();
+		NodeIdx end = parseComparison();
 
 		consume(TOK_OPEN_BRACE, "Expected '{' after for range");
-		std::vector<std::unique_ptr<ExprAST>> body;
+		std::vector<NodeIdx> body;
 		while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 			body.push_back(parseExpression());
 		}
 		consume(TOK_CLOSE_BRACE, "Expected '}' after for body");
 
-		return std::make_unique<ForExprAST>(varName, std::move(start),
-		                                    std::move(end), std::move(body));
-	} else if (match(TOK_BREAK)) {
+		// extra layout: [varName, start, end, bodyCount, body...]
+		ExtraIdx extra = nodes->reserveExtra(4 + body.size());
+		nodes->setExtra(extra, varName);
+		nodes->setExtra(extra + 1, start);
+		nodes->setExtra(extra + 2, end);
+		nodes->setExtra(extra + 3, static_cast<uint32_t>(body.size()));
+		for (size_t i = 0; i < body.size(); i++) {
+			nodes->setExtra(extra + 4 + i, body[i]);
+		}
+		return emit(AstNode{AstTag::ForNode, 0, 0, 0, extra, 0});
+	}
+	if (match(TOK_BREAK)) {
 		consume(TOK_SEMI, "Expected ';' after break");
-		return std::make_unique<BreakExprAST>();
-	} else if (match(TOK_CONTINUE)) {
+		return emit(AstNode{AstTag::Break, 0, 0, 0, 0, 0});
+	}
+	if (match(TOK_CONTINUE)) {
 		consume(TOK_SEMI, "Expected ';' after continue");
-		return std::make_unique<ContinueExprAST>();
-	} else if (check(TOK_IDENTIFIER)) {
-		// Parse the expression and check if it's a call (function call
-		// statement) or an assignment target.
-		auto expr = parseComparison();
+		return emit(AstNode{AstTag::Continue, 0, 0, 0, 0, 0});
+	}
+	if (check(TOK_IDENTIFIER)) {
+		NodeIdx expr = parseComparison();
 
-		// Assignment statement: target = value;
 		if (match(TOK_EQUAL)) {
-			auto value = parseLogicalOr();
+			NodeIdx value = parseLogicalOr();
 			consume(TOK_SEMI, "Expected ';' after assignment");
-			return std::make_unique<AssignExprAST>(std::move(expr),
-			                                       std::move(value));
+			return emit(AstNode{AstTag::Assign, 0, 0, 0,
+			                    static_cast<uint32_t>(expr),
+			                    static_cast<uint32_t>(value)});
 		}
 
-		// If we got a CallExprAST, consume the semicolon
-		if (dynamic_cast<CallExprAST *>(expr.get())) {
+		// Function-call statement requires a trailing semicolon.
+		if (nodes->get(expr).tag == AstTag::Call) {
 			consume(TOK_SEMI, "Expected ';' after function call");
 		}
-
 		return expr;
 	}
 
 	return parseLogicalOr();
 }
 
-std::unique_ptr<ExprAST> Parser::parseLogicalOr() {
-	auto LHS = parseLogicalAnd();
-
+NodeIdx Parser::parseLogicalOr() {
+	NodeIdx lhs = parseLogicalAnd();
 	while (match(TOK_OR)) {
-		auto RHS = parseLogicalAnd();
-		LHS = std::make_unique<BinaryExprAST>("or", std::move(LHS),
-		                                      std::move(RHS));
+		NodeIdx rhs = parseLogicalAnd();
+		lhs = emit(AstNode{AstTag::BinaryOp,
+		                   static_cast<uint8_t>(BinOp::LogOr), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-
-	return LHS;
+	return lhs;
 }
 
-std::unique_ptr<ExprAST> Parser::parseLogicalAnd() {
-	auto LHS = parseComparison();
-
+NodeIdx Parser::parseLogicalAnd() {
+	NodeIdx lhs = parseComparison();
 	while (match(TOK_AND)) {
-		auto RHS = parseComparison();
-		LHS = std::make_unique<BinaryExprAST>("and", std::move(LHS),
-		                                      std::move(RHS));
+		NodeIdx rhs = parseComparison();
+		lhs = emit(AstNode{AstTag::BinaryOp,
+		                   static_cast<uint8_t>(BinOp::LogAnd), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-
-	return LHS;
+	return lhs;
 }
 
-std::unique_ptr<ExprAST> Parser::parseComparison() {
-	auto LHS = parseBitwise();
-
-	if (match(TOK_EQUAL_EQUAL)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>("==", std::move(LHS),
-		                                       std::move(RHS));
-	} else if (match(TOK_NOT_EQUAL)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>("!=", std::move(LHS),
-		                                       std::move(RHS));
-	} else if (match(TOK_LESS)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>("<", std::move(LHS),
-		                                       std::move(RHS));
-	} else if (match(TOK_LESS_EQUAL)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>("<=", std::move(LHS),
-		                                       std::move(RHS));
-	} else if (match(TOK_GREATER)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>(">", std::move(LHS),
-		                                       std::move(RHS));
-	} else if (match(TOK_GREATER_EQUAL)) {
-		auto RHS = parseBitwise();
-		return std::make_unique<BinaryExprAST>(">=", std::move(LHS),
-		                                       std::move(RHS));
+static BinOp comparisonOp(TokenType t) {
+	switch (t) {
+	case TOK_EQUAL_EQUAL:   return BinOp::Eq;
+	case TOK_NOT_EQUAL:     return BinOp::Ne;
+	case TOK_LESS:          return BinOp::Lt;
+	case TOK_LESS_EQUAL:    return BinOp::Le;
+	case TOK_GREATER:       return BinOp::Gt;
+	case TOK_GREATER_EQUAL: return BinOp::Ge;
+	default:                return BinOp::Invalid;
 	}
-
-	return LHS;
 }
 
-// Bitwise &, |, ^ — same precedence level, left associative
-std::unique_ptr<ExprAST> Parser::parseBitwise() {
-	auto LHS = parseShift();
+NodeIdx Parser::parseComparison() {
+	NodeIdx lhs = parseBitwise();
+	if (check(TOK_EQUAL_EQUAL) || check(TOK_NOT_EQUAL) || check(TOK_LESS) ||
+	    check(TOK_LESS_EQUAL) || check(TOK_GREATER) ||
+	    check(TOK_GREATER_EQUAL)) {
+		Token op = advance();
+		NodeIdx rhs = parseBitwise();
+		BinOp k = comparisonOp(op.type);
+		return emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(k), 0, 0,
+		                    static_cast<uint32_t>(lhs),
+		                    static_cast<uint32_t>(rhs)});
+	}
+	return lhs;
+}
 
+NodeIdx Parser::parseBitwise() {
+	NodeIdx lhs = parseShift();
 	while (true) {
-		if (match(TOK_AMP)) {
-			auto RHS = parseShift();
-			LHS = std::make_unique<BinaryExprAST>("&", std::move(LHS),
-			                                      std::move(RHS));
-		} else if (match(TOK_PIPE)) {
-			auto RHS = parseShift();
-			LHS = std::make_unique<BinaryExprAST>("|", std::move(LHS),
-			                                      std::move(RHS));
-		} else if (match(TOK_CARET)) {
-			auto RHS = parseShift();
-			LHS = std::make_unique<BinaryExprAST>("^", std::move(LHS),
-			                                      std::move(RHS));
-		} else {
-			break;
-		}
+		BinOp k = BinOp::Invalid;
+		if (match(TOK_AMP)) k = BinOp::BitAnd;
+		else if (match(TOK_PIPE)) k = BinOp::BitOr;
+		else if (match(TOK_CARET)) k = BinOp::BitXor;
+		else break;
+		NodeIdx rhs = parseShift();
+		lhs = emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(k), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-
-	return LHS;
+	return lhs;
 }
 
-// Shift << and >>, higher precedence than bitwise, left associative
-std::unique_ptr<ExprAST> Parser::parseShift() {
-	auto LHS = parseAddition();
-
+NodeIdx Parser::parseShift() {
+	NodeIdx lhs = parseAddition();
 	while (true) {
-		if (match(TOK_LSHIFT)) {
-			auto RHS = parseAddition();
-			LHS = std::make_unique<BinaryExprAST>("<<", std::move(LHS),
-			                                      std::move(RHS));
-		} else if (match(TOK_RSHIFT)) {
-			auto RHS = parseAddition();
-			LHS = std::make_unique<BinaryExprAST>(">>", std::move(LHS),
-			                                      std::move(RHS));
-		} else {
-			break;
-		}
+		BinOp k = BinOp::Invalid;
+		if (match(TOK_LSHIFT)) k = BinOp::Shl;
+		else if (match(TOK_RSHIFT)) k = BinOp::Shr;
+		else break;
+		NodeIdx rhs = parseAddition();
+		lhs = emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(k), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-
-	return LHS;
+	return lhs;
 }
 
-std::unique_ptr<ExprAST> Parser::parseAddition() {
-	auto LHS = parseMultiplication();
+NodeIdx Parser::parseAddition() {
+	NodeIdx lhs = parseMultiplication();
 	while (true) {
-		if (match(TOK_PLUS)) {
-			auto RHS = parseMultiplication();
-			LHS = std::make_unique<BinaryExprAST>("+", std::move(LHS),
-			                                      std::move(RHS));
-		} else if (match(TOK_MINUS)) {
-			auto RHS = parseMultiplication();
-			LHS = std::make_unique<BinaryExprAST>("-", std::move(LHS),
-			                                      std::move(RHS));
-		} else {
-			break;
-		}
+		BinOp k = BinOp::Invalid;
+		if (match(TOK_PLUS)) k = BinOp::Add;
+		else if (match(TOK_MINUS)) k = BinOp::Sub;
+		else break;
+		NodeIdx rhs = parseMultiplication();
+		lhs = emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(k), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-	return LHS;
+	return lhs;
 }
 
-std::unique_ptr<ExprAST> Parser::parseMultiplication() {
-	auto LHS = parseUnary();
+NodeIdx Parser::parseMultiplication() {
+	NodeIdx lhs = parseUnary();
 	while (true) {
-		if (match(TOK_STAR)) {
-			auto RHS = parseUnary();
-			LHS = std::make_unique<BinaryExprAST>("*", std::move(LHS),
-			                                      std::move(RHS));
-		} else if (match(TOK_PERCENT)) {
-			auto RHS = parseUnary();
-			LHS = std::make_unique<BinaryExprAST>("%", std::move(LHS),
-			                                      std::move(RHS));
-		} else {
-			break;
-		}
+		BinOp k = BinOp::Invalid;
+		if (match(TOK_STAR)) k = BinOp::Mul;
+		else if (match(TOK_PERCENT)) k = BinOp::Mod;
+		else break;
+		NodeIdx rhs = parseUnary();
+		lhs = emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(k), 0, 0,
+		                   static_cast<uint32_t>(lhs),
+		                   static_cast<uint32_t>(rhs)});
 	}
-	return LHS;
+	return lhs;
 }
 
-std::unique_ptr<ExprAST> Parser::parseUnary() {
+NodeIdx Parser::parseUnary() {
 	if (match(TOK_NOT)) {
-		auto operand = parseUnary();
-		return std::make_unique<UnaryExprAST>("!", std::move(operand));
+		NodeIdx operand = parseUnary();
+		return emit(AstNode{AstTag::UnaryOp,
+		                    static_cast<uint8_t>(UnaryOp::LogNot), 0, 0,
+		                    static_cast<uint32_t>(operand), 0});
 	}
 	if (match(TOK_TILDE)) {
-		auto operand = parseUnary();
-		return std::make_unique<UnaryExprAST>("~", std::move(operand));
+		NodeIdx operand = parseUnary();
+		return emit(AstNode{AstTag::UnaryOp,
+		                    static_cast<uint8_t>(UnaryOp::BitNot), 0, 0,
+		                    static_cast<uint32_t>(operand), 0});
 	}
-	// Address-of (prefix &). Binary `&` (bitwise AND) is parsed in
-	// parseBitwise, which sits above parseUnary in the precedence chain, so
-	// the unary form here only fires when `&` appears in operand position.
 	if (match(TOK_AMP)) {
-		auto operand = parseUnary();
-		return std::make_unique<AddressOfExprAST>(std::move(operand));
+		NodeIdx operand = parseUnary();
+		return emit(AstNode{AstTag::AddressOf, 0, 0, 0,
+		                    static_cast<uint32_t>(operand), 0});
 	}
-	// Unary minus (negation). Negative number literals (`-7`) are handled
-	// in the lexer; this fires for `-x` where x is a non-literal expression.
 	if (match(TOK_MINUS)) {
-		auto operand = parseUnary();
-		return std::make_unique<UnaryExprAST>("-", std::move(operand));
+		NodeIdx operand = parseUnary();
+		return emit(AstNode{AstTag::UnaryOp,
+		                    static_cast<uint8_t>(UnaryOp::Neg), 0, 0,
+		                    static_cast<uint32_t>(operand), 0});
 	}
-
 	return parsePrimary();
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
-	// Check for extern, export, pub, or tfn keywords
 	bool isExtern = false;
 	bool isExport = false;
 	bool isPub = false;
 	bool isTest = false;
 
-	if (match(TOK_EXTERN)) {
-		isExtern = true;
-	} else if (match(TOK_EXPORT)) {
-		isExport = true;
-	} else if (match(TOK_PUB)) {
-		isPub = true;
-	} else if (match(TOK_TFN)) {
-		isTest = true;
-	}
+	if (match(TOK_EXTERN)) isExtern = true;
+	else if (match(TOK_EXPORT)) isExport = true;
+	else if (match(TOK_PUB)) isPub = true;
+	else if (match(TOK_TFN)) isTest = true;
 
 	if (!isTest) { consume(TOK_FN, "Expected 'fn' keyword"); }
 	consume(TOK_IDENTIFIER, "Expected function name");
@@ -496,12 +534,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	consume(TOK_OPEN_PAREN, "Expected '(' after function name");
 
-	std::vector<std::pair<std::string, std::string>> args;
+	std::vector<std::pair<std::string, TypeIdx>> args;
 	bool isVarArgs = false;
 	if (!check(TOK_CLOSE_PAREN)) {
 		do {
-			// Trailing `...` marks the function as variadic. Must be the
-			// final entry in the parameter list and only valid on extern.
 			if (match(TOK_ELLIPSIS)) {
 				if (!isExtern) {
 					throw std::runtime_error(
@@ -514,37 +550,32 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 			std::string paramName = previous().lexeme;
 
 			consume(TOK_COLON, "Expected ':' after parameter name");
-			std::string paramType = parseType();
-
-			args.emplace_back(paramName, paramType);
+			TypeIdx paramType = parseType();
+			args.emplace_back(std::move(paramName), paramType);
 		} while (match(TOK_COMMA));
 	}
 
 	consume(TOK_CLOSE_PAREN, "Expected ')' after parameters");
 
-	// Parse the return type (directly after closing paren, no arrow)
-	std::string returnType;
+	TypeIdx returnType = kNoType;
 	if (check(TOK_TYPE) || check(TOK_OPEN_BRACKET) || check(TOK_CONST) ||
 	    check(TOK_IDENTIFIER) || check(TOK_STAR)) {
 		returnType = parseType();
 	}
 
-	// Extern functions don't have a body
 	if (isExtern) {
 		consume(TOK_SEMI, "Expected ';' after extern function declaration");
-		std::vector<std::unique_ptr<ExprAST>> emptyBody;
 		return std::make_unique<FunctionAST>(name, std::move(args), returnType,
-		                                     std::move(emptyBody), true, false,
-		                                     false, false, isVarArgs);
+		                                     std::vector<NodeIdx>{}, true,
+		                                     false, false, false, isVarArgs);
 	}
 
 	consume(TOK_OPEN_BRACE, "Expected '{' before function body");
 
-	std::vector<std::unique_ptr<ExprAST>> body;
+	std::vector<NodeIdx> body;
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 		body.push_back(parseExpression());
 	}
-
 	consume(TOK_CLOSE_BRACE, "Expected '}' after function body");
 
 	return std::make_unique<FunctionAST>(name, std::move(args), returnType,
@@ -553,7 +584,6 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 }
 
 std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
-	// const Name = struct { field1: T, field2: T };
 	consume(TOK_CONST, "Expected 'const' for struct declaration");
 	consume(TOK_IDENTIFIER, "Expected struct name");
 	std::string name = previous().lexeme;
@@ -561,13 +591,13 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 	consume(TOK_STRUCT, "Expected 'struct' keyword");
 	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
 
-	std::vector<std::pair<std::string, std::string>> fields;
+	std::vector<std::pair<std::string, TypeIdx>> fields;
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 		consume(TOK_IDENTIFIER, "Expected field name");
 		std::string fieldName = previous().lexeme;
 		consume(TOK_COLON, "Expected ':' after field name");
-		std::string fieldType = parseType();
-		fields.emplace_back(fieldName, fieldType);
+		TypeIdx fieldType = parseType();
+		fields.emplace_back(std::move(fieldName), fieldType);
 		if (!match(TOK_COMMA)) break;
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct definition");
@@ -577,7 +607,6 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 }
 
 std::unique_ptr<ImportDeclAST> Parser::parseImportDecl() {
-	// const name = import("path");
 	consume(TOK_CONST, "Expected 'const' for import declaration");
 	consume(TOK_IDENTIFIER, "Expected identifier for import name");
 	std::string name = previous().lexeme;
@@ -594,7 +623,6 @@ std::unique_ptr<ImportDeclAST> Parser::parseImportDecl() {
 }
 
 std::unique_ptr<DestructuringImportDeclAST> Parser::parseDestructuringImport() {
-	// const { func1, func2 } = import("path");
 	consume(TOK_CONST, "Expected 'const' for destructuring import");
 	consume(TOK_OPEN_BRACE, "Expected '{' for destructuring import");
 
@@ -620,12 +648,10 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 	auto module = std::make_unique<ModuleAST>();
 
 	while (!isAtEnd()) {
-		// Check if this is an import or struct declaration
 		if (check(TOK_CONST)) {
 			int saved = current;
-			advance();  // consume const
+			advance();
 
-			// Check for destructuring import: const { ... } = import(...)
 			if (check(TOK_OPEN_BRACE)) {
 				current = saved;
 				module->DestructuringImports.push_back(
@@ -633,19 +659,16 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 				continue;
 			}
 
-			// Check for regular import or struct decl: const name = ...
 			if (check(TOK_IDENTIFIER)) {
-				advance();  // consume identifier
+				advance();
 				if (check(TOK_EQUAL)) {
-					advance();  // consume =
+					advance();
 					if (check(TOK_IMPORT)) {
-						// This is an import, reset and parse it
 						current = saved;
 						module->Imports.push_back(parseImportDecl());
 						continue;
 					}
 					if (check(TOK_STRUCT)) {
-						// const Name = struct { ... };
 						current = saved;
 						module->Structs.push_back(parseStructDecl());
 						continue;
@@ -653,11 +676,9 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 				}
 			}
 
-			// Not an import or struct, reset and fall through to function parsing
 			current = saved;
 		}
 
-		// Parse function (fn, extern fn, export fn, pub fn, tfn)
 		module->Functions.push_back(parseFunction());
 	}
 

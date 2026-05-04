@@ -745,7 +745,8 @@ char *JamLLVMGetHostCPUFeatures(void) {
 JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
                                                const char *cpu,
                                                const char *features,
-                                               bool isRelocationPIC) {
+                                               bool isRelocationPIC,
+                                               JamOptLevel optLevel) {
 	std::string error;
 	const llvm::Target *target =
 	    llvm::TargetRegistry::lookupTarget(triple, error);
@@ -754,8 +755,18 @@ JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
 	llvm::TargetOptions opt;
 	auto rm = isRelocationPIC ? llvm::Reloc::PIC_ : llvm::Reloc::Static;
 
+	llvm::CodeGenOptLevel cgOpt;
+	switch (optLevel) {
+	case JAM_OPT_NONE:       cgOpt = llvm::CodeGenOptLevel::None; break;
+	case JAM_OPT_LESS:       cgOpt = llvm::CodeGenOptLevel::Less; break;
+	case JAM_OPT_DEFAULT:    cgOpt = llvm::CodeGenOptLevel::Default; break;
+	case JAM_OPT_AGGRESSIVE: cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
+	default:                 cgOpt = llvm::CodeGenOptLevel::None; break;
+	}
+
 	llvm::TargetMachine *tm = target->createTargetMachine(
-	    triple, cpu ? cpu : "generic", features ? features : "", opt, rm);
+	    triple, cpu ? cpu : "generic", features ? features : "", opt, rm,
+	    std::nullopt, cgOpt);
 
 	return WRAP_TARGET_MACHINE(tm);
 }
