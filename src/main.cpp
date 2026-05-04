@@ -76,7 +76,7 @@ class SpinnerGuard {
 
 static int compileAndRun(const std::string &filename,
                          const std::string &outputName, bool runFlag,
-                         bool emitIR, bool testMode,
+                         bool emitIR, bool testMode, bool releaseMode,
                          const std::vector<std::string> &linkLibs) {
 	// Show a pink dot spinner during build/run; suppress for test mode (the
 	// per-test logging is its own progress indicator).
@@ -326,11 +326,12 @@ static int compileAndRun(const std::string &filename,
 
 	// Create target machine. Default to JAM_OPT_NONE (Zig Debug-equivalent)
 	// — LLVM's machine codegen at -O2 dominates compile time. Debug builds
-	// drop compile time roughly 5–10×; release builds opt in via -O2/-O3.
+	// drop compile time roughly 30×; `--release` opts into -O3.
 	JamTargetMachineRef tm =
 	    JamLLVMCreateTargetMachine(tripleStr, "generic", "",
 	                               false,  // not PIC for now
-	                               JAM_OPT_NONE);
+	                               releaseMode ? JAM_OPT_AGGRESSIVE
+	                                           : JAM_OPT_NONE);
 	JamLLVMDisposeMessage(tripleStr);
 
 	if (!tm) {
@@ -429,6 +430,9 @@ static void printHelp(const char *prog) {
 	             "run them\n"
 	             "\n"
 	             "Options:\n"
+	             "  --release       Optimized build (LLVM -O3). Default is "
+	             "debug (no opts,\n"
+	             "                  ~30× faster compile).\n"
 	             "  --emit-ir       Print LLVM IR to stdout\n"
 	             "  --target-info   Show host target info (arch, triple, "
 	             "pointer size, ...)\n"
@@ -486,6 +490,7 @@ int main(int argc, char *argv[]) {
 	bool showTarget = false;
 	bool emitIR = false;
 	bool testMode = false;
+	bool releaseMode = false;
 	std::string filename;
 	std::string outputName = "output";
 	std::vector<std::string> linkLibs;
@@ -516,6 +521,12 @@ int main(int argc, char *argv[]) {
 		}
 		if (arg.length() > 2 && arg.substr(0, 2) == "-l") {
 			linkLibs.push_back(arg.substr(2));
+			continue;
+		}
+		// --release toggles LLVM optimizations (off by default — debug
+		// builds compile ~30× faster). Accepted in every mode.
+		if (arg == "--release") {
+			releaseMode = true;
 			continue;
 		}
 		// Inside `run`, anything else flag-shaped is an error.
@@ -612,7 +623,8 @@ int main(int argc, char *argv[]) {
 			std::cout << std::endl << "@" << f << std::endl;
 			std::filesystem::path p(f);
 			std::string perFileOutput = "jam_test_" + p.stem().string();
-			int rc = compileAndRun(f, perFileOutput, runFlag, emitIR, testMode, linkLibs);
+			int rc = compileAndRun(f, perFileOutput, runFlag, emitIR, testMode,
+			                       releaseMode, linkLibs);
 			if (rc != 0) failed++;
 			else passed++;
 		}
@@ -626,5 +638,5 @@ int main(int argc, char *argv[]) {
 	}
 
 	return compileAndRun(filename, outputName, runFlag, emitIR, testMode,
-	                     linkLibs);
+	                     releaseMode, linkLibs);
 }
