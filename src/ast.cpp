@@ -1271,10 +1271,13 @@ JamValueRef resolveLvaluePtr(JamCodegenContext &ctx, NodeIdx node,
 }
 
 // ---------------------------------------------------------------------------
-// FunctionAST::codegen — drives the body through codegenNode.
+// FunctionAST codegen — split into declarePrototype + defineBody so the
+// driver can register every function's signature before it starts emitting
+// any body. That's what lets `main` (or any caller) appear above its
+// callees in source order.
 // ---------------------------------------------------------------------------
 
-JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
+JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	std::string funcName = isTest ? ("__test_" + Name) : Name;
 
 	std::vector<JamTypeRef> ArgTypes;
@@ -1315,7 +1318,18 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 		JamLLVMSetValueName(param, Args[i].first.c_str());
 	}
 
-	if (isExtern) { return F; }
+	return F;
+}
+
+void FunctionAST::defineBody(JamCodegenContext &ctx) {
+	if (isExtern) return;
+
+	std::string funcName = isTest ? ("__test_" + Name) : Name;
+	JamFunctionRef F = JamLLVMGetFunction(ctx.getModule(), funcName.c_str());
+	if (!F) {
+		throw std::runtime_error(
+		    "defineBody: prototype not declared for " + funcName);
+	}
 
 	JamBasicBlockRef BB = JamLLVMAppendBasicBlock(F, "entry");
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), BB);
@@ -1337,6 +1351,10 @@ JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
 	                                JamLLVMGetInsertBlock(ctx.getBuilder()))) {
 		JamLLVMBuildRetVoid(ctx.getBuilder());
 	}
+}
 
+JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {
+	JamFunctionRef F = declarePrototype(ctx);
+	defineBody(ctx);
 	return F;
 }

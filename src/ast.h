@@ -40,6 +40,15 @@ class FunctionAST {
 	      Body(std::move(Body)), isExtern(isExtern), isExport(isExport),
 	      isPub(isPub), isTest(isTest), isVarArgs(isVarArgs) {}
 
+	// Two-pass codegen: declarePrototype emits just the LLVM function
+	// signature (so other functions can reference this one before its body
+	// is built), and defineBody fills in the body. This is what enables
+	// out-of-order definitions, including the common "main on top" layout.
+	JamFunctionRef declarePrototype(JamCodegenContext &ctx);
+	void defineBody(JamCodegenContext &ctx);
+
+	// Convenience: declare + define in one shot. Kept so single-pass
+	// callers (extern, repl-style code) still work.
 	JamFunctionRef codegen(JamCodegenContext &ctx);
 };
 

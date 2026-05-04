@@ -198,28 +198,48 @@ static int compileAndRun(const std::string &filename,
 	}
 	fillStructBodies(module.get());
 
-	// Generate code for imported modules first
-	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
-		if (path == "std") continue;  // Skip std
+	// Two-pass codegen: declare every function's prototype first, then
+	// emit bodies. Without this, calling a function defined later in the
+	// file (or another module) would fail with "Unknown function". This
+	// is also how Zig handles forward references — top-down reads naturally
+	// (main on top, helpers below) without a manual "forward declarations"
+	// section.
 
+	// Pass 1a: prototypes for pub functions in imported modules.
+	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
+		if (path == "std") continue;
 		for (auto &func : importedModule->Functions) {
-			if (func->isPub) { func->codegen(codegenCtx); }
+			if (func->isPub) { func->declarePrototype(codegenCtx); }
 		}
 	}
 
-	// Generate code from the main module's AST
+	// Pass 1b: prototypes for the main module's functions (we still skip
+	// test funcs in non-test mode and user `main` in test mode).
 	std::vector<std::string> testFunctionNames;
+	std::vector<FunctionAST *> mainModuleEmits;
 	for (auto &function : module->Functions) {
-		if (function->isTest && !testMode) {
-			continue;  // Skip test functions in non-test builds
-		}
+		if (function->isTest && !testMode) continue;
 		if (!function->isTest && testMode && function->Name == "main") {
-			continue;  // Skip user main in test mode
+			continue;
 		}
 		if (function->isTest) {
 			testFunctionNames.push_back("__test_" + function->Name);
 		}
-		function->codegen(codegenCtx);
+		function->declarePrototype(codegenCtx);
+		mainModuleEmits.push_back(function.get());
+	}
+
+	// Pass 2a: bodies for pub functions in imported modules.
+	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
+		if (path == "std") continue;
+		for (auto &func : importedModule->Functions) {
+			if (func->isPub) { func->defineBody(codegenCtx); }
+		}
+	}
+
+	// Pass 2b: bodies for the main module's functions.
+	for (FunctionAST *function : mainModuleEmits) {
+		function->defineBody(codegenCtx);
 	}
 
 	// In test mode, generate a main() that calls all test functions
