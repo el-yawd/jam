@@ -1,0 +1,86 @@
+// `match` inclusive ranges: lo..=hi.
+const { assert } = import("test");
+
+fn smallRange(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        10..=20 { r = 1; }
+        else    { r = 0; }
+    }
+    return r;
+}
+
+fn boundsCheck(x: u8) u8 {
+    // Verifies inclusivity at both ends.
+    var r: u8 = 0;
+    match (x) {
+        5..=7 { r = 1; }
+        else  { r = 0; }
+    }
+    return r;
+}
+
+fn multipleRanges(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0x40..=0x47 { r = 1; }
+        0x48..=0x4F { r = 2; }
+        0x50..=0x57 { r = 3; }
+        else        { r = 0; }
+    }
+    return r;
+}
+
+fn rangeMixedWithLiteral(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0           { r = 10; }
+        1..=9       { r = 20; }
+        10          { r = 30; }
+        11..=99     { r = 40; }
+        else        { r = 0; }
+    }
+    return r;
+}
+
+fn rangeOrLiteral(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0 | 5..=9 | 100 { r = 1; }
+        else            { r = 0; }
+    }
+    return r;
+}
+
+tfn smallRangeInside()       { assert(smallRange(15), 1); }
+tfn smallRangeLow()          { assert(smallRange(10), 1); }
+tfn smallRangeHigh()         { assert(smallRange(20), 1); }
+tfn smallRangeBelow()        { assert(smallRange(9), 0); }
+tfn smallRangeAbove()        { assert(smallRange(21), 0); }
+
+tfn boundsCheckLow()         { assert(boundsCheck(5), 1); }
+tfn boundsCheckMid()         { assert(boundsCheck(6), 1); }
+tfn boundsCheckHigh()        { assert(boundsCheck(7), 1); }
+tfn boundsCheckBelow()       { assert(boundsCheck(4), 0); }
+tfn boundsCheckAbove()       { assert(boundsCheck(8), 0); }
+
+tfn multipleRangesFirst()    { assert(multipleRanges(0x42), 1); }
+tfn multipleRangesSecond()   { assert(multipleRanges(0x4A), 2); }
+tfn multipleRangesThird()    { assert(multipleRanges(0x53), 3); }
+tfn multipleRangesGap()      { assert(multipleRanges(0x60), 0); }
+
+tfn mixedZero()              { assert(rangeMixedWithLiteral(0), 10); }
+tfn mixedOne()               { assert(rangeMixedWithLiteral(1), 20); }
+tfn mixedNine()              { assert(rangeMixedWithLiteral(9), 20); }
+tfn mixedTen()               { assert(rangeMixedWithLiteral(10), 30); }
+tfn mixedEleven()            { assert(rangeMixedWithLiteral(11), 40); }
+tfn mixedNinetyNine()        { assert(rangeMixedWithLiteral(99), 40); }
+tfn mixedHundred()           { assert(rangeMixedWithLiteral(100), 0); }
+
+tfn rangeOrLitZero()         { assert(rangeOrLiteral(0), 1); }
+tfn rangeOrLitFive()         { assert(rangeOrLiteral(5), 1); }
+tfn rangeOrLitSeven()        { assert(rangeOrLiteral(7), 1); }
+tfn rangeOrLitNine()         { assert(rangeOrLiteral(9), 1); }
+tfn rangeOrLitHundred()      { assert(rangeOrLiteral(100), 1); }
+tfn rangeOrLitMissOne()      { assert(rangeOrLiteral(1), 0); }
+tfn rangeOrLitMissTen()      { assert(rangeOrLiteral(10), 0); }

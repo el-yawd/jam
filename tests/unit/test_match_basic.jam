@@ -1,0 +1,66 @@
+// Basic `match` patterns: integer literals only.
+const { assert } = import("test");
+
+fn singleArmExact() u8 {
+    var r: u8 = 0;
+    match (1) {
+        1 { r = 99; }
+        else { r = 0; }
+    }
+    return r;
+}
+
+fn singleArmMisses() u8 {
+    var r: u8 = 7;
+    match (5) {
+        1 { r = 99; }
+        else { r = 0; }
+    }
+    return r;
+}
+
+fn dispatchSmall(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0 { r = 10; }
+        1 { r = 20; }
+        2 { r = 30; }
+        3 { r = 40; }
+        else { r = 255; }
+    }
+    return r;
+}
+
+fn matchHexLiteral(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0xCB { r = 1; }
+        0xFF { r = 2; }
+        0x00 { r = 3; }
+        else { r = 0; }
+    }
+    return r;
+}
+
+fn noElseFallthrough(x: u8) u8 {
+    var r: u8 = 50;
+    match (x) {
+        1 { r = 1; }
+        2 { r = 2; }
+    }
+    return r;  // unchanged from 50 if no arm matches
+}
+
+tfn singleArmExactHits()      { assert(singleArmExact(), 99); }
+tfn singleArmMissesElse()     { assert(singleArmMisses(), 0); }
+tfn dispatchSmallZero()       { assert(dispatchSmall(0), 10); }
+tfn dispatchSmallOne()        { assert(dispatchSmall(1), 20); }
+tfn dispatchSmallTwo()        { assert(dispatchSmall(2), 30); }
+tfn dispatchSmallThree()      { assert(dispatchSmall(3), 40); }
+tfn dispatchSmallElse()       { assert(dispatchSmall(99), 255); }
+tfn matchHexCb()              { assert(matchHexLiteral(0xCB), 1); }
+tfn matchHexFf()              { assert(matchHexLiteral(0xFF), 2); }
+tfn matchHexZero()            { assert(matchHexLiteral(0x00), 3); }
+tfn matchHexOther()           { assert(matchHexLiteral(0x42), 0); }
+tfn noElseHit()               { assert(noElseFallthrough(1), 1); }
+tfn noElseFallsThrough()      { assert(noElseFallthrough(99), 50); }

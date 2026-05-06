@@ -1,0 +1,47 @@
+// `match` wildcard `_` and its relationship with `else`.
+const { assert } = import("test");
+
+fn wildcardAtEnd(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0 { r = 10; }
+        1 { r = 20; }
+        _ { r = 99; }
+    }
+    return r;
+}
+
+fn wildcardInOr(x: u8) u8 {
+    // `_` inside an or-pattern still matches everything; first-arm rule
+    // means later arms after `_` are unreachable.
+    var r: u8 = 0;
+    match (x) {
+        1 | _ { r = 5; }
+        else  { r = 0; }
+    }
+    return r;
+}
+
+fn wildcardThenElse(x: u8) u8 {
+    // `_` consumes everything, so the `else` is unreachable. Behavior:
+    // `_` arm runs and `else` is never entered. Verify this.
+    var r: u8 = 0;
+    match (x) {
+        0 { r = 1; }
+        _ { r = 7; }
+        else { r = 99; }
+    }
+    return r;
+}
+
+tfn wildcardZero()       { assert(wildcardAtEnd(0), 10); }
+tfn wildcardOne()        { assert(wildcardAtEnd(1), 20); }
+tfn wildcardOther()      { assert(wildcardAtEnd(50), 99); }
+tfn wildcardOther2()     { assert(wildcardAtEnd(255), 99); }
+
+tfn wildcardOrZero()     { assert(wildcardInOr(0), 5); }
+tfn wildcardOrOne()      { assert(wildcardInOr(1), 5); }
+tfn wildcardOrFifty()    { assert(wildcardInOr(50), 5); }
+
+tfn wildcardThenElseZero()  { assert(wildcardThenElse(0), 1); }
+tfn wildcardThenElseOther() { assert(wildcardThenElse(7), 7); }

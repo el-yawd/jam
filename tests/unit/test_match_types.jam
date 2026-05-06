@@ -1,0 +1,64 @@
+// `match` against scrutinees of different integer widths.
+const { assert } = import("test");
+
+fn matchU8(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0..=127     { r = 1; }
+        128..=254   { r = 2; }
+        255         { r = 3; }
+        else        { r = 0; }
+    }
+    return r;
+}
+
+fn matchU16(x: u16) u16 {
+    var r: u16 = 0;
+    match (x) {
+        0           { r = 1; }
+        1..=255     { r = 2; }
+        256..=4095  { r = 3; }
+        else        { r = 4; }
+    }
+    return r;
+}
+
+fn matchU32(x: u32) u32 {
+    var r: u32 = 0;
+    match (x) {
+        0          { r = 1; }
+        1..=1000   { r = 2; }
+        else       { r = 3; }
+    }
+    return r;
+}
+
+fn matchI32(x: i32) i32 {
+    var r: i32 = 0;
+    match (x) {
+        0          { r = 100; }
+        1..=10     { r = 200; }
+        else       { r = 300; }
+    }
+    return r;
+}
+
+tfn matchU8Lower()      { assert(matchU8(0), 1); }
+tfn matchU8MidHigh()    { assert(matchU8(127), 1); }
+tfn matchU8Mid()        { assert(matchU8(128), 2); }
+tfn matchU8Upper()      { assert(matchU8(254), 2); }
+tfn matchU8Max()        { assert(matchU8(255), 3); }
+
+tfn matchU16Zero()      { assert(matchU16(0), 1); }
+tfn matchU16Small()     { assert(matchU16(42), 2); }
+tfn matchU16Large()     { assert(matchU16(1000), 3); }
+tfn matchU16Above()     { assert(matchU16(5000), 4); }
+
+tfn matchU32Zero()      { assert(matchU32(0), 1); }
+tfn matchU32Mid()       { assert(matchU32(500), 2); }
+tfn matchU32High()      { assert(matchU32(2000), 3); }
+
+tfn matchI32Zero()      { assert(matchI32(0), 100); }
+tfn matchI32One()       { assert(matchI32(1), 200); }
+tfn matchI32Ten()       { assert(matchI32(10), 200); }
+tfn matchI32Other()     { assert(matchI32(50), 300); }
