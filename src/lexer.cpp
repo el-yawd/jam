@@ -138,28 +138,110 @@ void Lexer::identifier() {
 	}
 }
 
-// True for hex digits 0-9, a-f, A-F.
-static bool isHexDigit(char c) {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
-	       (c >= 'A' && c <= 'F');
+// Permissive number-literal scanner. The rule: collect everything that
+// could plausibly belong to a numeric literal (digits, hex digits,
+// underscores, periods, exponent letters and their sign) and produce
+// one token. Validation is deferred to `parseNumberLiteral` in
+// number_literal.cpp.
+//
+// Greedy character set:
+//   .          → entering a float (or `..=` separator — see below)
+//   _          → digit separator
+//   0-9, a-z, A-Z → digits or future suffix letters
+//   e, E, p, P → exponent markers
+//   + / -      → exponent sign immediately after p/P/e/E
+//
+// Escape hatch:
+//   `..` (followed by a non-digit) ends the number — required so that
+//   `0..=9` lexes as `0`, `..=`, `9` rather than swallowing the `.` into
+//   the number. The check is "if we see `.`, peek the next char; if
+//   it's `.` or `=`, stop here."
+
+static bool isAlphaDigit(char c) {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+	       (c >= 'A' && c <= 'Z');
 }
 
 void Lexer::number() {
 	int start =
 	    current - 1;  // Start position (we already consumed the first digit)
-	// Hex literal: leading `0x` (or `0X`). The first digit consumed was
-	// `0`; check the next character without disturbing the rest of the
-	// number-scanning logic.
-	if (source[start] == '0' &&
-	    (peek() == 'x' || peek() == 'X') &&
-	    isHexDigit(peekNext())) {
-		advance();  // consume 'x'
-		while (isHexDigit(peek())) advance();
-		std::string num = source.substr(start, current - start);
-		addToken(TOK_NUMBER, num);
-		return;
+
+	// State machine: int → int_period → float → float_exp. We track
+	// only enough state to know whether `+`/`-` is valid (it is only
+	// after a p/P/e/E exponent letter).
+	enum NumState { S_INT, S_INT_PERIOD, S_FLOAT, S_FLOAT_EXP };
+	NumState state = S_INT;
+
+	while (true) {
+		char c = peek();
+		bool stop = false;
+
+		switch (state) {
+		case S_INT:
+			if (c == '.') {
+				// Distinguish `1.5` (float) from `0..=9` (range op):
+				// if the next char is `.` or `=`, this `.` does NOT
+				// belong to the number.
+				char n = peekNext();
+				if (n == '.' || n == '=') {
+					stop = true;
+					break;
+				}
+				advance();
+				state = S_INT_PERIOD;
+			} else if (c == '_' || isAlphaDigit(c)) {
+				if (c == 'e' || c == 'E' || c == 'p' || c == 'P') {
+					advance();
+					state = S_FLOAT_EXP;
+				} else {
+					advance();
+				}
+			} else {
+				stop = true;
+			}
+			break;
+		case S_INT_PERIOD:
+			if (c == '_' || isAlphaDigit(c)) {
+				if (c == 'e' || c == 'E' || c == 'p' || c == 'P') {
+					advance();
+					state = S_FLOAT_EXP;
+				} else {
+					advance();
+					state = S_FLOAT;
+				}
+			} else {
+				// `1.` followed by something non-numeric: rewind the
+				// `.` so it can be tokenized separately as a member
+				// access or other operator.
+				current--;
+				stop = true;
+			}
+			break;
+		case S_FLOAT:
+			if (c == '_' || isAlphaDigit(c)) {
+				if (c == 'e' || c == 'E' || c == 'p' || c == 'P') {
+					advance();
+					state = S_FLOAT_EXP;
+				} else {
+					advance();
+				}
+			} else {
+				stop = true;
+			}
+			break;
+		case S_FLOAT_EXP:
+			if (c == '+' || c == '-') {
+				advance();
+				state = S_FLOAT;
+			} else {
+				// The sign was optional; bounce to .float and try again.
+				state = S_FLOAT;
+			}
+			break;
+		}
+
+		if (stop) break;
 	}
-	while (isDigit(peek())) advance();
 
 	std::string num = source.substr(start, current - start);
 	addToken(TOK_NUMBER, num);

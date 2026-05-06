@@ -6,19 +6,39 @@
  */
 
 #include "parser.h"
+#include "number_literal.h"
 #include <stdexcept>
 
-// Parse a number lexeme into u64. Accepts decimal (no prefix), hex (0x /
-// 0X prefix), and an optional leading `-` sign. Returns the absolute
-// value; the caller decides what to do about the sign.
+// Validate a number lexeme via the dedicated validator
+// (number_literal.cpp). Strips a leading `-` sign before delegating —
+// negation is the caller's responsibility, since it depends on context
+// (negative literal vs. unary minus on a literal).
+//
+// On non-int results (float, big_int, validation failure), throws a
+// runtime_error with a descriptive message. The validator's rich error
+// vocabulary surfaces here unchanged.
 static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut) {
 	bool neg = !s.empty() && s[0] == '-';
 	const std::string &abs = neg ? s.substr(1) : s;
 	isNegOut = neg;
-	if (abs.size() > 2 && abs[0] == '0' && (abs[1] == 'x' || abs[1] == 'X')) {
-		return std::stoull(abs.substr(2), nullptr, 16);
+
+	NumberResult r = parseNumberLiteral(abs);
+	switch (r.kind) {
+	case NumberResultKind::Int:
+		return r.intValue;
+	case NumberResultKind::BigInt:
+		throw std::runtime_error(
+		    "integer literal `" + abs + "` exceeds u64 range");
+	case NumberResultKind::Float:
+		throw std::runtime_error(
+		    "float literal `" + abs +
+		    "` is not yet supported (only integer literals)");
+	case NumberResultKind::Failure:
+		throw std::runtime_error(
+		    std::string("invalid numeric literal `") + abs + "`: " +
+		    numberErrorMessage(r.failure.kind));
 	}
-	return std::stoull(abs, nullptr, 10);
+	throw std::runtime_error("unreachable");
 }
 
 Parser::Parser(std::vector<Token> tokens, TypePool &typePool_,

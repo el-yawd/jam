@@ -39,7 +39,8 @@ build:
 	clang++ -c ./src/cabi.cpp -o ./cabi.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
 	clang++ -c ./src/module_resolver.cpp -o ./module_resolver.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
 	clang++ -c ./src/symbol_table.cpp -o ./symbol_table.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
-	clang++ -o ./jam.out ./jam_llvm.o ./main.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
+	clang++ -c ./src/number_literal.cpp -o ./number_literal.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -o ./jam.out ./jam_llvm.o ./main.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
 	@echo "Build complete! Executable: ./jam.out"
 
 # CMake-based build (recommended)
