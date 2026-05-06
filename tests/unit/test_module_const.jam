@@ -1,0 +1,77 @@
+// Module-scope `const NAME[: T]? = expr;` declarations. These bind a
+// name at compile time and are inlined at every use site — no LLVM
+// global is emitted, so referring to one costs the same as a literal.
+const { assert } = import("test");
+
+const FLAG_Z: u8 = 0x80;
+const FLAG_N: u8 = 0x40;
+const FLAG_H: u8 = 0x20;
+const FLAG_C: u8 = 0x10;
+
+const ANSWER: u32 = 42;
+const NEG_ONE: i32 = -1;
+const TRUE_BIT: bool = true;
+
+const KILOBYTE: u32 = 1024;
+const PAGE: u32 = 4096;
+
+tfn flagZUsed() {
+    var f: u8 = FLAG_Z;
+    assert(f, 0x80);
+}
+
+tfn flagAllSet() {
+    const all: u8 = FLAG_Z | FLAG_N | FLAG_H | FLAG_C;
+    assert(all, 0xF0);
+}
+
+tfn answerSum() {
+    var x: u32 = ANSWER + 8;
+    assert(x, 50);
+}
+
+tfn negOneRoundTrip() {
+    var x: i32 = NEG_ONE;
+    var bits: u32 = x as u32;
+    assert(bits, 0xFFFFFFFF);
+}
+
+tfn trueBitWorks() {
+    if (TRUE_BIT) {
+        assert(7, 7);
+    } else {
+        assert(0, 7);
+    }
+}
+
+tfn kbInPage() {
+    // 4 KiB / 1 KiB = 4 — expressed via shift since `/` is not an operator yet.
+    assert(PAGE >> 10, 4);
+    assert(KILOBYTE * 4, PAGE);
+}
+
+// Used inside helpers — the inlining respects whatever expected type
+// the call site provides for the literal.
+fn isZSet(f: u8) bool {
+    return (f & FLAG_Z) != 0;
+}
+
+tfn helperPicksUpModuleConst() {
+    assert(isZSet(0x80) as u8, 1);
+    assert(isZSet(0x10) as u8, 0);
+}
+
+// Untyped form: `const NAME = expr;`. The init type drives use.
+const SHIFT = 4;
+
+tfn untypedConst() {
+    var x: u8 = 1;
+    assert(x << SHIFT, 0x10);
+}
+
+// Cross-reference: one const referencing another inlines transitively.
+const DOUBLE_KB: u32 = KILOBYTE * 2;
+
+tfn transitiveConst() {
+    assert(DOUBLE_KB, 2048);
+}
