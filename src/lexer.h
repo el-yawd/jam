@@ -33,6 +33,7 @@ class Lexer {
 	void identifier();
 	void number();
 	void negativeNumber();
+	void scanNumberBody(int start);
 	void stringLiteral();
 	char parseHexByte();
 	std::string parseUnicodeEscape();

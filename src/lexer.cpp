@@ -163,9 +163,16 @@ static bool isAlphaDigit(char c) {
 }
 
 void Lexer::number() {
-	int start =
-	    current - 1;  // Start position (we already consumed the first digit)
+	scanNumberBody(current - 1);
+}
 
+void Lexer::negativeNumber() {
+	int start = current - 1;  // points at the leading `-`
+	advance();                // consume the first digit
+	scanNumberBody(start);
+}
+
+void Lexer::scanNumberBody(int start) {
 	// State machine: int → int_period → float → float_exp. We track
 	// only enough state to know whether `+`/`-` is valid (it is only
 	// after a p/P/e/E exponent letter).
@@ -247,13 +254,6 @@ void Lexer::number() {
 	addToken(TOK_NUMBER, num);
 }
 
-void Lexer::negativeNumber() {
-	int start = current - 1;  // Start position (we already consumed the minus)
-	while (isDigit(peek())) advance();
-
-	std::string num = source.substr(start, current - start);
-	addToken(TOK_NUMBER, num);
-}
 
 char Lexer::parseHexByte() {
 	// Parse two hex digits
