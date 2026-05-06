@@ -60,6 +60,7 @@ enum TokenType {
 	TOK_TFN,     // tfn keyword (test function)
 	TOK_STRUCT,  // struct keyword
 	TOK_UNION,   // union keyword (untagged; FFI-shaped)
+	TOK_ENUM,    // enum keyword (tagged sum type; payload-less in M2 E1)
 	TOK_STAR,       // * (pointer prefix; multiplication)
 	TOK_PERCENT,    // % (modulo)
 	TOK_AMP,        // & (bitwise AND; address-of)
@@ -72,6 +73,7 @@ enum TokenType {
 	TOK_ELLIPSIS,   // ... (variadic marker in extern fn parameters)
 	TOK_MATCH,      // match keyword
 	TOK_DOTDOT_EQ,  // ..= (inclusive range in match patterns)
+	TOK_AS,         // as keyword (explicit type cast)
 };
 
 // Token structure

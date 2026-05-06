@@ -240,20 +240,138 @@ static int compileAndRun(const std::string &filename,
 			                     false);
 		}
 	};
+	auto declareEnums = [&](ModuleAST *m) {
+		for (auto &e : m->Enums) {
+			std::vector<JamCodegenContext::EnumVariantInfo> variants;
+			variants.reserve(e->Variants.size());
+			for (auto &v : e->Variants) {
+				JamCodegenContext::EnumVariantInfo info;
+				info.name = v.Name;
+				info.payloadTypes = v.PayloadTypes;
+				info.discriminant = v.Discriminant;
+				variants.push_back(std::move(info));
+			}
+			codegenCtx.registerEnum(e->Name, std::move(variants));
+		}
+	};
+	// For payloaded enums, lay out as `{i8 tag, alignDriver,
+	// [extraBytes x i8]}` where `alignDriver` is the smallest scalar
+	// type whose alignment matches the strictest variant's alignment
+	// (i8 / i16 / i32 / i64 for align 1 / 2 / 4 / 8 respectively).
+	// LLVM gives the resulting struct the alignment of `alignDriver`,
+	// which propagates to allocas and stores — without that we get
+	// align-1 enum slots even for u64-payload variants, which forces
+	// LLVM to emit unaligned memory ops.
+	//
+	// `extraBytes` makes up the difference between the largest variant's
+	// payload size and the alignDriver scalar's size, rounded up to
+	// maxAlign so the trailing slot in an array of enums is correctly
+	// aligned.
+	auto fillEnumBodies = [&](ModuleAST *m) {
+		for (auto &e : m->Enums) {
+			const auto *info = codegenCtx.getEnum(e->Name);
+			if (!info || !info->hasPayloadVariant) continue;
+
+			uint64_t maxSize = 0, maxAlign = 1;
+			for (const auto &v : info->variants) {
+				uint64_t off = 0, varAlign = 1;
+				for (TypeIdx t : v.payloadTypes) {
+					uint64_t s = codegenCtx.typeSize(t);
+					uint64_t a = codegenCtx.typeAlign(t);
+					off = (off + a - 1) / a * a;  // align this field
+					off += s;
+					if (a > varAlign) varAlign = a;
+				}
+				if (varAlign > 1) {
+					off = (off + varAlign - 1) / varAlign * varAlign;
+				}
+				if (off > maxSize) maxSize = off;
+				if (varAlign > maxAlign) maxAlign = varAlign;
+			}
+
+			// Pick a scalar to drive struct alignment.
+			JamTypeRef alignDriver;
+			uint64_t alignDriverSize;
+			switch (maxAlign) {
+			case 1:
+				alignDriver = codegenCtx.getInt8Type();
+				alignDriverSize = 1;
+				break;
+			case 2:
+				alignDriver = codegenCtx.getInt16Type();
+				alignDriverSize = 2;
+				break;
+			case 4:
+				alignDriver = codegenCtx.getInt32Type();
+				alignDriverSize = 4;
+				break;
+			case 8:
+				alignDriver = codegenCtx.getInt64Type();
+				alignDriverSize = 8;
+				break;
+			default:
+				throw std::runtime_error(
+				    "Enum `" + e->Name +
+				    "` requires alignment > 8, which is not yet "
+				    "supported");
+			}
+
+			// Round payload size up to maxAlign so a contiguous array
+			// of enums tiles correctly.
+			uint64_t paddedSize =
+			    (maxSize + maxAlign - 1) / maxAlign * maxAlign;
+			uint64_t extraBytes = (paddedSize > alignDriverSize)
+			                          ? paddedSize - alignDriverSize
+			                          : 0;
+
+			std::vector<JamTypeRef> bodyTypes;
+			bodyTypes.push_back(codegenCtx.getInt8Type());  // tag
+			bodyTypes.push_back(alignDriver);
+			if (extraBytes > 0) {
+				bodyTypes.push_back(JamLLVMArrayType(
+				    codegenCtx.getInt8Type(),
+				    static_cast<unsigned>(extraBytes)));
+			}
+
+			JamLLVMStructSetBody(info->type, bodyTypes.data(),
+			                     static_cast<unsigned>(bodyTypes.size()),
+			                     false);
+			codegenCtx.setEnumLLVMType(e->Name, info->type, maxSize,
+			                           maxAlign, true);
+		}
+	};
+	// Enums that need a named struct type (i.e. those with payload
+	// variants) get their LLVM type created here, in declareEnums, so
+	// that fillEnumBodies can set the body in a second pass.
+	auto declareEnumLLVMTypes = [&](ModuleAST *m) {
+		for (auto &e : m->Enums) {
+			const auto *info = codegenCtx.getEnum(e->Name);
+			if (!info || !info->hasPayloadVariant) continue;
+			JamTypeRef ty = JamLLVMStructCreateNamed(
+			    codegenCtx.getContext(), e->Name.c_str());
+			codegenCtx.setEnumLLVMType(e->Name, ty, 0, 1, true);
+		}
+	};
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		declareStructs(importedModule.get());
 		declareUnions(importedModule.get());
+		declareEnums(importedModule.get());
+		declareEnumLLVMTypes(importedModule.get());
 	}
 	declareStructs(module.get());
 	declareUnions(module.get());
+	declareEnums(module.get());
+	declareEnumLLVMTypes(module.get());
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		fillStructBodies(importedModule.get());
 		fillUnionBodies(importedModule.get());
+		fillEnumBodies(importedModule.get());
 	}
 	fillStructBodies(module.get());
 	fillUnionBodies(module.get());
+	fillEnumBodies(module.get());
 
 	// Two-pass codegen: declare every function's prototype first, then
 	// emit bodies. Without this, calling a function defined later in the

@@ -561,6 +561,92 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		return genAssertCall(ctx, args.data(), argCount);
 	}
 
+	// Enum-variant constructor: `EnumName.VariantName(arg0, arg1, …)`
+	// builds a tagged enum value. The qualified callee name has shape
+	// `<EnumName>.<VariantName>` — split it and check the registry.
+	{
+		size_t dot = callee.find('.');
+		if (dot != std::string::npos &&
+		    callee.find('.', dot + 1) == std::string::npos) {
+			std::string enumName = callee.substr(0, dot);
+			std::string varName = callee.substr(dot + 1);
+			if (const auto *einfo = ctx.getEnum(enumName)) {
+				int idx = ctx.getEnumVariantIndex(enumName, varName);
+				if (idx < 0) {
+					throw std::runtime_error("Enum `" + enumName +
+					                         "` has no variant `" + varName +
+					                         "`");
+				}
+				const auto &v = einfo->variants[idx];
+				if (argCount != v.payloadTypes.size()) {
+					throw std::runtime_error(
+					    "Variant `" + enumName + "." + varName +
+					    "` expects " +
+					    std::to_string(v.payloadTypes.size()) +
+					    " payload arg(s), got " + std::to_string(argCount));
+				}
+				// E1 unit-only enum: just the tag (discriminant value).
+				if (!einfo->hasPayloadVariant) {
+					return JamLLVMConstInt(
+					    ctx.getInt8Type(),
+					    static_cast<uint64_t>(v.discriminant), false);
+				}
+				JamTypeRef enumLLVMType = einfo->type;
+				// Allocate an enum-typed slot, store the tag at offset
+				// 0, and store each payload arg at its computed offset
+				// within the payload area. Then load the whole struct
+				// to return as an SSA value.
+				JamValueRef alloca = JamLLVMBuildAlloca(
+				    ctx.getBuilder(), enumLLVMType, "enum.tmp");
+				// Store tag at field 0.
+				JamValueRef tagPtr = JamLLVMBuildStructGEP(
+				    ctx.getBuilder(), enumLLVMType, alloca, 0, "enum.tag");
+				JamLLVMBuildStore(
+				    ctx.getBuilder(),
+				    JamLLVMConstInt(ctx.getInt8Type(),
+				                    static_cast<uint64_t>(v.discriminant),
+				                    false),
+				    tagPtr);
+				// If variant has payload, store fields. Payload area is
+				// the LAST field of the enum struct (index 1 if no
+				// padding, index 2 if padding bytes inserted).
+				if (!v.payloadTypes.empty()) {
+					// Payload starts at struct field 1 (the
+					// alignment-driving scalar); larger payloads spill
+					// into field 2 via byte-offset GEP from field 1.
+					unsigned payloadFieldIdx = 1;
+					JamValueRef payloadAreaPtr = JamLLVMBuildStructGEP(
+					    ctx.getBuilder(), enumLLVMType, alloca,
+					    payloadFieldIdx, "enum.payload");
+					(void)einfo;
+					uint64_t off = 0;
+					for (size_t i = 0; i < v.payloadTypes.size(); i++) {
+						uint64_t s = ctx.typeSize(v.payloadTypes[i]);
+						uint64_t a = ctx.typeAlign(v.payloadTypes[i]);
+						off = (off + a - 1) / a * a;
+						// GEP into the payload bytes at offset `off`.
+						JamValueRef i64Off = JamLLVMConstInt(
+						    ctx.getInt64Type(), off, false);
+						JamValueRef fieldPtr = JamLLVMBuildPtrGEP(
+						    ctx.getBuilder(), ctx.getInt8Type(),
+						    payloadAreaPtr, i64Off, "enum.field.ptr");
+						JamTypeRef fieldTy =
+						    ctx.getLLVMType(v.payloadTypes[i]);
+						JamValueRef argVal =
+						    codegenNode(ctx, args[i], fieldTy);
+						if (!argVal) return nullptr;
+						argVal = coerceTo(ctx, argVal, fieldTy);
+						JamLLVMBuildStore(ctx.getBuilder(), argVal, fieldPtr);
+						off += s;
+					}
+				}
+				// Load the constructed enum value from the alloca.
+				return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType,
+				                        alloca, "enum.val");
+			}
+		}
+	}
+
 	JamFunctionRef CalleeF =
 	    JamLLVMGetFunction(ctx.getModule(), callee.c_str());
 	if (!CalleeF) {
@@ -1151,6 +1237,46 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		return acc ? acc
 		           : JamLLVMConstInt(ctx.getInt1Type(), 0, false);
 	}
+	case AstTag::PatEnumVariant: {
+		// Two encodings:
+		//   no bindings : lhs = enumNameId, rhs = variantNameId, flags=0
+		//   bindings    : lhs = ExtraIdx → [enumNameId, variantNameId,
+		//                                   count, name0, name1, …]
+		//                 flags bit 0 = 1
+		const StringPool &sp = ctx.getStringPool();
+		StringIdx enumNameId, variantNameId;
+		if ((pn.flags & 1) == 0) {
+			enumNameId = static_cast<StringIdx>(pn.lhs);
+			variantNameId = static_cast<StringIdx>(pn.rhs);
+		} else {
+			ExtraIdx ex = static_cast<ExtraIdx>(pn.lhs);
+			enumNameId = static_cast<StringIdx>(ns.getExtra(ex));
+			variantNameId = static_cast<StringIdx>(ns.getExtra(ex + 1));
+		}
+		const std::string &enumName = sp.get(enumNameId);
+		const std::string &variantName = sp.get(variantNameId);
+		const auto *einfo = ctx.getEnum(enumName);
+		int idx = ctx.getEnumVariantIndex(enumName, variantName);
+		if (!einfo || idx < 0) {
+			throw std::runtime_error("Enum `" + enumName +
+			                         "` has no variant `" + variantName +
+			                         "` (in match pattern)");
+		}
+		uint32_t discrim = einfo->variants[idx].discriminant;
+		// Extract the tag if the scrutinee is a {tag, payload} struct.
+		// For E1 (unit-only) enums the scrutinee is already i8.
+		JamValueRef tagVal = scrut;
+		JamTypeRef tagType = scrutType;
+		if (JamLLVMTypeIsStruct(scrutType)) {
+			tagVal = JamLLVMBuildExtractValue(ctx.getBuilder(), scrut, 0,
+			                                   "pat.tag");
+			tagType = ctx.getInt8Type();
+		}
+		JamValueRef k = JamLLVMConstInt(
+		    tagType, static_cast<uint64_t>(discrim), false);
+		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, tagVal, k,
+		                        "pat.variant");
+	}
 	default:
 		throw std::runtime_error(
 		    "Unsupported pattern node kind in M1 codegen");
@@ -1169,21 +1295,159 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	// records begin.
 	uint32_t armsOff = 2 + elseBodyCount;
 
-	// Evaluate the scrutinee once. The value will be reused for every
-	// pattern test below; LLVM mem2reg promotes the local to an SSA
-	// value for free.
+	// E3 — compile-time exhaustiveness + reachability over enum
+	// variants. We scan all arm patterns once, accumulating which
+	// variants are covered and detecting duplicates (an arm that
+	// would never run because an earlier arm already covers it).
+	// Exhaustiveness fires only when there is no `else` arm and no
+	// catch-all `_`; duplicate detection runs in either case.
+	{
+		std::string foundEnum;
+		std::vector<std::string> coveredVariants;
+		bool sawCatchAll = false;
+		// Recursive walk over a pattern node. Side effects: appends
+		// variant names to `coveredVariants` for enum patterns whose
+		// enum matches the (first-seen) `foundEnum`; sets
+		// `sawCatchAll` if a wildcard makes the match exhaustive.
+		// Return value: whether the pattern provably catches its
+		// position (wildcard, or or-pattern whose any sub is a
+		// catch-all).
+		std::function<bool(NodeIdx)> walkPattern;
+		walkPattern = [&](NodeIdx p) -> bool {
+			const AstNode &pp = ns.get(p);
+			switch (pp.tag) {
+			case AstTag::PatWildcard:
+				return true;
+			case AstTag::PatEnumVariant: {
+				StringIdx enumNameId, variantNameId;
+				if ((pp.flags & 1) == 0) {
+					enumNameId = static_cast<StringIdx>(pp.lhs);
+					variantNameId = static_cast<StringIdx>(pp.rhs);
+				} else {
+					ExtraIdx ex = static_cast<ExtraIdx>(pp.lhs);
+					enumNameId =
+					    static_cast<StringIdx>(ns.getExtra(ex));
+					variantNameId =
+					    static_cast<StringIdx>(ns.getExtra(ex + 1));
+				}
+				const std::string &en =
+				    ctx.getStringPool().get(enumNameId);
+				const std::string &vn =
+				    ctx.getStringPool().get(variantNameId);
+				if (foundEnum.empty()) foundEnum = en;
+				if (foundEnum == en) coveredVariants.push_back(vn);
+				return false;
+			}
+			case AstTag::PatOr: {
+				ExtraIdx ex = static_cast<ExtraIdx>(pp.lhs);
+				uint32_t cnt = ns.getExtra(ex);
+				bool catchAll = false;
+				for (uint32_t i = 0; i < cnt; i++) {
+					NodeIdx sub =
+					    static_cast<NodeIdx>(ns.getExtra(ex + 1 + i));
+					if (walkPattern(sub)) catchAll = true;
+				}
+				return catchAll;
+			}
+			default:
+				// Literal / range / anything else — doesn't catch
+				// everything; exhaustiveness must come from elsewhere.
+				return false;
+			}
+		};
+		uint32_t scanPos = armsOff;
+		for (uint32_t i = 0; i < armCount; i++) {
+			NodeIdx patIdx =
+			    static_cast<NodeIdx>(ns.getExtra(extra + scanPos));
+			uint32_t bodyCount = ns.getExtra(extra + scanPos + 1);
+			if (walkPattern(patIdx)) sawCatchAll = true;
+			scanPos = scanPos + 2 + bodyCount;
+		}
+
+		// Reachability: duplicate enum-variant pattern across arms is
+		// always unreachable (the earlier arm consumes the value).
+		// Runs regardless of `else` presence — `else` doesn't excuse
+		// dead code.
+		for (size_t i = 0; i < coveredVariants.size(); i++) {
+			for (size_t j = i + 1; j < coveredVariants.size(); j++) {
+				if (coveredVariants[i] == coveredVariants[j]) {
+					throw std::runtime_error(
+					    "Unreachable match arm: variant `" + foundEnum +
+					    "." + coveredVariants[j] +
+					    "` is already covered by an earlier arm");
+				}
+			}
+		}
+
+		// Exhaustiveness: only enforced when no `else` arm and no
+		// catch-all (`_` somewhere) is present.
+		if (elseBodyCount == 0 && !foundEnum.empty() && !sawCatchAll) {
+			const auto *einfo = ctx.getEnum(foundEnum);
+			if (einfo) {
+				std::vector<std::string> missing;
+				for (const auto &v : einfo->variants) {
+					bool covered = false;
+					for (const auto &c : coveredVariants) {
+						if (c == v.name) { covered = true; break; }
+					}
+					if (!covered) missing.push_back(v.name);
+				}
+				if (!missing.empty()) {
+					std::string msg =
+					    "Non-exhaustive match on enum `" + foundEnum +
+					    "`; missing variant(s): ";
+					for (size_t i = 0; i < missing.size(); i++) {
+						if (i > 0) msg += ", ";
+						msg += missing[i];
+					}
+					throw std::runtime_error(msg);
+				}
+			}
+		}
+	}
+
+	// Evaluate the scrutinee once. The value is reused for every pattern
+	// test below; LLVM mem2reg promotes the local to an SSA value for
+	// free. We also alloca a slot holding the scrutinee so payload
+	// bindings (E2) can GEP into the {tag, payload} struct.
 	JamValueRef scrut = codegenNode(ctx, scrutIdx);
 	if (!scrut) return nullptr;
 	JamTypeRef scrutType = JamLLVMTypeOf(scrut);
-	if (!JamLLVMTypeIsInteger(scrutType)) {
+	// Classify the scrutinee. Enum scrutinees may be either an integer
+	// (E1 unit-only enums lower to i8) or a struct (E2 payloaded enums
+	// lower to a named struct). For struct scrutinees we MUST verify
+	// the type matches a registered enum, otherwise a slice (which is
+	// also a struct shape `{ptr, len}`) would silently route through
+	// the tag-extraction path and produce nonsense.
+	bool scrutIsEnum = false;
+	if (JamLLVMTypeIsStruct(scrutType)) {
+		if (ctx.findEnumByLLVMType(scrutType) != nullptr) {
+			scrutIsEnum = true;
+		} else {
+			throw std::runtime_error(
+			    "`match` on a struct-shaped value is only supported when "
+			    "the value is an enum; got a different struct type");
+		}
+	} else if (!JamLLVMTypeIsInteger(scrutType)) {
 		throw std::runtime_error(
-		    "M1 `match` only supports integer scrutinees");
+		    "`match` only supports integer or enum scrutinees");
+	}
+	JamValueRef scrutPtr = nullptr;
+	if (scrutIsEnum) {
+		scrutPtr = JamLLVMBuildAlloca(ctx.getBuilder(), scrutType,
+		                              "match.scrut");
+		JamLLVMBuildStore(ctx.getBuilder(), scrut, scrutPtr);
 	}
 
 	JamBasicBlockRef curBB = JamLLVMGetInsertBlock(ctx.getBuilder());
 	JamFunctionRef func = JamLLVMGetBasicBlockParent(curBB);
 	JamBasicBlockRef mergeBB =
 	    JamLLVMAppendBasicBlock(func, "match.end");
+
+	// Per-arm result for the M3 phi: pairs (basicBlock, value) where
+	// the arm's body ended without terminating control flow. The
+	// match's expression-form value is a phi over these.
+	std::vector<std::pair<JamBasicBlockRef, JamValueRef>> armResults;
 
 	// Pre-create a "test block" for every arm beyond the first, plus a
 	// "fall block" for the else arm (or merge if no else). This lets each
@@ -1223,13 +1487,86 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 
 		// Emit the arm body.
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), bodyBBs[i]);
-		for (uint32_t b = 0; b < bodyCount; b++) {
-			codegenNode(ctx, ns.getExtra(extra + bodyStart + b));
+
+		// Materialize payload bindings if the pattern carries any.
+		// Pattern shape:
+		//   PatEnumVariant with flags & 1: lhs = ExtraIdx
+		//   ExtraIdx → [enumNameId, variantNameId, count, n0, n1, ...]
+		const AstNode &pn = ns.get(patIdx);
+		if (scrutIsEnum && pn.tag == AstTag::PatEnumVariant &&
+		    (pn.flags & 1) != 0) {
+			ExtraIdx ex = static_cast<ExtraIdx>(pn.lhs);
+			StringIdx enumNameId =
+			    static_cast<StringIdx>(ns.getExtra(ex));
+			StringIdx variantNameId =
+			    static_cast<StringIdx>(ns.getExtra(ex + 1));
+			uint32_t bcount = ns.getExtra(ex + 2);
+			const std::string &enumName =
+			    ctx.getStringPool().get(enumNameId);
+			const std::string &variantName =
+			    ctx.getStringPool().get(variantNameId);
+			const auto *einfo = ctx.getEnum(enumName);
+			int vidx = ctx.getEnumVariantIndex(enumName, variantName);
+			if (!einfo || vidx < 0) {
+				throw std::runtime_error(
+				    "Pattern references unknown variant `" + enumName +
+				    "." + variantName + "`");
+			}
+			const auto &v = einfo->variants[vidx];
+			if (bcount != v.payloadTypes.size()) {
+				throw std::runtime_error(
+				    "Pattern for `" + enumName + "." + variantName +
+				    "` binds " + std::to_string(bcount) +
+				    " payload field(s); variant has " +
+				    std::to_string(v.payloadTypes.size()));
+			}
+			// Payload area always starts at struct field 1 (the
+			// alignment-driving scalar; larger payloads spill into
+			// field 2 via byte-offset GEP from there).
+			unsigned payloadFieldIdx = 1;
+			JamValueRef payloadAreaPtr = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), scrutType, scrutPtr,
+			    payloadFieldIdx, "match.payload");
+			(void)einfo;
+			uint64_t off = 0;
+			for (uint32_t b = 0; b < bcount; b++) {
+				StringIdx nameId =
+				    static_cast<StringIdx>(ns.getExtra(ex + 3 + b));
+				const std::string &name =
+				    ctx.getStringPool().get(nameId);
+				TypeIdx ty = v.payloadTypes[b];
+				uint64_t s = ctx.typeSize(ty);
+				uint64_t a = ctx.typeAlign(ty);
+				off = (off + a - 1) / a * a;
+				JamValueRef i64Off = JamLLVMConstInt(
+				    ctx.getInt64Type(), off, false);
+				JamValueRef fieldPtr = JamLLVMBuildPtrGEP(
+				    ctx.getBuilder(), ctx.getInt8Type(),
+				    payloadAreaPtr, i64Off, "match.field.ptr");
+				JamTypeRef fieldLLVM = ctx.getLLVMType(ty);
+				JamValueRef fieldVal = JamLLVMBuildLoad(
+				    ctx.getBuilder(), fieldLLVM, fieldPtr, name.c_str());
+				JamValueRef bindAlloca = JamLLVMBuildAlloca(
+				    ctx.getBuilder(), fieldLLVM, name.c_str());
+				JamLLVMBuildStore(ctx.getBuilder(), fieldVal, bindAlloca);
+				ctx.setVariable(name, bindAlloca);
+				ctx.setVariableType(name, ty);
+				off += s;
+			}
 		}
-		// Branch to merge unless the body already terminated (e.g. via
-		// return).
-		if (!JamLLVMGetBasicBlockTerminator(
-		        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+
+		// Track each arm's last produced value (for match-as-expression
+		// support, M3). Arms that terminate via `return` / `break` /
+		// `continue` don't fall through to merge and aren't recorded.
+		JamValueRef lastValue = nullptr;
+		for (uint32_t b = 0; b < bodyCount; b++) {
+			lastValue = codegenNode(ctx,
+			                         ns.getExtra(extra + bodyStart + b));
+		}
+		JamBasicBlockRef armEndBB =
+		    JamLLVMGetInsertBlock(ctx.getBuilder());
+		if (!JamLLVMGetBasicBlockTerminator(armEndBB)) {
+			armResults.push_back({armEndBB, lastValue});
 			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
 		}
 
@@ -1239,17 +1576,60 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	// Else block — runs if no arm matched.
 	if (elseBodyCount > 0) {
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), fallBB);
+		JamValueRef lastValue = nullptr;
 		for (uint32_t b = 0; b < elseBodyCount; b++) {
-			codegenNode(ctx, ns.getExtra(extra + 2 + b));
+			lastValue = codegenNode(ctx, ns.getExtra(extra + 2 + b));
 		}
-		if (!JamLLVMGetBasicBlockTerminator(
-		        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		JamBasicBlockRef elseEndBB =
+		    JamLLVMGetInsertBlock(ctx.getBuilder());
+		if (!JamLLVMGetBasicBlockTerminator(elseEndBB)) {
+			armResults.push_back({elseEndBB, lastValue});
 			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
 		}
 	}
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), mergeBB);
-	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+
+	// Build a phi over arm-produced values when all arms agree on a
+	// non-void type. This is the value of the `match` expression. If
+	// no arms reached the merge block (every arm terminated), return
+	// a sentinel (caller is statement-form and won't use the value).
+	if (armResults.empty()) {
+		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+	}
+	// Filter out null values (empty bodies) and replace with sentinel
+	// of the unified type. Use the first non-null value's type as the
+	// phi type.
+	JamTypeRef phiType = nullptr;
+	for (auto &r : armResults) {
+		if (r.second && JamLLVMTypeOf(r.second)) {
+			phiType = JamLLVMTypeOf(r.second);
+			break;
+		}
+	}
+	if (!phiType) {
+		// Every arm body was empty — match has no meaningful value.
+		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+	}
+	JamValueRef phi =
+	    JamLLVMBuildPhi(ctx.getBuilder(), phiType, "match.result");
+	std::vector<JamValueRef> phiVals;
+	std::vector<JamBasicBlockRef> phiBlocks;
+	for (auto &r : armResults) {
+		JamValueRef v = r.second;
+		if (!v || JamLLVMTypeOf(v) != phiType) {
+			// Empty body or type mismatch: substitute a typed zero so
+			// the phi remains well-formed. Mismatched arm-types in an
+			// expression-form match are a user bug; the resulting
+			// value is unspecified rather than blowing up the build.
+			v = JamLLVMConstInt(phiType, 0, false);
+		}
+		phiVals.push_back(v);
+		phiBlocks.push_back(r.first);
+	}
+	JamLLVMAddIncoming(phi, phiVals.data(), phiBlocks.data(),
+	                   static_cast<unsigned>(phiVals.size()));
+	return phi;
 }
 
 static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
@@ -1326,7 +1706,53 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 
 	std::vector<StringIdx> path;
 	StringIdx rootName = collectMemberChain(ns, selfIdx, path);
-	if (rootName == kNoString || !ctx.hasVariable(sp.get(rootName))) {
+	if (rootName == kNoString) {
+		throw std::runtime_error(
+		    "Direct member access codegen not yet implemented");
+	}
+
+	// Enum-variant value: `EnumName.Variant` (no parens) resolves to
+	// the discriminant for unit variants. For E2 enums (those with at
+	// least one payloaded variant), the result is a fully-formed enum
+	// struct with tag set and payload bytes undefined — equivalent to
+	// `EnumName.Variant()` with no payload args.
+	if (path.size() == 1) {
+		const std::string &enumName = sp.get(rootName);
+		const std::string &variantName = sp.get(path[0]);
+		if (const auto *einfo = ctx.getEnum(enumName)) {
+			int idx = ctx.getEnumVariantIndex(enumName, variantName);
+			if (idx < 0) {
+				throw std::runtime_error("Enum `" + enumName +
+				                         "` has no variant `" + variantName +
+				                         "`");
+			}
+			const auto &v = einfo->variants[idx];
+			JamValueRef tagConst = JamLLVMConstInt(
+			    ctx.getInt8Type(),
+			    static_cast<uint64_t>(v.discriminant), false);
+			if (!einfo->hasPayloadVariant) {
+				// E1 path: enum is just i8.
+				return tagConst;
+			}
+			if (!v.payloadTypes.empty()) {
+				throw std::runtime_error(
+				    "Variant `" + enumName + "." + variantName +
+				    "` carries a payload; use `" + enumName + "." +
+				    variantName + "(...)` to construct it");
+			}
+			// E2 unit variant: build a {tag, payload-undef} struct value.
+			JamTypeRef enumLLVMType = einfo->type;
+			JamValueRef alloca = JamLLVMBuildAlloca(
+			    ctx.getBuilder(), enumLLVMType, "enum.unit");
+			JamValueRef tagPtr = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), enumLLVMType, alloca, 0, "enum.tag");
+			JamLLVMBuildStore(ctx.getBuilder(), tagConst, tagPtr);
+			return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType,
+			                        alloca, "enum.val");
+		}
+	}
+
+	if (!ctx.hasVariable(sp.get(rootName))) {
 		throw std::runtime_error(
 		    "Direct member access codegen not yet implemented");
 	}
@@ -1356,7 +1782,7 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 	// allocation. Reading a different field than the most recently
 	// written one reinterprets the bits — that's the union's whole job.
 	//
-	// The parser interns user-named types as TypeKind::Struct without
+	// The parser interns user-named types as TypeKind::Named without
 	// distinguishing struct from union, so dispatch on the registry
 	// (lookupUnion accepts either Struct or Union kinds).
 	if (path.size() == 1) {
@@ -1479,10 +1905,60 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return codegenStructLit(ctx, n);
 	case AstTag::MatchNode:
 		return codegenMatch(ctx, n);
+	case AstTag::AsCast: {
+		// `expr as Type` — explicit conversion. Handles:
+		//   • integer ↔ integer (truncate/extend)
+		//   • integer ↔ float (siToFP / fpToSI)
+		//   • float ↔ float (FPCast)
+		//   • enum ↔ integer: extracts the tag for E2 enums (which
+		//     are {tag, payload} structs); identity for E1 enums
+		//     (which are already i8).
+		NodeIdx operandIdx = static_cast<NodeIdx>(n.lhs);
+		TypeIdx targetTy = static_cast<TypeIdx>(n.rhs);
+		JamTypeRef targetLLVM = ctx.getLLVMType(targetTy);
+		JamValueRef val = codegenNode(ctx, operandIdx);
+		if (!val) return nullptr;
+		JamTypeRef srcLLVM = JamLLVMTypeOf(val);
+		if (srcLLVM == targetLLVM) return val;
+		// Enum-to-integer: extract the tag (struct field 0) when the
+		// source is a struct, then cast that i8 to the target width.
+		if (JamLLVMTypeIsStruct(srcLLVM) &&
+		    ctx.findEnumByLLVMType(srcLLVM) != nullptr &&
+		    JamLLVMTypeIsInteger(targetLLVM)) {
+			JamValueRef tag = JamLLVMBuildExtractValue(
+			    ctx.getBuilder(), val, 0, "as.tag");
+			if (JamLLVMTypeOf(tag) == targetLLVM) return tag;
+			return JamLLVMBuildIntCast(ctx.getBuilder(), tag, targetLLVM,
+			                           false, "as.tag.cast");
+		}
+		if (JamLLVMTypeIsInteger(srcLLVM) &&
+		    JamLLVMTypeIsInteger(targetLLVM)) {
+			return JamLLVMBuildIntCast(ctx.getBuilder(), val, targetLLVM,
+			                           false, "as.icast");
+		}
+		if (JamLLVMTypeIsInteger(srcLLVM) &&
+		    JamLLVMTypeIsFloat(targetLLVM)) {
+			return JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,
+			                           "as.si2fp");
+		}
+		if (JamLLVMTypeIsFloat(srcLLVM) &&
+		    JamLLVMTypeIsInteger(targetLLVM)) {
+			throw std::runtime_error(
+			    "`as` from float to integer is not yet supported");
+		}
+		if (JamLLVMTypeIsFloat(srcLLVM) &&
+		    JamLLVMTypeIsFloat(targetLLVM)) {
+			return JamLLVMBuildFPCast(ctx.getBuilder(), val, targetLLVM,
+			                           "as.fpcast");
+		}
+		throw std::runtime_error(
+		    "Unsupported `as` cast between these types");
+	}
 	case AstTag::PatLit:
 	case AstTag::PatRange:
 	case AstTag::PatWildcard:
 	case AstTag::PatOr:
+	case AstTag::PatEnumVariant:
 		throw std::runtime_error(
 		    "Pattern node reached top-level codegen; patterns are only "
 		    "valid inside a `match` arm");

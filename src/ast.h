@@ -63,23 +63,36 @@ class StructDeclAST {
 	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
 };
 
+// One variant of an enum declaration. Unit variants (no payload) have
+// an empty `PayloadTypes` vector; tagged variants carry a sequence of
+// positional payload types: `Variant(T1, T2, ...)`.
+//
+// Discriminants default to "previous variant's value + 1" (starting
+// from zero for the first variant). An explicit `Variant = N` overrides
+// that for the variant in question, and subsequent variants resume
+// counting from N+1.
+struct EnumVariantAST {
+	std::string Name;
+	std::vector<TypeIdx> PayloadTypes;
+	uint32_t Discriminant = 0;  // resolved value, set during parse
+};
+
 // Top-level enum declaration:
-//   const Direction = enum { Up, Down, Left, Right };
+//   const Direction = enum { Up, Down, Left, Right };          (E1)
+//   const Op = enum { Nop, LdR8R8(u8, u8), Jp(u16) };           (E2)
 //
-// E1 (this release): payload-less variants only. Each variant is an
-// integer discriminant assigned in declaration order (Up=0, Down=1, …).
-// The enum value occupies one byte and lowers to `u8` in LLVM IR; the
-// type system tracks it as `TypeKind::Enum` so member-access and match
-// patterns can do variant resolution.
-//
-// E2 (planned): variants with payload `Variant(T1, T2)` lowering to a
-// tagged union {tag: u8, payload: union}.
+// Variants get sequential discriminants assigned in declaration order
+// (Up=0, Down=1, …). Unit variants have no payload; tagged variants
+// carry positional fields. Codegen lowers the enum to:
+//   - `i8` if every variant is unit (E1 path)
+//   - `{i8 tag, [maxPayloadSize x i8]}` aligned to max payload align
+//     if any variant has a payload (E2 path)
 class EnumDeclAST {
   public:
 	std::string Name;
-	std::vector<std::string> Variants;  // names in declaration order
+	std::vector<EnumVariantAST> Variants;
 
-	EnumDeclAST(std::string Name, std::vector<std::string> Variants)
+	EnumDeclAST(std::string Name, std::vector<EnumVariantAST> Variants)
 	    : Name(std::move(Name)), Variants(std::move(Variants)) {}
 };
 
@@ -132,6 +145,7 @@ class ModuleAST {
 	    DestructuringImports;
 	std::vector<std::unique_ptr<StructDeclAST>> Structs;
 	std::vector<std::unique_ptr<UnionDeclAST>> Unions;
+	std::vector<std::unique_ptr<EnumDeclAST>> Enums;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
 
 	ModuleAST() = default;

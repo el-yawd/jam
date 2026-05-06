@@ -98,6 +98,10 @@ std::string Parser::qualifiedName(NodeIdx chainRoot) const {
 }
 
 NodeIdx Parser::parsePrimary() {
+	// `match (…) { … }` is also valid in expression position so it can
+	// produce a value (M3). The same call works for both statement and
+	// expression forms; the codegen builds a phi over arm values.
+	if (check(TOK_MATCH)) { return parseMatch(); }
 	if (match(TOK_NUMBER)) {
 		// `parseNumLexeme` returns the magnitude; the sign is recorded in
 		// the node's flags bit 0 and the codegen applies negation. This
@@ -274,7 +278,11 @@ TypeIdx Parser::parseType() {
 		throw std::runtime_error("Unknown base type: " + s);
 	}
 	if (match(TOK_IDENTIFIER)) {
-		return typePool->internStruct(stringPool->intern(previous().lexeme));
+		// User-named types (struct / union / enum) are interned with
+		// kind = Named; codegen resolves to the concrete kind via the
+		// declaration registries. The parser does not need to know
+		// which kind the user meant.
+		return typePool->internNamed(stringPool->intern(previous().lexeme));
 	}
 	throw std::runtime_error("Expected type");
 }
@@ -304,9 +312,61 @@ NodeIdx Parser::parseStructLiteral() {
 	return emit(AstNode{AstTag::StructLit, 0, 0, 0, kNoType, extra});
 }
 
-// Parse a single atom pattern: integer literal, inclusive range, or
-// wildcard. Or-patterns are handled by parsePattern.
+// Parse a single atom pattern: integer literal, inclusive range,
+// enum-variant (`Color.Red`), or wildcard. Or-patterns are handled by
+// parsePattern.
 NodeIdx Parser::parsePatternAtom() {
+	// `Identifier '.' Identifier` — enum-variant pattern, optionally
+	// followed by `(binding1, binding2, ...)` to destructure payload
+	// fields. Must come before the literal/wildcard branches.
+	if (check(TOK_IDENTIFIER) && peek().lexeme != "_") {
+		int saved = current;
+		advance();  // consume enum name
+		if (match(TOK_DOT)) {
+			consume(TOK_IDENTIFIER, "Expected variant name after `.`");
+			StringIdx enumNameId =
+			    stringPool->intern(tokens[saved].lexeme);
+			StringIdx variantNameId =
+			    stringPool->intern(previous().lexeme);
+
+			// Optional payload binding: `(name1, name2, ...)`. Empty
+			// list `()` is permitted and equivalent to no parens.
+			if (match(TOK_OPEN_PAREN)) {
+				std::vector<StringIdx> bindings;
+				if (!check(TOK_CLOSE_PAREN)) {
+					do {
+						consume(TOK_IDENTIFIER,
+						        "Expected binding name in variant payload");
+						bindings.push_back(
+						    stringPool->intern(previous().lexeme));
+					} while (match(TOK_COMMA));
+				}
+				consume(TOK_CLOSE_PAREN,
+				        "Expected `)` to close payload bindings");
+				// Pack as: extra = [enumNameId, variantNameId, count,
+				// binding0, binding1, ...]. lhs = extra-idx; rhs = 1
+				// to mark "with bindings".
+				ExtraIdx extra = nodes->reserveExtra(3 + bindings.size());
+				nodes->setExtra(extra, enumNameId);
+				nodes->setExtra(extra + 1, variantNameId);
+				nodes->setExtra(extra + 2,
+				                static_cast<uint32_t>(bindings.size()));
+				for (size_t i = 0; i < bindings.size(); i++) {
+					nodes->setExtra(extra + 3 + i, bindings[i]);
+				}
+				return emit(AstNode{AstTag::PatEnumVariant, 0, 1u, 0,
+				                    extra, 0});
+			}
+			// No bindings: lhs = enumNameId, rhs = variantNameId,
+			// flags = 0.
+			return emit(AstNode{AstTag::PatEnumVariant, 0, 0, 0,
+			                    enumNameId, variantNameId});
+		}
+		current = saved;
+		throw std::runtime_error(
+		    "Bare identifier patterns are not yet supported "
+		    "(use `EnumName.Variant`, an integer literal, or `_`)");
+	}
 	if (match(TOK_NUMBER)) {
 		bool isNegative = false;
 		uint64_t lo = parseNumLexeme(previous().lexeme, isNegative);
@@ -692,31 +752,50 @@ NodeIdx Parser::parseMultiplication() {
 	return lhs;
 }
 
+// Parse a postfix `as Type` chain on top of any unary expression. The
+// cast binds tightly — `5 + (x as u32)` not `(5 + x) as u32` — matching
+// the convention from C/Rust/Zig where `as` sits just above primary
+// expressions.
+static NodeIdx parseAsChain(Parser *self, NodeIdx expr,
+                             NodeStore &nodes,
+                             bool (Parser::*matchTok)(TokenType),
+                             TypeIdx (Parser::*parseType)());
+// Forward declaration removed; we just inline the postfix loop below.
+
 NodeIdx Parser::parseUnary() {
+	auto wrapAs = [&](NodeIdx e) {
+		while (match(TOK_AS)) {
+			TypeIdx ty = parseType();
+			e = emit(AstNode{AstTag::AsCast, 0, 0, 0,
+			                  static_cast<uint32_t>(e), ty});
+		}
+		return e;
+	};
+
 	if (match(TOK_NOT)) {
 		NodeIdx operand = parseUnary();
-		return emit(AstNode{AstTag::UnaryOp,
-		                    static_cast<uint8_t>(UnaryOp::LogNot), 0, 0,
-		                    static_cast<uint32_t>(operand), 0});
+		return wrapAs(emit(AstNode{
+		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::LogNot), 0,
+		    0, static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_TILDE)) {
 		NodeIdx operand = parseUnary();
-		return emit(AstNode{AstTag::UnaryOp,
-		                    static_cast<uint8_t>(UnaryOp::BitNot), 0, 0,
-		                    static_cast<uint32_t>(operand), 0});
+		return wrapAs(emit(AstNode{
+		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::BitNot), 0,
+		    0, static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_AMP)) {
 		NodeIdx operand = parseUnary();
-		return emit(AstNode{AstTag::AddressOf, 0, 0, 0,
-		                    static_cast<uint32_t>(operand), 0});
+		return wrapAs(emit(AstNode{AstTag::AddressOf, 0, 0, 0,
+		                            static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_MINUS)) {
 		NodeIdx operand = parseUnary();
-		return emit(AstNode{AstTag::UnaryOp,
-		                    static_cast<uint8_t>(UnaryOp::Neg), 0, 0,
-		                    static_cast<uint32_t>(operand), 0});
+		return wrapAs(emit(AstNode{
+		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::Neg), 0, 0,
+		    static_cast<uint32_t>(operand), 0}));
 	}
-	return parsePrimary();
+	return wrapAs(parsePrimary());
 }
 
 std::unique_ptr<FunctionAST> Parser::parseFunction() {
@@ -806,6 +885,83 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 	consume(TOK_SEMI, "Expected ';' after struct declaration");
 
 	return std::make_unique<StructDeclAST>(name, std::move(fields));
+}
+
+// Parse `const Name = enum { Variant1, Variant2(T1, T2), ... };`.
+// Variants get sequential discriminant values starting from zero in
+// declaration order. Unit variants (no payload) and tagged variants
+// (positional payload types) coexist — the parser accepts both.
+std::unique_ptr<EnumDeclAST> Parser::parseEnumDecl() {
+	consume(TOK_CONST, "Expected 'const' for enum declaration");
+	consume(TOK_IDENTIFIER, "Expected enum name");
+	std::string name = previous().lexeme;
+	consume(TOK_EQUAL, "Expected '=' after enum name");
+	consume(TOK_ENUM, "Expected 'enum' keyword");
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'enum'");
+
+	std::vector<EnumVariantAST> variants;
+	uint32_t nextDiscrim = 0;
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		consume(TOK_IDENTIFIER, "Expected enum variant name");
+		EnumVariantAST v;
+		v.Name = previous().lexeme;
+		// Optional payload: `Variant(T1, T2, ...)`. Unit variants omit
+		// the parenthesized list.
+		if (match(TOK_OPEN_PAREN)) {
+			if (!check(TOK_CLOSE_PAREN)) {
+				do {
+					v.PayloadTypes.push_back(parseType());
+				} while (match(TOK_COMMA));
+			}
+			consume(TOK_CLOSE_PAREN,
+			        "Expected `)` to close variant payload list");
+		}
+		// Optional explicit discriminant: `Variant = N` or
+		// `Variant(payload) = N`. The supplied integer overrides the
+		// running counter; subsequent variants resume from N + 1.
+		if (match(TOK_EQUAL)) {
+			consume(TOK_NUMBER,
+			        "Expected integer literal after `=` in enum variant");
+			bool neg = false;
+			uint64_t mag = 0;
+			try {
+				NumberResult r = parseNumberLiteral(previous().lexeme);
+				if (r.kind != NumberResultKind::Int) {
+					throw std::runtime_error(
+					    "Enum discriminant must be a non-negative integer");
+				}
+				mag = r.intValue;
+			} catch (const std::exception &e) {
+				throw std::runtime_error(
+				    std::string("Invalid enum discriminant: ") + e.what());
+			}
+			(void)neg;
+			if (mag > 255) {
+				throw std::runtime_error(
+				    "Enum discriminant " + std::to_string(mag) +
+				    " is out of range; M2 enums are u8-tagged");
+			}
+			v.Discriminant = static_cast<uint32_t>(mag);
+			nextDiscrim = v.Discriminant + 1;
+		} else {
+			v.Discriminant = nextDiscrim++;
+		}
+		variants.push_back(std::move(v));
+		if (!match(TOK_COMMA)) break;
+	}
+	consume(TOK_CLOSE_BRACE, "Expected '}' to close enum definition");
+	consume(TOK_SEMI, "Expected ';' after enum declaration");
+
+	if (variants.empty()) {
+		throw std::runtime_error(
+		    "Enum `" + name + "` must declare at least one variant");
+	}
+	if (variants.size() > 256) {
+		throw std::runtime_error(
+		    "Enum `" + name +
+		    "` has more than 256 variants; M2 enums are u8-tagged");
+	}
+	return std::make_unique<EnumDeclAST>(name, std::move(variants));
 }
 
 // Parse `const Name = union { f1: T1, f2: T2, ... };`. Same shape as
@@ -903,6 +1059,11 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 					if (check(TOK_UNION)) {
 						current = saved;
 						module->Unions.push_back(parseUnionDecl());
+						continue;
+					}
+					if (check(TOK_ENUM)) {
+						current = saved;
+						module->Enums.push_back(parseEnumDecl());
 						continue;
 					}
 				}

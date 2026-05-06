@@ -52,6 +52,7 @@ class Parser {
 	std::unique_ptr<DestructuringImportDeclAST> parseDestructuringImport();
 	std::unique_ptr<StructDeclAST> parseStructDecl();
 	std::unique_ptr<UnionDeclAST> parseUnionDecl();
+	std::unique_ptr<EnumDeclAST> parseEnumDecl();
 
 	// Helper to walk a member-access chain at parse time and produce the
 	// fully qualified name (e.g. "std.fmt.println") from a chain whose root

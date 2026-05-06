@@ -132,14 +132,28 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		break;
 	}
 	case TypeKind::Struct: {
-		// Parser interns every user-named type identifier as
-		// TypeKind::Struct (see parseType); resolve here against both
-		// registries so unions named the same way work.
+		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
+		const auto *sinfo = getStruct(name);
+		if (!sinfo) {
+			throw std::runtime_error(
+			    "Unknown struct type: " + name);
+		}
+		result = sinfo->type;
+		break;
+	}
+	case TypeKind::Named: {
+		// Parser-deferred user type — resolve against the three
+		// declaration registries in order: struct, union, enum.
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 		if (const auto *sinfo = getStruct(name)) {
 			result = sinfo->type;
 		} else if (const auto *uinfo = getUnion(name)) {
 			result = uinfo->type;
+		} else if (const auto *einfo = getEnum(name)) {
+			// E1 (unit-only): lowers to i8. E2 (with payloads): lowers
+			// to {i8, [N x i8]} via the named struct type set during
+			// declaration.
+			result = einfo->hasPayloadVariant ? einfo->type : getInt8Type();
 		} else {
 			throw std::runtime_error(
 			    "Unknown user-defined type: " + name);
@@ -215,7 +229,11 @@ const JamCodegenContext::StructInfo *
 JamCodegenContext::lookupStruct(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
-	if (k.kind != TypeKind::Struct) return nullptr;
+	// Accept TypeKind::Struct (explicit) or TypeKind::Named (parser-
+	// deferred user type that resolves to a struct).
+	if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named) {
+		return nullptr;
+	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 	return getStruct(name);
 }
@@ -260,10 +278,9 @@ const JamCodegenContext::UnionInfo *
 JamCodegenContext::lookupUnion(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
-	// Accept either TypeKind::Union or TypeKind::Struct (the parser
-	// interns user type identifiers as Struct without knowing whether
-	// they refer to a struct or a union).
-	if (k.kind != TypeKind::Union && k.kind != TypeKind::Struct) {
+	// Accept TypeKind::Union (explicit) or TypeKind::Named (parser-
+	// deferred user type that resolves to a union).
+	if (k.kind != TypeKind::Union && k.kind != TypeKind::Named) {
 		return nullptr;
 	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
@@ -279,6 +296,77 @@ JamCodegenContext::getUnionFieldType(const std::string &unionName,
 		if (f.first == fieldName) return f.second;
 	}
 	return kNoType;
+}
+
+// ---- Enum registry --------------------------------------------------------
+
+void JamCodegenContext::registerEnum(
+    const std::string &name, std::vector<EnumVariantInfo> variants) {
+	EnumInfo info;
+	info.name = name;
+	info.variants = std::move(variants);
+	for (const auto &v : info.variants) {
+		if (!v.payloadTypes.empty()) {
+			info.hasPayloadVariant = true;
+			break;
+		}
+	}
+	enums[name] = std::move(info);
+}
+
+void JamCodegenContext::setEnumLLVMType(const std::string &name,
+                                        JamTypeRef llvmType,
+                                        uint64_t maxPayloadSize,
+                                        uint64_t maxPayloadAlign,
+                                        bool hasPayloadVariant) {
+	auto it = enums.find(name);
+	if (it == enums.end()) {
+		throw std::runtime_error("setEnumLLVMType: unknown enum " + name);
+	}
+	it->second.type = llvmType;
+	it->second.maxPayloadSize = maxPayloadSize;
+	it->second.maxPayloadAlign = maxPayloadAlign;
+	it->second.hasPayloadVariant = hasPayloadVariant;
+}
+
+const JamCodegenContext::EnumInfo *
+JamCodegenContext::getEnum(const std::string &name) const {
+	auto it = enums.find(name);
+	if (it != enums.end()) return &it->second;
+	return nullptr;
+}
+
+const JamCodegenContext::EnumInfo *
+JamCodegenContext::lookupEnum(TypeIdx ty) const {
+	if (ty == kNoType) return nullptr;
+	const TypeKey &k = typePool.get(ty);
+	// Accept TypeKind::Enum (explicit) or TypeKind::Named (parser-
+	// deferred user type that resolves to an enum).
+	if (k.kind != TypeKind::Enum && k.kind != TypeKind::Named) {
+		return nullptr;
+	}
+	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
+	return getEnum(name);
+}
+
+int JamCodegenContext::getEnumVariantIndex(
+    const std::string &enumName, const std::string &variantName) const {
+	const EnumInfo *info = getEnum(enumName);
+	if (!info) return -1;
+	for (size_t i = 0; i < info->variants.size(); i++) {
+		if (info->variants[i].name == variantName) {
+			return static_cast<int>(i);
+		}
+	}
+	return -1;
+}
+
+const JamCodegenContext::EnumInfo *
+JamCodegenContext::findEnumByLLVMType(JamTypeRef ty) const {
+	for (const auto &kv : enums) {
+		if (kv.second.type == ty) return &kv.second;
+	}
+	return nullptr;
 }
 
 // Size of a type in bytes. Used by union layout computation. The
@@ -306,9 +394,9 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 	case TypeKind::Array:
 		return static_cast<uint64_t>(k.b) *
 		       typeSize(static_cast<TypeIdx>(k.a));
-	case TypeKind::Struct: {
-		// Could be a real struct or a (parser-interned) union; check
-		// both before failing.
+	case TypeKind::Struct:
+	case TypeKind::Named: {
+		// User-named types resolve through any of the three registries.
 		if (const StructInfo *info = lookupStruct(ty)) {
 			uint64_t total = 0;
 			for (const auto &f : info->fields) total += typeSize(f.second);
@@ -321,6 +409,15 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 				if (s > maxSize) maxSize = s;
 			}
 			return maxSize;
+		}
+		if (const EnumInfo *info = lookupEnum(ty)) {
+			if (!info->hasPayloadVariant) return 1;
+			// {tag, payload}: tag (1 byte), padding to align, payload.
+			uint64_t padToAlign =
+			    (info->maxPayloadAlign > 1)
+			        ? info->maxPayloadAlign - 1
+			        : 0;
+			return 1 + padToAlign + info->maxPayloadSize;
 		}
 		throw std::runtime_error(
 		    "typeSize on unregistered user type");
@@ -364,7 +461,8 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		return 8;
 	case TypeKind::Array:
 		return typeAlign(static_cast<TypeIdx>(k.a));
-	case TypeKind::Struct: {
+	case TypeKind::Struct:
+	case TypeKind::Named: {
 		if (const StructInfo *info = lookupStruct(ty)) {
 			uint64_t maxAlign = 1;
 			for (const auto &f : info->fields) {
@@ -380,6 +478,9 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 				if (a > maxAlign) maxAlign = a;
 			}
 			return maxAlign;
+		}
+		if (const EnumInfo *info = lookupEnum(ty)) {
+			return info->hasPayloadVariant ? info->maxPayloadAlign : 1;
 		}
 		throw std::runtime_error(
 		    "typeAlign on unregistered user type");

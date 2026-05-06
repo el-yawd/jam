@@ -128,6 +128,10 @@ void Lexer::identifier() {
 		addToken(TOK_STRUCT, text);
 	} else if (text == "union") {
 		addToken(TOK_UNION, text);
+	} else if (text == "enum") {
+		addToken(TOK_ENUM, text);
+	} else if (text == "as") {
+		addToken(TOK_AS, text);
 	} else if (text == "undefined") {
 		addToken(TOK_UNDEFINED, text);
 	} else if (text == "u1" || text == "u8" || text == "u16" || text == "u32" ||

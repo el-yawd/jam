@@ -98,6 +98,12 @@ enum class AstTag : uint8_t {
 	//                     arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
 	MatchNode,
 
+	// Explicit type cast `expr as T`. d.lhs = NodeIdx (operand),
+	// d.rhs = TypeIdx (target type). Lowers to integer cast, float
+	// cast, integer↔float conversion, or — for enum-to-integer —
+	// tag extraction.
+	AsCast,
+
 	// Pattern atoms — internal nodes used inside MatchNode arms. Never
 	// reachable from regular expression / statement positions.
 
@@ -109,8 +115,12 @@ enum class AstTag : uint8_t {
 	// No payload.
 	PatWildcard,
 	// d.lhs = ExtraIdx → [count, sub0, sub1, ...]; each subN is a NodeIdx
-	// of a PatLit / PatRange / PatWildcard.
+	// of a PatLit / PatRange / PatWildcard / PatEnumVariant.
 	PatOr,
+	// Enum-variant pattern (`EnumName.VariantName` in a match arm).
+	// d.lhs = StringIdx (enum name), d.rhs = StringIdx (variant name).
+	// Resolved to the variant's discriminant at codegen time.
+	PatEnumVariant,
 
 	// Sentinel for table sizing
 	Count,
@@ -260,6 +270,12 @@ enum class TypeKind : uint8_t {
 	Struct,      // structT.name (StringIdx)
 	Enum,        // enumT.name (StringIdx); see EnumDeclAST for variants
 	Union,       // unionT.name (StringIdx); see UnionDeclAST for fields
+	// Parser-emitted "user-named type, kind resolution deferred." The
+	// parser sees `MyType` in a position where it must produce a
+	// TypeIdx but doesn't yet know whether `MyType` is a struct, union,
+	// or enum. The codegen resolves Named values by consulting the
+	// three registries, in that order.
+	Named,       // namedT.name (StringIdx)
 };
 
 struct TypeKey {
@@ -299,6 +315,7 @@ inline bool operator==(const TypeKey &x, const TypeKey &y) {
 	case TypeKind::Struct:
 	case TypeKind::Enum:
 	case TypeKind::Union:
+	case TypeKind::Named:
 		return x.a == y.a;
 	}
 	return false;
@@ -400,6 +417,9 @@ class TypePool {
 	}
 	TypeIdx internUnion(StringIdx nameId) {
 		return intern(TypeKey{TypeKind::Union, 0, 0, nameId, 0});
+	}
+	TypeIdx internNamed(StringIdx nameId) {
+		return intern(TypeKey{TypeKind::Named, 0, 0, nameId, 0});
 	}
 };
 

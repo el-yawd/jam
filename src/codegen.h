@@ -96,6 +96,45 @@ class JamCodegenContext {
 	TypeIdx getUnionFieldType(const std::string &unionName,
 	                          const std::string &fieldName) const;
 
+	// Enum registry. Each variant has a name and zero or more payload
+	// fields (positional). When every variant is payload-less ("unit"),
+	// the enum lowers to plain `i8`. When at least one variant carries
+	// a payload, the enum lowers to a struct
+	//     { i8 tag, [maxPayloadSize x i8] payload }
+	// aligned to the max alignment of any variant's payload struct.
+	struct EnumVariantInfo {
+		std::string name;
+		std::vector<TypeIdx> payloadTypes;  // empty for unit variants
+		uint32_t discriminant = 0;          // wire / runtime tag value
+	};
+	struct EnumInfo {
+		std::string name;
+		JamTypeRef type = nullptr;          // LLVM type (i8 or {i8, [N x i8]})
+		std::vector<EnumVariantInfo> variants;
+		// True if at least one variant carries a payload. Determines
+		// whether construction / pattern-matching follow the unit-only
+		// fast path or the tagged-union path.
+		bool hasPayloadVariant = false;
+		// Max payload size in bytes; 0 if every variant is unit.
+		uint64_t maxPayloadSize = 0;
+		// Max payload alignment; 1 if every variant is unit.
+		uint64_t maxPayloadAlign = 1;
+	};
+	void registerEnum(const std::string &name,
+	                  std::vector<EnumVariantInfo> variants);
+	void setEnumLLVMType(const std::string &name, JamTypeRef llvmType,
+	                     uint64_t maxPayloadSize, uint64_t maxPayloadAlign,
+	                     bool hasPayloadVariant);
+	const EnumInfo *getEnum(const std::string &name) const;
+	const EnumInfo *lookupEnum(TypeIdx ty) const;
+	// Reverse-lookup: given an LLVM struct type, return the enum whose
+	// payloaded layout matches, or nullptr. Used to disambiguate enum
+	// scrutinees from slice-shaped structs in `match`.
+	const EnumInfo *findEnumByLLVMType(JamTypeRef ty) const;
+	// Index of `variantName` within `enumName`, or -1 if not found.
+	int getEnumVariantIndex(const std::string &enumName,
+	                        const std::string &variantName) const;
+
 	// Type-size helpers used by union layout. Returns size/alignment in
 	// bytes for any TypeIdx we currently support. Throws for types whose
 	// size we don't know how to compute (e.g. user types with
@@ -111,6 +150,7 @@ class JamCodegenContext {
 	std::map<std::string, TypeIdx> namedValueTypes;
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, UnionInfo> unions;
+	std::map<std::string, EnumInfo> enums;
 	mutable TypePool typePool;
 	mutable StringPool stringPool;
 	mutable NodeStore nodeStore;
