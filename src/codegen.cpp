@@ -132,12 +132,32 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		break;
 	}
 	case TypeKind::Struct: {
+		// Parser interns every user-named type identifier as
+		// TypeKind::Struct (see parseType); resolve here against both
+		// registries so unions named the same way work.
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
-		const auto *info = getStruct(name);
+		if (const auto *sinfo = getStruct(name)) {
+			result = sinfo->type;
+		} else if (const auto *uinfo = getUnion(name)) {
+			result = uinfo->type;
+		} else {
+			throw std::runtime_error(
+			    "Unknown user-defined type: " + name);
+		}
+		break;
+	}
+	case TypeKind::Union: {
+		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
+		const auto *info = getUnion(name);
 		if (!info) {
-			throw std::runtime_error("Unknown struct type: " + name);
+			throw std::runtime_error("Unknown union type: " + name);
 		}
 		result = info->type;
+		break;
+	}
+	case TypeKind::Enum: {
+		// E1 enums lower to u8 — one byte per discriminant.
+		result = getInt8Type();
 		break;
 	}
 	}
@@ -215,4 +235,170 @@ int JamCodegenContext::getFieldIndex(const std::string &structName,
 		if (info->fields[i].first == fieldName) return static_cast<int>(i);
 	}
 	return -1;
+}
+
+// ---- Union registry -------------------------------------------------------
+
+void JamCodegenContext::registerUnion(
+    const std::string &name, JamTypeRef type,
+    std::vector<std::pair<std::string, TypeIdx>> fields) {
+	UnionInfo info;
+	info.name = name;
+	info.type = type;
+	info.fields = std::move(fields);
+	unions[name] = std::move(info);
+}
+
+const JamCodegenContext::UnionInfo *
+JamCodegenContext::getUnion(const std::string &name) const {
+	auto it = unions.find(name);
+	if (it != unions.end()) return &it->second;
+	return nullptr;
+}
+
+const JamCodegenContext::UnionInfo *
+JamCodegenContext::lookupUnion(TypeIdx ty) const {
+	if (ty == kNoType) return nullptr;
+	const TypeKey &k = typePool.get(ty);
+	// Accept either TypeKind::Union or TypeKind::Struct (the parser
+	// interns user type identifiers as Struct without knowing whether
+	// they refer to a struct or a union).
+	if (k.kind != TypeKind::Union && k.kind != TypeKind::Struct) {
+		return nullptr;
+	}
+	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
+	return getUnion(name);
+}
+
+TypeIdx
+JamCodegenContext::getUnionFieldType(const std::string &unionName,
+                                     const std::string &fieldName) const {
+	const UnionInfo *info = getUnion(unionName);
+	if (!info) return kNoType;
+	for (const auto &f : info->fields) {
+		if (f.first == fieldName) return f.second;
+	}
+	return kNoType;
+}
+
+// Size of a type in bytes. Used by union layout computation. The
+// numbers assume a 64-bit target — pointers and slice lengths are 8
+// bytes. Struct sizes do not currently account for inter-field padding;
+// callers needing exact struct sizes should ask LLVM via the data
+// layout instead. For union fields the simple sum is enough because we
+// pick the field with the largest size as the layout type.
+uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
+	const TypeKey &k = typePool.get(ty);
+	switch (k.kind) {
+	case TypeKind::Invalid:
+	case TypeKind::Void:
+		return 0;
+	case TypeKind::Bool:
+		return 1;
+	case TypeKind::Int:
+	case TypeKind::Float:
+		return k.a / 8;
+	case TypeKind::PtrSingle:
+	case TypeKind::PtrMany:
+		return 8;
+	case TypeKind::Slice:
+		return 16;  // (ptr, len)
+	case TypeKind::Array:
+		return static_cast<uint64_t>(k.b) *
+		       typeSize(static_cast<TypeIdx>(k.a));
+	case TypeKind::Struct: {
+		// Could be a real struct or a (parser-interned) union; check
+		// both before failing.
+		if (const StructInfo *info = lookupStruct(ty)) {
+			uint64_t total = 0;
+			for (const auto &f : info->fields) total += typeSize(f.second);
+			return total;
+		}
+		if (const UnionInfo *info = lookupUnion(ty)) {
+			uint64_t maxSize = 0;
+			for (const auto &f : info->fields) {
+				uint64_t s = typeSize(f.second);
+				if (s > maxSize) maxSize = s;
+			}
+			return maxSize;
+		}
+		throw std::runtime_error(
+		    "typeSize on unregistered user type");
+	}
+	case TypeKind::Union: {
+		const UnionInfo *info = lookupUnion(ty);
+		if (!info) {
+			throw std::runtime_error(
+			    "typeSize on unregistered union type");
+		}
+		uint64_t maxSize = 0;
+		for (const auto &f : info->fields) {
+			uint64_t s = typeSize(f.second);
+			if (s > maxSize) maxSize = s;
+		}
+		return maxSize;
+	}
+	case TypeKind::Enum:
+		return 1;  // M2 E1 enums lower to u8
+	}
+	throw std::runtime_error("typeSize: unhandled type kind");
+}
+
+// Alignment requirement of a type. Equal to size for primitive scalars
+// on every target we care about. For aggregates, the alignment is the
+// max of the constituent alignments.
+uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
+	const TypeKey &k = typePool.get(ty);
+	switch (k.kind) {
+	case TypeKind::Invalid:
+	case TypeKind::Void:
+		return 1;
+	case TypeKind::Bool:
+		return 1;
+	case TypeKind::Int:
+	case TypeKind::Float:
+		return k.a / 8;
+	case TypeKind::PtrSingle:
+	case TypeKind::PtrMany:
+	case TypeKind::Slice:
+		return 8;
+	case TypeKind::Array:
+		return typeAlign(static_cast<TypeIdx>(k.a));
+	case TypeKind::Struct: {
+		if (const StructInfo *info = lookupStruct(ty)) {
+			uint64_t maxAlign = 1;
+			for (const auto &f : info->fields) {
+				uint64_t a = typeAlign(f.second);
+				if (a > maxAlign) maxAlign = a;
+			}
+			return maxAlign;
+		}
+		if (const UnionInfo *info = lookupUnion(ty)) {
+			uint64_t maxAlign = 1;
+			for (const auto &f : info->fields) {
+				uint64_t a = typeAlign(f.second);
+				if (a > maxAlign) maxAlign = a;
+			}
+			return maxAlign;
+		}
+		throw std::runtime_error(
+		    "typeAlign on unregistered user type");
+	}
+	case TypeKind::Union: {
+		const UnionInfo *info = lookupUnion(ty);
+		if (!info) {
+			throw std::runtime_error(
+			    "typeAlign on unregistered union type");
+		}
+		uint64_t maxAlign = 1;
+		for (const auto &f : info->fields) {
+			uint64_t a = typeAlign(f.second);
+			if (a > maxAlign) maxAlign = a;
+		}
+		return maxAlign;
+	}
+	case TypeKind::Enum:
+		return 1;
+	}
+	throw std::runtime_error("typeAlign: unhandled type kind");
 }

@@ -683,9 +683,6 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 
 	// a.b.c = value (struct field chain)
 	if (target.tag == AstTag::MemberAccess) {
-		JamValueRef rhsVal = codegenNode(ctx, valueIdx);
-		if (!rhsVal) return nullptr;
-
 		std::vector<StringIdx> path;
 		StringIdx rootName = collectMemberChain(ns, targetIdx, path);
 		if (rootName == kNoString) {
@@ -697,6 +694,34 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 			throw std::runtime_error("Unknown variable: " + varName);
 		}
 		TypeIdx varTy = ctx.getVariableType(varName);
+
+		// Union member write (single-level only in M1). All fields share
+		// the same address, so the write is just a store of the rhs at
+		// the union's allocation, typed as the field type.
+		if (path.size() == 1) {
+			const auto *uinfo = ctx.lookupUnion(varTy);
+			if (uinfo) {
+				const std::string &member = sp.get(path[0]);
+				TypeIdx fieldTy =
+				    ctx.getUnionFieldType(uinfo->name, member);
+				if (fieldTy == kNoType) {
+					throw std::runtime_error("Union `" + uinfo->name +
+					                         "` has no field `" + member +
+					                         "`");
+				}
+				JamTypeRef expected = ctx.getLLVMType(fieldTy);
+				JamValueRef rhsVal =
+				    codegenNode(ctx, valueIdx, expected);
+				if (!rhsVal) return nullptr;
+				rhsVal = coerceTo(ctx, rhsVal, expected);
+				JamLLVMBuildStore(ctx.getBuilder(), rhsVal, alloca);
+				return rhsVal;
+			}
+		}
+
+		JamValueRef rhsVal = codegenNode(ctx, valueIdx);
+		if (!rhsVal) return nullptr;
+
 		const auto *info = ctx.lookupStruct(varTy);
 		if (!info) {
 			throw std::runtime_error(
@@ -1324,6 +1349,34 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 		unsigned fieldIdx = (member == "ptr") ? 0 : 1;
 		return JamLLVMBuildExtractValue(ctx.getBuilder(), sliceVal, fieldIdx,
 		                                member.c_str());
+	}
+
+	// Union member read (single-level only in M1). All fields share the
+	// same address; reading uses the field's type at the union's
+	// allocation. Reading a different field than the most recently
+	// written one reinterprets the bits — that's the union's whole job.
+	//
+	// The parser interns user-named types as TypeKind::Struct without
+	// distinguishing struct from union, so dispatch on the registry
+	// (lookupUnion accepts either Struct or Union kinds).
+	if (path.size() == 1) {
+		if (const auto *uinfo = ctx.lookupUnion(varTy)) {
+			const std::string &member = sp.get(path[0]);
+			TypeIdx fieldTy =
+			    ctx.getUnionFieldType(uinfo->name, member);
+			if (fieldTy == kNoType) {
+				throw std::runtime_error("Union `" + uinfo->name +
+				                         "` has no field `" + member +
+				                         "`");
+			}
+			JamValueRef alloca = ctx.getVariable(varName);
+			JamTypeRef fieldLLVMType = ctx.getLLVMType(fieldTy);
+			// Opaque-pointer LLVM: the alloca is just `ptr`; we load
+			// the requested field type from it directly. No bitcast
+			// required.
+			return JamLLVMBuildLoad(ctx.getBuilder(), fieldLLVMType,
+			                        alloca, member.c_str());
+		}
 	}
 
 	const auto *info = ctx.lookupStruct(varTy);

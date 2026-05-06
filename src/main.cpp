@@ -174,6 +174,13 @@ static int compileAndRun(const std::string &filename,
 			codegenCtx.registerStruct(s->Name, structType, s->Fields);
 		}
 	};
+	auto declareUnions = [&](ModuleAST *m) {
+		for (auto &u : m->Unions) {
+			JamTypeRef unionType = JamLLVMStructCreateNamed(
+			    codegenCtx.getContext(), u->Name.c_str());
+			codegenCtx.registerUnion(u->Name, unionType, u->Fields);
+		}
+	};
 	auto fillStructBodies = [&](ModuleAST *m) {
 		for (auto &s : m->Structs) {
 			std::vector<JamTypeRef> fieldTypes;
@@ -187,16 +194,66 @@ static int compileAndRun(const std::string &filename,
 			                     false);
 		}
 	};
+	// Lay out a union as `{ alignedField, [paddingBytes x i8] }`. The
+	// alignedField is the field with the largest alignment requirement;
+	// padding makes up the difference between that field's size and the
+	// largest field's size, so the union ends up with the right size and
+	// alignment for any field's stored value.
+	auto fillUnionBodies = [&](ModuleAST *m) {
+		for (auto &u : m->Unions) {
+			if (u->Fields.empty()) {
+				throw std::runtime_error(
+				    "Union `" + u->Name + "` must have at least one field");
+			}
+			uint64_t maxSize = 0, maxAlign = 1;
+			size_t alignFieldIdx = 0;
+			for (size_t i = 0; i < u->Fields.size(); i++) {
+				uint64_t sz = codegenCtx.typeSize(u->Fields[i].second);
+				uint64_t al = codegenCtx.typeAlign(u->Fields[i].second);
+				if (sz > maxSize) maxSize = sz;
+				if (al > maxAlign) {
+					maxAlign = al;
+					alignFieldIdx = i;
+				}
+			}
+			// Round size up to a multiple of alignment so writes through
+			// the most-aligned field don't run off the end.
+			uint64_t allocSize =
+			    (maxSize + maxAlign - 1) / maxAlign * maxAlign;
+			JamTypeRef alignedTy =
+			    codegenCtx.getLLVMType(u->Fields[alignFieldIdx].second);
+			uint64_t alignedSz =
+			    codegenCtx.typeSize(u->Fields[alignFieldIdx].second);
+			uint64_t paddingBytes =
+			    allocSize > alignedSz ? allocSize - alignedSz : 0;
+
+			std::vector<JamTypeRef> bodyTypes;
+			bodyTypes.push_back(alignedTy);
+			if (paddingBytes > 0) {
+				bodyTypes.push_back(JamLLVMArrayType(
+				    codegenCtx.getInt8Type(),
+				    static_cast<unsigned>(paddingBytes)));
+			}
+			const auto *info = codegenCtx.getUnion(u->Name);
+			JamLLVMStructSetBody(info->type, bodyTypes.data(),
+			                     static_cast<unsigned>(bodyTypes.size()),
+			                     false);
+		}
+	};
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		declareStructs(importedModule.get());
+		declareUnions(importedModule.get());
 	}
 	declareStructs(module.get());
+	declareUnions(module.get());
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		fillStructBodies(importedModule.get());
+		fillUnionBodies(importedModule.get());
 	}
 	fillStructBodies(module.get());
+	fillUnionBodies(module.get());
 
 	// Two-pass codegen: declare every function's prototype first, then
 	// emit bodies. Without this, calling a function defined later in the

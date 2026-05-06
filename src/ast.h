@@ -63,6 +63,48 @@ class StructDeclAST {
 	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
 };
 
+// Top-level enum declaration:
+//   const Direction = enum { Up, Down, Left, Right };
+//
+// E1 (this release): payload-less variants only. Each variant is an
+// integer discriminant assigned in declaration order (Up=0, Down=1, …).
+// The enum value occupies one byte and lowers to `u8` in LLVM IR; the
+// type system tracks it as `TypeKind::Enum` so member-access and match
+// patterns can do variant resolution.
+//
+// E2 (planned): variants with payload `Variant(T1, T2)` lowering to a
+// tagged union {tag: u8, payload: union}.
+class EnumDeclAST {
+  public:
+	std::string Name;
+	std::vector<std::string> Variants;  // names in declaration order
+
+	EnumDeclAST(std::string Name, std::vector<std::string> Variants)
+	    : Name(std::move(Name)), Variants(std::move(Variants)) {}
+};
+
+// Top-level union declaration:
+//   const FloatBits = union { i: u32, f: f32 };
+//
+// Untagged C-style union — every field shares the same address; the
+// program tracks which field is "live" out-of-band. Reading a field
+// other than the most recently written one reinterprets the bits.
+//
+// Layout: a struct of `{ alignedType, [pad x i8] }` where alignedType
+// is the field with the largest alignment requirement and `pad` is the
+// extra bytes needed to reach the largest field's size. This gives the
+// union the alignment of the most-aligned field and the size of the
+// largest field — matching the C ABI convention.
+class UnionDeclAST {
+  public:
+	std::string Name;
+	std::vector<std::pair<std::string, TypeIdx>> Fields;  // (name, type)
+
+	UnionDeclAST(std::string Name,
+	             std::vector<std::pair<std::string, TypeIdx>> Fields)
+	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
+};
+
 // const std = import("std");
 class ImportDeclAST {
   public:
@@ -89,6 +131,7 @@ class ModuleAST {
 	std::vector<std::unique_ptr<DestructuringImportDeclAST>>
 	    DestructuringImports;
 	std::vector<std::unique_ptr<StructDeclAST>> Structs;
+	std::vector<std::unique_ptr<UnionDeclAST>> Unions;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
 
 	ModuleAST() = default;

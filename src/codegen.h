@@ -81,6 +81,28 @@ class JamCodegenContext {
 	int getFieldIndex(const std::string &structName,
 	                  const std::string &fieldName) const;
 
+	// Union registry. Untagged unions: every field shares the same
+	// address. UnionInfo carries the union's LLVM storage type plus the
+	// list of (fieldName, fieldType) pairs for member-access lookup.
+	struct UnionInfo {
+		std::string name;
+		JamTypeRef type;
+		std::vector<std::pair<std::string, TypeIdx>> fields;
+	};
+	void registerUnion(const std::string &name, JamTypeRef type,
+	                   std::vector<std::pair<std::string, TypeIdx>> fields);
+	const UnionInfo *getUnion(const std::string &name) const;
+	const UnionInfo *lookupUnion(TypeIdx ty) const;
+	TypeIdx getUnionFieldType(const std::string &unionName,
+	                          const std::string &fieldName) const;
+
+	// Type-size helpers used by union layout. Returns size/alignment in
+	// bytes for any TypeIdx we currently support. Throws for types whose
+	// size we don't know how to compute (e.g. user types with
+	// unresolvable bodies).
+	uint64_t typeSize(TypeIdx ty) const;
+	uint64_t typeAlign(TypeIdx ty) const;
+
   private:
 	JamContextRef ctx;
 	JamModuleRef mod;
@@ -88,6 +110,7 @@ class JamCodegenContext {
 	std::map<std::string, JamValueRef> namedValues;
 	std::map<std::string, TypeIdx> namedValueTypes;
 	std::map<std::string, StructInfo> structs;
+	std::map<std::string, UnionInfo> unions;
 	mutable TypePool typePool;
 	mutable StringPool stringPool;
 	mutable NodeStore nodeStore;

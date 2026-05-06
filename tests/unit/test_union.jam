@@ -1,0 +1,138 @@
+// Untagged unions: every field shares the same address. Use cases are
+// type punning (read float bits as u32, etc.) and matching C-side
+// `union { ... }` types at FFI boundaries.
+const { assert } = import("test");
+
+// -------------------- Same-size unions --------------------
+
+const FloatBits = union {
+    i: u32,
+    f: f32,
+};
+
+fn writeIntReadInt() u32 {
+    var b: FloatBits = undefined;
+    b.i = 0xCAFEBABE;
+    return b.i;
+}
+
+fn writeIntReadIntZero() u32 {
+    var b: FloatBits = undefined;
+    b.i = 0;
+    return b.i;
+}
+
+fn aliasMostRecentWrite() u32 {
+    // Writing one field then another then reading the second:
+    // returns the second-written value's bit pattern.
+    var b: FloatBits = undefined;
+    b.i = 0xAAAAAAAA;
+    b.i = 0x55555555;
+    return b.i;
+}
+
+fn floatRoundTrip(seed: u32) u32 {
+    // Write the bit pattern via u32, read it via f32, then write that
+    // f32 back via the float field, then read via u32 again. The
+    // pattern survives unchanged for any non-NaN, non-signaling value.
+    var b: FloatBits = undefined;
+    b.i = seed;
+    var b2: FloatBits = undefined;
+    b2.f = b.f;
+    return b2.i;
+}
+
+tfn writeIntReadIntCoffee()    { assert(writeIntReadInt(), 0xCAFEBABE); }
+tfn writeIntReadIntZero()      { assert(writeIntReadIntZero(), 0); }
+tfn aliasOverwrite()           { assert(aliasMostRecentWrite(), 0x55555555); }
+tfn floatRoundTripPi()         { assert(floatRoundTrip(0x40490FDB), 0x40490FDB); }
+tfn floatRoundTripOne()        { assert(floatRoundTrip(0x3F800000), 0x3F800000); }
+tfn floatRoundTripMinusOne()   { assert(floatRoundTrip(0xBF800000), 0xBF800000); }
+tfn floatRoundTripZero()       { assert(floatRoundTrip(0), 0); }
+
+// -------------------- Different-size unions --------------------
+
+const SmallVsBig = union {
+    s: u8,
+    b: u64,
+};
+
+fn writeBigReadSmall() u8 {
+    // u64 written, u8 read — returns the low byte (little-endian on
+    // every target Jam currently supports).
+    var u: SmallVsBig = undefined;
+    u.b = 0xDEADBEEFCAFEBABE;
+    return u.s;
+}
+
+fn writeSmallReadBig() u64 {
+    // u8 written into a u64 storage: the high bytes are whatever the
+    // alloca held. We first zero via the wide field, then write the
+    // small field, then read the wide field — only the low byte is
+    // defined.
+    var u: SmallVsBig = undefined;
+    u.b = 0;
+    u.s = 42;
+    return u.b;
+}
+
+tfn writeBigReadSmallByte()  { assert(writeBigReadSmall(), 0xBE); }
+tfn writeSmallReadBigVal()   { assert(writeSmallReadBig(), 42); }
+
+// -------------------- Function parameter / return --------------------
+
+fn returnUnion(seed: u32) FloatBits {
+    var b: FloatBits = undefined;
+    b.i = seed;
+    return b;
+}
+
+fn callerOfReturnUnion() u32 {
+    const got: FloatBits = returnUnion(0x12345678);
+    return got.i;
+}
+
+tfn callerOfReturnUnionEq() {
+    assert(callerOfReturnUnion(), 0x12345678);
+}
+
+// -------------------- Multiple fields of same width --------------------
+
+const ThreeWayU32 = union {
+    a: u32,
+    b: i32,
+    c: f32,
+};
+
+fn signedUnsignedReinterpret() u32 {
+    var u: ThreeWayU32 = undefined;
+    u.b = -1;             // 0xFFFFFFFF as i32
+    return u.a;            // read as u32 → 0xFFFFFFFF
+}
+
+tfn signedToUnsigned() {
+    assert(signedUnsignedReinterpret(), 0xFFFFFFFF);
+}
+
+// -------------------- Sized correctly --------------------
+
+const Bigger = union {
+    small: u8,
+    medium: u32,
+    big: u64,
+};
+
+fn writeBiggestReadSmallest() u8 {
+    var u: Bigger = undefined;
+    u.big = 0x0102030405060708;
+    return u.small;        // 0x08 on little-endian
+}
+
+fn writeBiggestReadMedium() u32 {
+    var u: Bigger = undefined;
+    u.big = 0x0102030405060708;
+    return u.medium;       // 0x05060708 on little-endian
+}
+
+tfn unionSizeLowestByte()    { assert(writeBiggestReadSmallest(), 0x08); }
+tfn unionSizeLowerHalf()     { assert(writeBiggestReadMedium(), 0x05060708); }

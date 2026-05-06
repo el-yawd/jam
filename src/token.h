@@ -59,6 +59,7 @@ enum TokenType {
 	TOK_NOT,     // ! (logical NOT)
 	TOK_TFN,     // tfn keyword (test function)
 	TOK_STRUCT,  // struct keyword
+	TOK_UNION,   // union keyword (untagged; FFI-shaped)
 	TOK_STAR,       // * (pointer prefix; multiplication)
 	TOK_PERCENT,    // % (modulo)
 	TOK_AMP,        // & (bitwise AND; address-of)

@@ -808,6 +808,31 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 	return std::make_unique<StructDeclAST>(name, std::move(fields));
 }
 
+// Parse `const Name = union { f1: T1, f2: T2, ... };`. Same shape as
+// parseStructDecl — only the keyword differs.
+std::unique_ptr<UnionDeclAST> Parser::parseUnionDecl() {
+	consume(TOK_CONST, "Expected 'const' for union declaration");
+	consume(TOK_IDENTIFIER, "Expected union name");
+	std::string name = previous().lexeme;
+	consume(TOK_EQUAL, "Expected '=' after union name");
+	consume(TOK_UNION, "Expected 'union' keyword");
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'union'");
+
+	std::vector<std::pair<std::string, TypeIdx>> fields;
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		consume(TOK_IDENTIFIER, "Expected union field name");
+		std::string fieldName = previous().lexeme;
+		consume(TOK_COLON, "Expected ':' after field name");
+		TypeIdx fieldType = parseType();
+		fields.emplace_back(std::move(fieldName), fieldType);
+		if (!match(TOK_COMMA)) break;
+	}
+	consume(TOK_CLOSE_BRACE, "Expected '}' to close union definition");
+	consume(TOK_SEMI, "Expected ';' after union declaration");
+
+	return std::make_unique<UnionDeclAST>(name, std::move(fields));
+}
+
 std::unique_ptr<ImportDeclAST> Parser::parseImportDecl() {
 	consume(TOK_CONST, "Expected 'const' for import declaration");
 	consume(TOK_IDENTIFIER, "Expected identifier for import name");
@@ -873,6 +898,11 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 					if (check(TOK_STRUCT)) {
 						current = saved;
 						module->Structs.push_back(parseStructDecl());
+						continue;
+					}
+					if (check(TOK_UNION)) {
+						current = saved;
+						module->Unions.push_back(parseUnionDecl());
 						continue;
 					}
 				}

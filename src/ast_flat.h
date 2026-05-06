@@ -258,6 +258,8 @@ enum class TypeKind : uint8_t {
 	Slice,       // []T  — sliceT.elem  (lowered to {ptr, len} struct)
 	Array,       // [N]T — arrayT.elem, arrayT.len
 	Struct,      // structT.name (StringIdx)
+	Enum,        // enumT.name (StringIdx); see EnumDeclAST for variants
+	Union,       // unionT.name (StringIdx); see UnionDeclAST for fields
 };
 
 struct TypeKey {
@@ -295,6 +297,8 @@ inline bool operator==(const TypeKey &x, const TypeKey &y) {
 	case TypeKind::Array:
 		return x.a == y.a && x.b == y.b;
 	case TypeKind::Struct:
+	case TypeKind::Enum:
+	case TypeKind::Union:
 		return x.a == y.a;
 	}
 	return false;
@@ -390,6 +394,12 @@ class TypePool {
 	}
 	TypeIdx internStruct(StringIdx nameId) {
 		return intern(TypeKey{TypeKind::Struct, 0, 0, nameId, 0});
+	}
+	TypeIdx internEnum(StringIdx nameId) {
+		return intern(TypeKey{TypeKind::Enum, 0, 0, nameId, 0});
+	}
+	TypeIdx internUnion(StringIdx nameId) {
+		return intern(TypeKey{TypeKind::Union, 0, 0, nameId, 0});
 	}
 };
 
