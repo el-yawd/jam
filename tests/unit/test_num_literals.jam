@@ -1,0 +1,125 @@
+// Numeric-literal coverage: hex, binary, octal, decimal, underscores.
+const { assert } = import("test");
+
+// -- Hex --
+
+fn hexLowerCase() u8     { return 0xff; }
+fn hexUpperCase() u8     { return 0xFF; }
+fn hexMixedCase() u8     { return 0xaB; }
+fn hexZero() u8          { return 0x00; }
+fn hexHigh() u32         { return 0xDEADBEEF; }
+
+tfn hexLowerEqualsUpper() {
+    assert(hexLowerCase(), 255);
+}
+tfn hexLowerEq()    { assert(hexLowerCase(), 0xFF); }
+tfn hexUpperEq()    { assert(hexUpperCase(), 255); }
+tfn hexMixedEq()    { assert(hexMixedCase(), 171); }
+tfn hexZeroEq()     { assert(hexZero(), 0); }
+tfn hexHighEq()     { assert(hexHigh(), 3735928559); }
+
+// -- Binary --
+
+fn binaryZero() u8       { return 0b0; }
+fn binaryOne() u8        { return 0b1; }
+fn binaryByte() u8       { return 0b11111111; }
+fn binaryFifteen() u8    { return 0b00001111; }
+fn binarySixteen() u8    { return 0b00010000; }
+fn binaryAlternating() u8 { return 0b10101010; }
+
+tfn binaryZeroEq()       { assert(binaryZero(), 0); }
+tfn binaryOneEq()        { assert(binaryOne(), 1); }
+tfn binaryByteEq()       { assert(binaryByte(), 255); }
+tfn binaryFifteenEq()    { assert(binaryFifteen(), 15); }
+tfn binarySixteenEq()    { assert(binarySixteen(), 16); }
+tfn binaryAlternatingEq() { assert(binaryAlternating(), 170); }
+
+// -- Octal --
+
+fn octalZero() u8        { return 0o0; }
+fn octalSeven() u8       { return 0o7; }
+fn octalSeventeenOct() u8 { return 0o17; }
+fn octalRwxRwxRwx() u16  { return 0o777; }
+
+tfn octalZeroEq()         { assert(octalZero(), 0); }
+tfn octalSevenEq()        { assert(octalSeven(), 7); }
+tfn octalSeventeenEq()    { assert(octalSeventeenOct(), 15); }
+tfn octalRwxEq()          { assert(octalRwxRwxRwx(), 511); }
+
+// -- Underscore separators --
+
+fn decUnderscore() u32    { return 1_000_000; }
+fn hexUnderscore() u32    { return 0xDEAD_BEEF; }
+fn hexUnderscoreEvery() u32 { return 0x0_1_2_3_4_5_6_7; }
+fn binUnderscore() u8     { return 0b1010_1010; }
+fn octUnderscore() u16    { return 0o7_77; }
+
+tfn decUnderscoreEq()      { assert(decUnderscore(), 1000000); }
+tfn hexUnderscoreEq()      { assert(hexUnderscore(), 3735928559); }
+tfn hexUnderscoreEveryEq() { assert(hexUnderscoreEvery(), 0x01234567); }
+tfn binUnderscoreEq()      { assert(binUnderscore(), 170); }
+tfn octUnderscoreEq()      { assert(octUnderscore(), 511); }
+
+// -- Cross-base equality --
+
+fn crossDecHex() u32      { return 255; }
+fn crossHex() u32         { return 0xFF; }
+fn crossBin() u32         { return 0b11111111; }
+fn crossOct() u32         { return 0o377; }
+
+tfn crossEqDecHex()  { assert(crossDecHex(), crossHex()); }
+tfn crossEqDecBin()  { assert(crossDecHex(), crossBin()); }
+tfn crossEqDecOct()  { assert(crossDecHex(), crossOct()); }
+
+// -- Negative literals (sign + base + underscores) --
+
+fn negDecUnderscore() i32 { return -1_000; }
+fn negHex() i32           { return -0xFF; }
+fn negBin() i32           { return -0b1010; }
+
+tfn negDecUnderscoreEq() { assert(negDecUnderscore(), -1000); }
+tfn negHexEq()           { assert(negHex(), -255); }
+tfn negBinEq()           { assert(negBin(), -10); }
+
+// -- Use inside `match` patterns --
+
+fn classifyMixed(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0b1010_1010    { r = 1; }
+        0xDE | 0xAD    { r = 2; }
+        0o17           { r = 3; }
+        0..=9          { r = 4; }
+        else           { r = 0; }
+    }
+    return r;
+}
+
+tfn classifyBinarySep()    { assert(classifyMixed(0b1010_1010), 1); }
+tfn classifyHexOr1()       { assert(classifyMixed(0xDE), 2); }
+tfn classifyHexOr2()       { assert(classifyMixed(0xAD), 2); }
+tfn classifyOctal()        { assert(classifyMixed(0o17), 3); }
+tfn classifyRange()        { assert(classifyMixed(5), 4); }
+tfn classifyMissOther()    { assert(classifyMixed(100), 0); }
+
+// -- Range bounds in different bases --
+
+fn rangeBases(x: u8) u8 {
+    var r: u8 = 0;
+    match (x) {
+        0x10..=0x1F        { r = 1; }
+        0b0010_0000..=0b0010_1111 { r = 2; }
+        0o100..=0o107      { r = 3; }
+        else               { r = 0; }
+    }
+    return r;
+}
+
+tfn rangeHexLow()      { assert(rangeBases(0x10), 1); }
+tfn rangeHexMid()      { assert(rangeBases(0x18), 1); }
+tfn rangeHexHigh()     { assert(rangeBases(0x1F), 1); }
+tfn rangeBinLow()      { assert(rangeBases(0b0010_0000), 2); }
+tfn rangeBinHigh()     { assert(rangeBases(0b0010_1111), 2); }
+tfn rangeOctLow()      { assert(rangeBases(0o100), 3); }
+tfn rangeOctHigh()     { assert(rangeBases(0o107), 3); }
+tfn rangeAbove()       { assert(rangeBases(0x80), 0); }
