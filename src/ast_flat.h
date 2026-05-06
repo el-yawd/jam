@@ -91,6 +91,27 @@ enum class AstTag : uint8_t {
 	// d.rhs = ExtraIdx → [fieldCount, fieldName0, fieldExpr0, fieldName1, ...]
 	StructLit,
 
+	// Pattern match (M1: integer literals, ranges, or-patterns, wildcard).
+	// d.lhs = NodeIdx (scrutinee expression)
+	// d.rhs = ExtraIdx → [armCount, elseBodyCount, elseBody...,
+	//                     arm0_patIdx, arm0_bodyCount, arm0_body...,
+	//                     arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
+	MatchNode,
+
+	// Pattern atoms — internal nodes used inside MatchNode arms. Never
+	// reachable from regular expression / statement positions.
+
+	// d.lhs = lo32 of value, d.rhs = hi32 of value, flags bit 0 = isNeg.
+	PatLit,
+	// d.lhs = lo32 of low bound, d.rhs = lo32 of high bound (M1 limits to
+	// values that fit in u32; M2+ may extend via ExtraIdx for u64).
+	PatRange,
+	// No payload.
+	PatWildcard,
+	// d.lhs = ExtraIdx → [count, sub0, sub1, ...]; each subN is a NodeIdx
+	// of a PatLit / PatRange / PatWildcard.
+	PatOr,
+
 	// Sentinel for table sizing
 	Count,
 };

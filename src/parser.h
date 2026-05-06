@@ -44,6 +44,9 @@ class Parser {
 	NodeIdx parseAddition();
 	NodeIdx parseMultiplication();
 	NodeIdx parseStructLiteral();
+	NodeIdx parseMatch();
+	NodeIdx parsePattern();          // OrPattern
+	NodeIdx parsePatternAtom();      // single-atom pattern
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<ImportDeclAST> parseImportDecl();
 	std::unique_ptr<DestructuringImportDeclAST> parseDestructuringImport();

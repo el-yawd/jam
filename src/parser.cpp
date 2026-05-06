@@ -8,6 +8,19 @@
 #include "parser.h"
 #include <stdexcept>
 
+// Parse a number lexeme into u64. Accepts decimal (no prefix), hex (0x /
+// 0X prefix), and an optional leading `-` sign. Returns the absolute
+// value; the caller decides what to do about the sign.
+static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut) {
+	bool neg = !s.empty() && s[0] == '-';
+	const std::string &abs = neg ? s.substr(1) : s;
+	isNegOut = neg;
+	if (abs.size() > 2 && abs[0] == '0' && (abs[1] == 'x' || abs[1] == 'X')) {
+		return std::stoull(abs.substr(2), nullptr, 16);
+	}
+	return std::stoull(abs, nullptr, 10);
+}
+
 Parser::Parser(std::vector<Token> tokens, TypePool &typePool_,
                StringPool &stringPool_, NodeStore &nodes_)
     : tokens(std::move(tokens)), typePool(&typePool_),
@@ -66,18 +79,15 @@ std::string Parser::qualifiedName(NodeIdx chainRoot) const {
 
 NodeIdx Parser::parsePrimary() {
 	if (match(TOK_NUMBER)) {
-		const std::string &numStr = previous().lexeme;
-		bool isNegative = !numStr.empty() && numStr[0] == '-';
-		uint64_t val;
-		if (isNegative) {
-			int64_t signedVal = std::stoll(numStr);
-			val = static_cast<uint64_t>(-signedVal);
-		} else {
-			val = std::stoull(numStr);
-		}
+		// `parseNumLexeme` returns the magnitude; the sign is recorded in
+		// the node's flags bit 0 and the codegen applies negation. This
+		// matches the convention established before hex-literal support
+		// landed.
+		bool isNegative = false;
+		uint64_t mag = parseNumLexeme(previous().lexeme, isNegative);
 		AstNode n{AstTag::NumberLit, 0, isNegative ? uint16_t{1} : uint16_t{0},
-		          0, static_cast<uint32_t>(val & 0xFFFFFFFFu),
-		          static_cast<uint32_t>(val >> 32)};
+		          0, static_cast<uint32_t>(mag & 0xFFFFFFFFu),
+		          static_cast<uint32_t>(mag >> 32)};
 		return emit(n);
 	}
 	if (match(TOK_TRUE)) {
@@ -274,6 +284,135 @@ NodeIdx Parser::parseStructLiteral() {
 	return emit(AstNode{AstTag::StructLit, 0, 0, 0, kNoType, extra});
 }
 
+// Parse a single atom pattern: integer literal, inclusive range, or
+// wildcard. Or-patterns are handled by parsePattern.
+NodeIdx Parser::parsePatternAtom() {
+	if (match(TOK_NUMBER)) {
+		bool isNegative = false;
+		uint64_t lo = parseNumLexeme(previous().lexeme, isNegative);
+		// Inclusive range `lo..=hi`?
+		if (match(TOK_DOTDOT_EQ)) {
+			consume(TOK_NUMBER, "Expected upper bound after `..=`");
+			bool hiNeg = false;
+			uint64_t hi = parseNumLexeme(previous().lexeme, hiNeg);
+			// M1: range bounds fit in u32; truncate gracefully.
+			return emit(AstNode{AstTag::PatRange, 0, 0, 0,
+			                    static_cast<uint32_t>(lo & 0xFFFFFFFFu),
+			                    static_cast<uint32_t>(hi & 0xFFFFFFFFu)});
+		}
+		uint16_t flags = isNegative ? 1u : 0u;
+		return emit(AstNode{AstTag::PatLit, 0, flags, 0,
+		                    static_cast<uint32_t>(lo & 0xFFFFFFFFu),
+		                    static_cast<uint32_t>(lo >> 32)});
+	}
+	// Char literal — TOK_STRING_LITERAL is currently the only string-y
+	// token; for M1 we treat single-quote chars as TOK_NUMBER via the
+	// lexer in a future patch. For now, only TOK_NUMBER is accepted.
+	if (match(TOK_STRING_LITERAL)) {
+		throw std::runtime_error(
+		    "Char literals in patterns are not yet supported (M1)");
+	}
+	// Wildcard `_` is lexed as TOK_IDENTIFIER; recognize it here.
+	if (check(TOK_IDENTIFIER) && peek().lexeme == "_") {
+		advance();
+		return emit(AstNode{AstTag::PatWildcard, 0, 0, 0, 0, 0});
+	}
+	throw std::runtime_error(
+	    "Expected pattern (integer literal, range, or `_`)");
+}
+
+// Parse an or-pattern: A | B | C. Returns a single PatLit/PatRange/
+// PatWildcard if no `|` is present, else a PatOr wrapping the list.
+NodeIdx Parser::parsePattern() {
+	NodeIdx first = parsePatternAtom();
+	if (!check(TOK_PIPE)) { return first; }
+	std::vector<NodeIdx> alternatives;
+	alternatives.push_back(first);
+	while (match(TOK_PIPE)) {
+		alternatives.push_back(parsePatternAtom());
+	}
+	ExtraIdx extra = nodes->reserveExtra(1 + alternatives.size());
+	nodes->setExtra(extra, static_cast<uint32_t>(alternatives.size()));
+	for (size_t i = 0; i < alternatives.size(); i++) {
+		nodes->setExtra(extra + 1 + i, alternatives[i]);
+	}
+	return emit(AstNode{AstTag::PatOr, 0, 0, 0, extra, 0});
+}
+
+// Parse a match statement: `match (expr) { Pattern Block ... else Block? }`.
+// Layout in extra:
+//   [armCount, elseBodyCount, elseBody...,
+//    arm0_patIdx, arm0_bodyCount, arm0_body...,
+//    arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
+NodeIdx Parser::parseMatch() {
+	consume(TOK_MATCH, "Expected `match`");
+	consume(TOK_OPEN_PAREN, "Expected `(` after `match`");
+	NodeIdx scrutinee = parseLogicalOr();
+	consume(TOK_CLOSE_PAREN, "Expected `)` after match scrutinee");
+	consume(TOK_OPEN_BRACE, "Expected `{` to begin match body");
+
+	struct Arm {
+		NodeIdx pat;
+		std::vector<NodeIdx> body;
+	};
+	std::vector<Arm> arms;
+	std::vector<NodeIdx> elseBody;
+	bool sawElse = false;
+
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		// `else` arm — must be the last one.
+		if (match(TOK_ELSE)) {
+			if (sawElse) {
+				throw std::runtime_error(
+				    "Duplicate `else` arm in match");
+			}
+			sawElse = true;
+			consume(TOK_OPEN_BRACE, "Expected `{` after `else`");
+			while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+				elseBody.push_back(parseExpression());
+			}
+			consume(TOK_CLOSE_BRACE, "Expected `}` to close `else` arm");
+			continue;
+		}
+		if (sawElse) {
+			throw std::runtime_error(
+			    "Match arms after `else` are unreachable");
+		}
+
+		Arm arm;
+		arm.pat = parsePattern();
+		consume(TOK_OPEN_BRACE, "Expected `{` to begin arm body");
+		while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+			arm.body.push_back(parseExpression());
+		}
+		consume(TOK_CLOSE_BRACE, "Expected `}` to close arm body");
+		arms.push_back(std::move(arm));
+	}
+	consume(TOK_CLOSE_BRACE, "Expected `}` to close match body");
+
+	// Compute total extra size and pack the arms.
+	size_t total = 2;  // armCount + elseBodyCount
+	total += elseBody.size();
+	for (const Arm &a : arms) {
+		total += 2 + a.body.size();  // patIdx + bodyCount + body...
+	}
+
+	ExtraIdx extra = nodes->reserveExtra(total);
+	uint32_t pos = 0;
+	nodes->setExtra(extra + pos++, static_cast<uint32_t>(arms.size()));
+	nodes->setExtra(extra + pos++, static_cast<uint32_t>(elseBody.size()));
+	for (NodeIdx s : elseBody) { nodes->setExtra(extra + pos++, s); }
+	for (const Arm &a : arms) {
+		nodes->setExtra(extra + pos++, a.pat);
+		nodes->setExtra(extra + pos++,
+		                static_cast<uint32_t>(a.body.size()));
+		for (NodeIdx s : a.body) { nodes->setExtra(extra + pos++, s); }
+	}
+
+	return emit(AstNode{AstTag::MatchNode, 0, 0, 0,
+	                    static_cast<uint32_t>(scrutinee), extra});
+}
+
 NodeIdx Parser::parseExpression() {
 	if (match(TOK_RETURN)) {
 		if (match(TOK_SEMI)) {
@@ -305,6 +444,7 @@ NodeIdx Parser::parseExpression() {
 		return emit(AstNode{AstTag::VarDecl, 0, 0, 0, extra,
 		                    isConst ? 1u : 0u});
 	}
+	if (check(TOK_MATCH)) { return parseMatch(); }
 	if (match(TOK_IF)) {
 		consume(TOK_OPEN_PAREN, "Expected '(' after 'if'");
 		NodeIdx cond = parseLogicalOr();

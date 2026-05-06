@@ -1058,6 +1058,175 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
+// ---------------------------------------------------------------------------
+// `match` codegen — M1 (integer literals, inclusive ranges, or-patterns,
+// wildcard, `else`).
+//
+// Strategy: a sequential icmp-cascade. For each arm, build a boolean
+// expression representing "this pattern matches the scrutinee", branch to
+// the arm body if true and to the next arm's test (or `else` / fallthrough)
+// if false. LLVM's downstream simplifycfg pass collapses chains of equality
+// tests on the same value into a `switch` instruction when profitable, so
+// the pure-literal opcode-dispatch case still gets jump-table codegen
+// without us emitting `switch` ourselves.
+//
+// The Maranget decision-tree formalism degenerates to "specialize the only
+// column" in M1 (one scrutinee, one column); the cascade is the canonical
+// one-column lowering. M2+ replaces this with a multi-column tree.
+// ---------------------------------------------------------------------------
+
+// Build a boolean (i1) value that is true iff the scrutinee matches the
+// given pattern node. `scrut` is the already-loaded scrutinee value;
+// `scrutType` is its LLVM type, used to materialize comparison constants.
+static JamValueRef
+emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
+                JamTypeRef scrutType) {
+	const NodeStore &ns = ctx.getNodeStore();
+	const AstNode &pn = ns.get(patIdx);
+	switch (pn.tag) {
+	case AstTag::PatWildcard:
+		return JamLLVMConstInt(ctx.getInt1Type(), 1, false);
+	case AstTag::PatLit: {
+		uint64_t val = static_cast<uint64_t>(pn.lhs) |
+		               (static_cast<uint64_t>(pn.rhs) << 32);
+		bool isNeg = (pn.flags & 1) != 0;
+		uint64_t materialized = isNeg
+		                            ? static_cast<uint64_t>(
+		                                  -static_cast<int64_t>(val))
+		                            : val;
+		JamValueRef k =
+		    JamLLVMConstInt(scrutType, materialized, isNeg);
+		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, scrut, k,
+		                        "pat.eq");
+	}
+	case AstTag::PatRange: {
+		JamValueRef lo = JamLLVMConstInt(scrutType, pn.lhs, false);
+		JamValueRef hi = JamLLVMConstInt(scrutType, pn.rhs, false);
+		// Unsigned bounds test: scrut >= lo && scrut <= hi.
+		JamValueRef geLo = JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_UGE,
+		                                    scrut, lo, "pat.ge");
+		JamValueRef leHi = JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_ULE,
+		                                    scrut, hi, "pat.le");
+		return JamLLVMBuildAnd(ctx.getBuilder(), geLo, leHi, "pat.range");
+	}
+	case AstTag::PatOr: {
+		ExtraIdx extra = static_cast<ExtraIdx>(pn.lhs);
+		uint32_t count = ns.getExtra(extra);
+		JamValueRef acc = nullptr;
+		for (uint32_t i = 0; i < count; i++) {
+			NodeIdx sub =
+			    static_cast<NodeIdx>(ns.getExtra(extra + 1 + i));
+			JamValueRef one = emitPatternTest(ctx, sub, scrut, scrutType);
+			if (!acc) {
+				acc = one;
+			} else {
+				acc = JamLLVMBuildOr(ctx.getBuilder(), acc, one, "pat.or");
+			}
+		}
+		return acc ? acc
+		           : JamLLVMConstInt(ctx.getInt1Type(), 0, false);
+	}
+	default:
+		throw std::runtime_error(
+		    "Unsupported pattern node kind in M1 codegen");
+	}
+}
+
+static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
+	const NodeStore &ns = ctx.getNodeStore();
+	NodeIdx scrutIdx = static_cast<NodeIdx>(n.lhs);
+	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
+
+	uint32_t armCount = ns.getExtra(extra);
+	uint32_t elseBodyCount = ns.getExtra(extra + 1);
+
+	// Compute the offset just past the else body — that's where arm
+	// records begin.
+	uint32_t armsOff = 2 + elseBodyCount;
+
+	// Evaluate the scrutinee once. The value will be reused for every
+	// pattern test below; LLVM mem2reg promotes the local to an SSA
+	// value for free.
+	JamValueRef scrut = codegenNode(ctx, scrutIdx);
+	if (!scrut) return nullptr;
+	JamTypeRef scrutType = JamLLVMTypeOf(scrut);
+	if (!JamLLVMTypeIsInteger(scrutType)) {
+		throw std::runtime_error(
+		    "M1 `match` only supports integer scrutinees");
+	}
+
+	JamBasicBlockRef curBB = JamLLVMGetInsertBlock(ctx.getBuilder());
+	JamFunctionRef func = JamLLVMGetBasicBlockParent(curBB);
+	JamBasicBlockRef mergeBB =
+	    JamLLVMAppendBasicBlock(func, "match.end");
+
+	// Pre-create a "test block" for every arm beyond the first, plus a
+	// "fall block" for the else arm (or merge if no else). This lets each
+	// arm body branch back to merge cleanly without lookahead.
+	std::vector<JamBasicBlockRef> testBBs;
+	testBBs.reserve(armCount);
+	std::vector<JamBasicBlockRef> bodyBBs;
+	bodyBBs.reserve(armCount);
+	for (uint32_t i = 0; i < armCount; i++) {
+		if (i == 0) {
+			testBBs.push_back(curBB);
+		} else {
+			testBBs.push_back(
+			    JamLLVMAppendBasicBlock(func, "match.test"));
+		}
+		bodyBBs.push_back(JamLLVMAppendBasicBlock(func, "match.arm"));
+	}
+	// Where do we go if every arm fails? Else block if present, else merge.
+	JamBasicBlockRef fallBB = mergeBB;
+	if (elseBodyCount > 0) {
+		fallBB = JamLLVMAppendBasicBlock(func, "match.else");
+	}
+
+	// Emit each arm's pattern test in its dedicated test block.
+	uint32_t pos = armsOff;
+	for (uint32_t i = 0; i < armCount; i++) {
+		NodeIdx patIdx = static_cast<NodeIdx>(ns.getExtra(extra + pos));
+		uint32_t bodyCount = ns.getExtra(extra + pos + 1);
+		uint32_t bodyStart = pos + 2;
+
+		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), testBBs[i]);
+		JamValueRef matched = emitPatternTest(ctx, patIdx, scrut, scrutType);
+		JamBasicBlockRef nextTest =
+		    (i + 1 < armCount) ? testBBs[i + 1] : fallBB;
+		JamLLVMBuildCondBr(ctx.getBuilder(), matched, bodyBBs[i],
+		                   nextTest);
+
+		// Emit the arm body.
+		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), bodyBBs[i]);
+		for (uint32_t b = 0; b < bodyCount; b++) {
+			codegenNode(ctx, ns.getExtra(extra + bodyStart + b));
+		}
+		// Branch to merge unless the body already terminated (e.g. via
+		// return).
+		if (!JamLLVMGetBasicBlockTerminator(
+		        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
+		}
+
+		pos = bodyStart + bodyCount;
+	}
+
+	// Else block — runs if no arm matched.
+	if (elseBodyCount > 0) {
+		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), fallBB);
+		for (uint32_t b = 0; b < elseBodyCount; b++) {
+			codegenNode(ctx, ns.getExtra(extra + 2 + b));
+		}
+		if (!JamLLVMGetBasicBlockTerminator(
+		        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
+		}
+	}
+
+	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), mergeBB);
+	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+}
+
 static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 	TypeIdx structType = static_cast<TypeIdx>(n.lhs);
 	if (structType == kNoType) {
@@ -1255,6 +1424,15 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	case AstTag::StructLit:
 		return codegenStructLit(ctx, n);
+	case AstTag::MatchNode:
+		return codegenMatch(ctx, n);
+	case AstTag::PatLit:
+	case AstTag::PatRange:
+	case AstTag::PatWildcard:
+	case AstTag::PatOr:
+		throw std::runtime_error(
+		    "Pattern node reached top-level codegen; patterns are only "
+		    "valid inside a `match` arm");
 	case AstTag::Count:
 		break;
 	}

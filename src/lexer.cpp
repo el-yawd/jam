@@ -94,6 +94,8 @@ void Lexer::identifier() {
 		addToken(TOK_IF, text);
 	} else if (text == "else") {
 		addToken(TOK_ELSE, text);
+	} else if (text == "match") {
+		addToken(TOK_MATCH, text);
 	} else if (text == "while") {
 		addToken(TOK_WHILE, text);
 	} else if (text == "for") {
@@ -136,9 +138,27 @@ void Lexer::identifier() {
 	}
 }
 
+// True for hex digits 0-9, a-f, A-F.
+static bool isHexDigit(char c) {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+	       (c >= 'A' && c <= 'F');
+}
+
 void Lexer::number() {
 	int start =
 	    current - 1;  // Start position (we already consumed the first digit)
+	// Hex literal: leading `0x` (or `0X`). The first digit consumed was
+	// `0`; check the next character without disturbing the rest of the
+	// number-scanning logic.
+	if (source[start] == '0' &&
+	    (peek() == 'x' || peek() == 'X') &&
+	    isHexDigit(peekNext())) {
+		advance();  // consume 'x'
+		while (isHexDigit(peek())) advance();
+		std::string num = source.substr(start, current - start);
+		addToken(TOK_NUMBER, num);
+		return;
+	}
 	while (isDigit(peek())) advance();
 
 	std::string num = source.substr(start, current - start);
@@ -355,6 +375,10 @@ std::vector<Token> Lexer::scanTokens() {
 				advance();
 				advance();
 				addToken(TOK_ELLIPSIS, "...");
+			} else if (peek() == '.' && peekNext() == '=') {
+				advance();
+				advance();
+				addToken(TOK_DOTDOT_EQ, "..=");
 			} else {
 				addToken(TOK_DOT, ".");
 			}

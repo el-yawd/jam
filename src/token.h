@@ -69,6 +69,8 @@ enum TokenType {
 	TOK_RSHIFT,     // >> (right shift)
 	TOK_UNDEFINED,  // undefined keyword (uninitialized storage marker)
 	TOK_ELLIPSIS,   // ... (variadic marker in extern fn parameters)
+	TOK_MATCH,      // match keyword
+	TOK_DOTDOT_EQ,  // ..= (inclusive range in match patterns)
 };
 
 // Token structure
