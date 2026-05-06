@@ -1,0 +1,167 @@
+// M2 E2: enum variants with payloads. Variants carry positional fields;
+// pattern matching destructures and binds them by name.
+const { assert } = import("test");
+
+// -------------------- Single-payload variants --------------------
+
+const OneArg = enum {
+    Nothing,
+    Just(u8),
+};
+
+fn unwrapOrDefault(o: OneArg, def: u8) u8 {
+    match (o) {
+        OneArg.Nothing { return def; }
+        OneArg.Just(x) { return x; }
+        else           { return 99; }
+    }
+    return 0;
+}
+
+tfn unwrapNothing()  { assert(unwrapOrDefault(OneArg.Nothing, 7), 7); }
+tfn unwrapJust42()   { assert(unwrapOrDefault(OneArg.Just(42), 0), 42); }
+tfn unwrapJustZero() { assert(unwrapOrDefault(OneArg.Just(0), 99), 0); }
+
+// -------------------- Two-payload variants --------------------
+
+const Op = enum {
+    Nop,
+    LdRR(u8, u8),
+    Imm(u8),
+    Wide(u16),
+};
+
+fn srcReg(op: Op) u8 {
+    match (op) {
+        Op.Nop          { return 0xFF; }
+        Op.LdRR(d, s)   { return s; }
+        Op.Imm(v)       { return v; }
+        Op.Wide(w)      { return 0xEE; }
+        else            { return 0xCC; }
+    }
+    return 0;
+}
+
+fn dstReg(op: Op) u8 {
+    match (op) {
+        Op.LdRR(d, s)   { return d; }
+        else            { return 0xFF; }
+    }
+    return 0;
+}
+
+tfn ldrrSrc()        { assert(srcReg(Op.LdRR(3, 7)), 7); }
+tfn ldrrDst()        { assert(dstReg(Op.LdRR(3, 7)), 3); }
+tfn immValue()       { assert(srcReg(Op.Imm(99)), 99); }
+tfn nopValue()       { assert(srcReg(Op.Nop), 0xFF); }
+
+// -------------------- Wider payloads --------------------
+
+const WideOp = enum {
+    Jp(u16),
+    Call(u16),
+    Mov(u8, u16),
+};
+
+fn jumpAddr(o: WideOp) u16 {
+    match (o) {
+        WideOp.Jp(addr)   { return addr; }
+        WideOp.Call(addr) { return addr; }
+        WideOp.Mov(r, a)  { return a; }
+        else              { return 0; }
+    }
+    return 0;
+}
+
+fn movRegister(o: WideOp) u8 {
+    match (o) {
+        WideOp.Mov(r, a) { return r; }
+        else             { return 0; }
+    }
+    return 0;
+}
+
+tfn jp1234()       { assert(jumpAddr(WideOp.Jp(0x1234)), 0x1234); }
+tfn callBeef()     { assert(jumpAddr(WideOp.Call(0xBEEF)), 0xBEEF); }
+tfn movAddrPart()  { assert(jumpAddr(WideOp.Mov(5, 0xCAFE)), 0xCAFE); }
+tfn movRegPart()   { assert(movRegister(WideOp.Mov(5, 0xCAFE)), 5); }
+
+// -------------------- Many variants --------------------
+
+const Many = enum {
+    A,
+    B(u8),
+    C(u8, u8),
+    D(u16),
+    E(u8, u8, u8),
+    F,
+    G(u32),
+};
+
+fn classifyMany(m: Many) u32 {
+    match (m) {
+        Many.A           { return 1; }
+        Many.B(x)        { return x; }
+        Many.C(a, b)     { return a + b; }
+        Many.D(w)        { return w; }
+        Many.E(a, b, c)  { return a + b + c; }
+        Many.F           { return 1000; }
+        Many.G(big)      { return big; }
+        else             { return 0; }
+    }
+    return 0;
+}
+
+tfn manyA()  { assert(classifyMany(Many.A), 1); }
+tfn manyB()  { assert(classifyMany(Many.B(7)), 7); }
+tfn manyC()  { assert(classifyMany(Many.C(10, 20)), 30); }
+tfn manyD()  { assert(classifyMany(Many.D(0xBEEF)), 0xBEEF); }
+tfn manyE()  { assert(classifyMany(Many.E(1, 2, 3)), 6); }
+tfn manyF()  { assert(classifyMany(Many.F), 1000); }
+tfn manyG()  { assert(classifyMany(Many.G(123456789)), 123456789); }
+
+// -------------------- Storing enum values --------------------
+
+fn passThrough(o: Op) Op {
+    return o;
+}
+
+fn passThroughGetValue() u8 {
+    const o: Op = passThrough(Op.Imm(55));
+    match (o) {
+        Op.Imm(v) { return v; }
+        else      { return 99; }
+    }
+    return 0;
+}
+
+tfn passThroughEnum() { assert(passThroughGetValue(), 55); }
+
+// -------------------- Mixed: unit and payloaded variants --------------------
+
+const Result = enum {
+    Ok(u32),
+    Err,
+};
+
+fn isOk(r: Result) u8 {
+    match (r) {
+        Result.Ok(v) { return 1; }
+        Result.Err   { return 0; }
+        else         { return 99; }
+    }
+    return 0;
+}
+
+fn unwrapOk(r: Result) u32 {
+    match (r) {
+        Result.Ok(v) { return v; }
+        else         { return 0; }
+    }
+    return 0;
+}
+
+tfn isOkOk()    { assert(isOk(Result.Ok(42)), 1); }
+tfn isOkErr()   { assert(isOk(Result.Err), 0); }
+tfn unwrapOk1() { assert(unwrapOk(Result.Ok(0xDEADBEEF)), 0xDEADBEEF); }
+tfn unwrapErr() { assert(unwrapOk(Result.Err), 0); }

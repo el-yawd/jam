@@ -1,0 +1,100 @@
+// M2 E3: compile-time exhaustiveness over enum scrutinees. When a match
+// arm references enum variants and there is no `else`, every variant
+// must be covered. These tests verify the *positive* case — exhaustive
+// matches without an `else` arm compile and run correctly.
+//
+// (Negative cases — non-exhaustive matches that should fail to
+// compile — are not testable through the runtime test harness; they
+// are verified by hand and documented in MATCH.md §3.3.)
+const { assert } = import("test");
+
+// -------------------- Pure-tag enum, all-variant arms --------------------
+
+const Color = enum { Red, Green, Blue };
+
+fn colorTagExhaustive(c: Color) u8 {
+    match (c) {
+        Color.Red   { return 100; }
+        Color.Green { return 200; }
+        Color.Blue  { return 50; }
+    }
+    return 99;
+}
+
+tfn exhaustiveRed()   { assert(colorTagExhaustive(Color.Red), 100); }
+tfn exhaustiveGreen() { assert(colorTagExhaustive(Color.Green), 200); }
+tfn exhaustiveBlue()  { assert(colorTagExhaustive(Color.Blue), 50); }
+
+// -------------------- Or-patterns covering all variants --------------------
+
+const Direction = enum { N, S, E, W };
+
+fn isVertical(d: Direction) u8 {
+    match (d) {
+        Direction.N | Direction.S { return 1; }
+        Direction.E | Direction.W { return 0; }
+    }
+    return 99;
+}
+
+tfn vertN() { assert(isVertical(Direction.N), 1); }
+tfn vertS() { assert(isVertical(Direction.S), 1); }
+tfn vertE() { assert(isVertical(Direction.E), 0); }
+tfn vertW() { assert(isVertical(Direction.W), 0); }
+
+// -------------------- Mixed payload + exhaustive --------------------
+
+const Result = enum { Ok(u32), Err };
+
+fn unwrapOrZero(r: Result) u32 {
+    match (r) {
+        Result.Ok(v) { return v; }
+        Result.Err   { return 0; }
+    }
+    return 99;
+}
+
+tfn unwrapOk()  { assert(unwrapOrZero(Result.Ok(42)), 42); }
+tfn unwrapErr() { assert(unwrapOrZero(Result.Err), 0); }
+
+// -------------------- Many variants exhaustive --------------------
+
+const Op = enum {
+    Nop,
+    Add(u8),
+    Sub(u8),
+    Set(u8, u8),
+    Jp(u16),
+};
+
+fn opSize(o: Op) u8 {
+    match (o) {
+        Op.Nop          { return 1; }
+        Op.Add(x)       { return 2; }
+        Op.Sub(x)       { return 2; }
+        Op.Set(a, b)    { return 3; }
+        Op.Jp(addr)     { return 3; }
+    }
+    return 99;
+}
+
+tfn opSizeNop()  { assert(opSize(Op.Nop), 1); }
+tfn opSizeAdd()  { assert(opSize(Op.Add(7)), 2); }
+tfn opSizeSub()  { assert(opSize(Op.Sub(3)), 2); }
+tfn opSizeSet()  { assert(opSize(Op.Set(1, 2)), 3); }
+tfn opSizeJp()   { assert(opSize(Op.Jp(0x1234)), 3); }
+
+// -------------------- Wildcard arm makes match exhaustive --------------------
+
+fn opCategoryWithWildcard(o: Op) u8 {
+    // `_` is a catch-all; the enum exhaustiveness check is satisfied
+    // because the wildcard covers anything not enumerated.
+    match (o) {
+        Op.Nop { return 0; }
+        _       { return 1; }
+    }
+    return 99;
+}
+
+tfn wildcardNop()  { assert(opCategoryWithWildcard(Op.Nop), 0); }
+tfn wildcardOther(){ assert(opCategoryWithWildcard(Op.Add(5)), 1); }

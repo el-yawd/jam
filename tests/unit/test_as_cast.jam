@@ -1,0 +1,71 @@
+// `as` operator: explicit type cast. Covers integer↔integer truncation
+// and extension, integer→float, and enum-tag extraction.
+const { assert } = import("test");
+
+// -------------------- Integer casts --------------------
+
+fn truncateU32ToU8() u8 {
+    const x: u32 = 0x1234_5678;
+    return x as u8;
+}
+
+fn truncateU16ToU8() u8 {
+    const x: u16 = 0xABCD;
+    return x as u8;
+}
+
+fn extendU8ToU32() u32 {
+    const x: u8 = 200;
+    return x as u32;
+}
+
+fn signedNarrowing() i8 {
+    const x: i32 = 250;
+    return x as i8;
+}
+
+tfn truncate32To8()    { assert(truncateU32ToU8(), 0x78); }
+tfn truncate16To8()    { assert(truncateU16ToU8(), 0xCD); }
+tfn extend8To32()      { assert(extendU8ToU32(), 200); }
+tfn signedNarrow()     { assert(signedNarrowing(), -6); }  // 250 as i8 wraps
+
+// -------------------- Enum tag extraction (E1) --------------------
+
+const Phase = enum { Idle = 0, Running = 5, Stopping = 9 };
+
+fn phaseAsByte(p: Phase) u8 {
+    return p as u8;
+}
+
+tfn phaseIdle()       { assert(phaseAsByte(Phase.Idle), 0); }
+tfn phaseRunning()    { assert(phaseAsByte(Phase.Running), 5); }
+tfn phaseStopping()   { assert(phaseAsByte(Phase.Stopping), 9); }
+
+// -------------------- Enum tag extraction (E2) --------------------
+
+const Op = enum {
+    Nop = 0,
+    Add(u8) = 0x80,
+    Sub(u8) = 0x90,
+    Jp(u16) = 0xC3,
+};
+
+fn opTagOnly(o: Op) u8 {
+    // Cast extracts the discriminant byte regardless of payload.
+    return o as u8;
+}
+
+tfn nopTag()  { assert(opTagOnly(Op.Nop), 0x00); }
+tfn addTag()  { assert(opTagOnly(Op.Add(7)), 0x80); }
+tfn subTag()  { assert(opTagOnly(Op.Sub(3)), 0x90); }
+tfn jpTag()   { assert(opTagOnly(Op.Jp(0xBEEF)), 0xC3); }
+
+// -------------------- Cast in mixed expressions --------------------
+
+fn arithCast() u32 {
+    const small: u8 = 10;
+    const big: u32 = 1000;
+    return (small as u32) + big;
+}
+
+tfn castInExpr() { assert(arithCast(), 1010); }

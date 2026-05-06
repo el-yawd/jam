@@ -1,0 +1,99 @@
+// M3: match as expression. Each arm's last expression is the arm's
+// value; the match itself produces a value usable in any expression
+// context (return, var-decl initializer, function argument).
+const { assert } = import("test");
+
+// -------------------- Basic match-as-expression --------------------
+
+const Color = enum { Red, Green, Blue };
+
+fn nameViaMatch(c: Color) u8 {
+    const score: u8 = match (c) {
+        Color.Red    { 100 }
+        Color.Green  { 200 }
+        Color.Blue   { 50 }
+    };
+    return score;
+}
+
+fn directReturn(c: Color) u8 {
+    return match (c) {
+        Color.Red    { 1 }
+        Color.Green  { 2 }
+        Color.Blue   { 3 }
+    };
+}
+
+tfn redName()    { assert(nameViaMatch(Color.Red), 100); }
+tfn greenName()  { assert(nameViaMatch(Color.Green), 200); }
+tfn blueName()   { assert(nameViaMatch(Color.Blue), 50); }
+tfn redDirect()  { assert(directReturn(Color.Red), 1); }
+tfn greenDirect(){ assert(directReturn(Color.Green), 2); }
+tfn blueDirect() { assert(directReturn(Color.Blue), 3); }
+
+// -------------------- Arm body with multiple statements --------------------
+
+fn arithExpr(c: Color) u8 {
+    return match (c) {
+        Color.Red {
+            const x: u8 = 10;
+            const y: u8 = 20;
+            x + y
+        }
+        Color.Green { 7 }
+        Color.Blue  { 3 }
+    };
+}
+
+tfn multiStmtArm() { assert(arithExpr(Color.Red), 30); }
+
+// -------------------- With payload binding --------------------
+
+const Op = enum {
+    Nop,
+    Add(u8),
+    Sub(u8),
+    Mul(u8, u8),
+};
+
+fn evaluate(op: Op, base: u8) u8 {
+    return match (op) {
+        Op.Nop          { base }
+        Op.Add(rhs)     { base + rhs }
+        Op.Sub(rhs)     { base - rhs }
+        Op.Mul(a, b)    { a * b }
+    };
+}
+
+tfn evalNop()  { assert(evaluate(Op.Nop, 42), 42); }
+tfn evalAdd()  { assert(evaluate(Op.Add(8), 10), 18); }
+tfn evalSub()  { assert(evaluate(Op.Sub(3), 10), 7); }
+tfn evalMul()  { assert(evaluate(Op.Mul(6, 7), 0), 42); }
+
+// -------------------- As function argument --------------------
+
+fn double(x: u8) u8 { return x * 2; }
+
+fn caller(c: Color) u8 {
+    return double(match (c) {
+        Color.Red   { 5 }
+        Color.Green { 10 }
+        Color.Blue  { 15 }
+    });
+}
+
+tfn callerRed()   { assert(caller(Color.Red), 10); }
+tfn callerGreen() { assert(caller(Color.Green), 20); }
+tfn callerBlue()  { assert(caller(Color.Blue), 30); }
+
+// -------------------- With else --------------------
+
+fn evalWithElse(op: Op) u8 {
+    return match (op) {
+        Op.Nop      { 0 }
+        Op.Add(x)   { x }
+        else        { 99 }
+    };
+}
+
+tfn elseExpr() { assert(evalWithElse(Op.Sub(5)), 99); }

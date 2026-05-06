@@ -1,0 +1,177 @@
+// Payload-less enums (M2 E1). Variants are sequential u8
+// discriminants; the type compiles to `i8` in LLVM IR. Match patterns
+// support `EnumName.Variant` arms.
+const { assert } = import("test");
+
+// -------------------- Basic dispatch --------------------
+
+const Color = enum { Red, Green, Blue };
+
+fn classifyColor(c: Color) u8 {
+    match (c) {
+        Color.Red   { return 100; }
+        Color.Green { return 200; }
+        Color.Blue  { return 50; }
+        else        { return 0; }
+    }
+    return 99;
+}
+
+tfn colorRed()   { assert(classifyColor(Color.Red), 100); }
+tfn colorGreen() { assert(classifyColor(Color.Green), 200); }
+tfn colorBlue()  { assert(classifyColor(Color.Blue), 50); }
+
+// -------------------- Discriminant values are stable --------------------
+
+fn colorAsByte(c: Color) u8 {
+    match (c) {
+        Color.Red   { return 0; }
+        Color.Green { return 1; }
+        Color.Blue  { return 2; }
+        else        { return 255; }
+    }
+    return 99;
+}
+
+tfn discriminantRed()   { assert(colorAsByte(Color.Red), 0); }
+tfn discriminantGreen() { assert(colorAsByte(Color.Green), 1); }
+tfn discriminantBlue()  { assert(colorAsByte(Color.Blue), 2); }
+
+// -------------------- More variants --------------------
+
+const Direction = enum { North, South, East, West };
+
+fn opposite(d: Direction) Direction {
+    match (d) {
+        Direction.North { return Direction.South; }
+        Direction.South { return Direction.North; }
+        Direction.East  { return Direction.West; }
+        Direction.West  { return Direction.East; }
+        else            { return Direction.North; }
+    }
+    return Direction.North;
+}
+
+fn isOppositePair(d: Direction) u8 {
+    const opp: Direction = opposite(d);
+    match (opp) {
+        Direction.North { return 1; }
+        Direction.South { return 2; }
+        Direction.East  { return 3; }
+        Direction.West  { return 4; }
+        else            { return 99; }
+    }
+    return 0;
+}
+
+tfn oppositeOfNorth() { assert(isOppositePair(Direction.North), 2); } // South
+tfn oppositeOfSouth() { assert(isOppositePair(Direction.South), 1); } // North
+tfn oppositeOfEast()  { assert(isOppositePair(Direction.East), 4); }  // West
+tfn oppositeOfWest()  { assert(isOppositePair(Direction.West), 3); }  // East
+
+// -------------------- Variant in or-pattern --------------------
+
+fn isHorizontal(d: Direction) u8 {
+    match (d) {
+        Direction.East | Direction.West { return 1; }
+        else                            { return 0; }
+    }
+    return 0;
+}
+
+tfn horizontalEast()  { assert(isHorizontal(Direction.East), 1); }
+tfn horizontalWest()  { assert(isHorizontal(Direction.West), 1); }
+tfn horizontalNorth() { assert(isHorizontal(Direction.North), 0); }
+tfn horizontalSouth() { assert(isHorizontal(Direction.South), 0); }
+
+// -------------------- Returning enums --------------------
+
+fn defaultColor() Color {
+    return Color.Red;
+}
+
+fn colorEqualsRed() u8 {
+    const c: Color = defaultColor();
+    match (c) {
+        Color.Red { return 1; }
+        else      { return 0; }
+    }
+    return 0;
+}
+
+tfn defaultIsRed() { assert(colorEqualsRed(), 1); }
+
+// -------------------- State machine --------------------
+
+const State = enum { Idle, Running, Paused, Stopped };
+
+fn step(s: State) State {
+    match (s) {
+        State.Idle    { return State.Running; }
+        State.Running { return State.Paused; }
+        State.Paused  { return State.Running; }
+        State.Stopped { return State.Stopped; }
+        else          { return State.Stopped; }
+    }
+    return State.Stopped;
+}
+
+fn stepN(start: State, n: u8) State {
+    var s: State = start;
+    var i: u8 = 0;
+    while (i < n) {
+        s = step(s);
+        i = i + 1;
+    }
+    return s;
+}
+
+fn stateAsByte(s: State) u8 {
+    match (s) {
+        State.Idle    { return 0; }
+        State.Running { return 1; }
+        State.Paused  { return 2; }
+        State.Stopped { return 3; }
+        else          { return 99; }
+    }
+    return 0;
+}
+
+tfn stateMachineStart()   { assert(stateAsByte(stepN(State.Idle, 0)), 0); } // Idle
+tfn stateMachine1Step()   { assert(stateAsByte(stepN(State.Idle, 1)), 1); } // Running
+tfn stateMachine2Step()   { assert(stateAsByte(stepN(State.Idle, 2)), 2); } // Paused
+tfn stateMachine3Step()   { assert(stateAsByte(stepN(State.Idle, 3)), 1); } // Running
+tfn stateMachine4Step()   { assert(stateAsByte(stepN(State.Idle, 4)), 2); } // Paused
+
+// -------------------- Many variants (Game-Boy-style) --------------------
+
+const Tetromino = enum { I, O, T, S, Z, J, L };
+
+fn cellsForShape(t: Tetromino) u8 {
+    // Each tetromino has 4 cells; this is just a smoke test that
+    // dispatch over 7 variants compiles and runs correctly.
+    match (t) {
+        Tetromino.I | Tetromino.O | Tetromino.T |
+        Tetromino.S | Tetromino.Z | Tetromino.J |
+        Tetromino.L  { return 4; }
+        else         { return 0; }
+    }
+    return 0;
+}
+
+fn tetrominoIsBalanced(t: Tetromino) u8 {
+    // I and O are symmetric; the others are not.
+    match (t) {
+        Tetromino.I | Tetromino.O  { return 1; }
+        else                        { return 0; }
+    }
+    return 0;
+}
+
+tfn allTetrominoesHave4Cells_I() { assert(cellsForShape(Tetromino.I), 4); }
+tfn allTetrominoesHave4Cells_T() { assert(cellsForShape(Tetromino.T), 4); }
+tfn allTetrominoesHave4Cells_L() { assert(cellsForShape(Tetromino.L), 4); }
+tfn iIsBalanced()                { assert(tetrominoIsBalanced(Tetromino.I), 1); }
+tfn oIsBalanced()                { assert(tetrominoIsBalanced(Tetromino.O), 1); }
+tfn sIsNotBalanced()             { assert(tetrominoIsBalanced(Tetromino.S), 0); }
+tfn jIsNotBalanced()             { assert(tetrominoIsBalanced(Tetromino.J), 0); }
