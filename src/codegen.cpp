@@ -369,6 +369,19 @@ JamCodegenContext::findEnumByLLVMType(JamTypeRef ty) const {
 	return nullptr;
 }
 
+void JamCodegenContext::registerModuleConst(const std::string &name,
+                                            NodeIdx init,
+                                            TypeIdx declared) {
+	moduleConsts[name] = ModuleConstInfo{init, declared};
+}
+
+const JamCodegenContext::ModuleConstInfo *
+JamCodegenContext::getModuleConst(const std::string &name) const {
+	auto it = moduleConsts.find(name);
+	if (it != moduleConsts.end()) return &it->second;
+	return nullptr;
+}
+
 // Size of a type in bytes. Used by union layout computation. The
 // numbers assume a 64-bit target — pointers and slice lengths are 8
 // bytes. Struct sizes do not currently account for inter-field padding;

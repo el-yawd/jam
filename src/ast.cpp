@@ -1857,9 +1857,21 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		const std::string &name =
 		    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
 		JamValueRef V = ctx.getVariable(name);
-		if (!V) throw std::runtime_error("Unknown variable name: " + name);
-		JamTypeRef LoadType = JamLLVMGetAllocatedType(V);
-		return JamLLVMBuildLoad(ctx.getBuilder(), LoadType, V, name.c_str());
+		if (V) {
+			JamTypeRef LoadType = JamLLVMGetAllocatedType(V);
+			return JamLLVMBuildLoad(ctx.getBuilder(), LoadType, V,
+			                        name.c_str());
+		}
+		// Fall back to module-scope `const NAME[: T]? = expr;` — re-codegen
+		// the init expression in place. With the declared type passed as
+		// expectedType, integer literals adopt the declared width naturally.
+		if (const auto *mc = ctx.getModuleConst(name)) {
+			JamTypeRef expected = mc->declaredType != kNoType
+			                          ? ctx.getLLVMType(mc->declaredType)
+			                          : nullptr;
+			return codegenNode(ctx, mc->initExpr, expected);
+		}
+		throw std::runtime_error("Unknown variable name: " + name);
 	}
 	case AstTag::MemberAccess:
 		return codegenMemberAccess(ctx, n, node);

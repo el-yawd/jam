@@ -142,6 +142,19 @@ class JamCodegenContext {
 	uint64_t typeSize(TypeIdx ty) const;
 	uint64_t typeAlign(TypeIdx ty) const;
 
+	// Module-scope `const NAME[: T]? = expr;` registry. Stores the
+	// parsed init expression (NodeIdx) and the declared type (kNoType
+	// when omitted). At each Variable use site we re-codegen the init
+	// expression in place — effectively a per-use inline expansion that
+	// the optimizer collapses just like a literal.
+	struct ModuleConstInfo {
+		NodeIdx initExpr;
+		TypeIdx declaredType;
+	};
+	void registerModuleConst(const std::string &name, NodeIdx init,
+	                         TypeIdx declared);
+	const ModuleConstInfo *getModuleConst(const std::string &name) const;
+
   private:
 	JamContextRef ctx;
 	JamModuleRef mod;
@@ -151,6 +164,7 @@ class JamCodegenContext {
 	std::map<std::string, StructInfo> structs;
 	std::map<std::string, UnionInfo> unions;
 	std::map<std::string, EnumInfo> enums;
+	std::map<std::string, ModuleConstInfo> moduleConsts;
 	mutable TypePool typePool;
 	mutable StringPool stringPool;
 	mutable NodeStore nodeStore;

@@ -118,6 +118,25 @@ class UnionDeclAST {
 	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
 };
 
+// Module-scope value binding: `const NAME[: T]? = expr;`.
+//
+// Bound to a single integer/bool/float literal (or constant expression
+// evaluable at codegen time). At each use site, the init expression is
+// codegen'd inline with `DeclaredType` as the expected type — a small
+// inlining pass that costs nothing at runtime and lets the optimizer
+// fold across uses just like a literal would. This is the same model
+// Zig uses for `pub const` of comptime-known values.
+class ConstDeclAST {
+  public:
+	std::string Name;
+	TypeIdx DeclaredType;  // kNoType when omitted; init drives the type
+	NodeIdx InitExpr;
+
+	ConstDeclAST(std::string Name, TypeIdx DeclaredType, NodeIdx InitExpr)
+	    : Name(std::move(Name)), DeclaredType(DeclaredType),
+	      InitExpr(InitExpr) {}
+};
+
 // const std = import("std");
 class ImportDeclAST {
   public:
@@ -146,6 +165,7 @@ class ModuleAST {
 	std::vector<std::unique_ptr<StructDeclAST>> Structs;
 	std::vector<std::unique_ptr<UnionDeclAST>> Unions;
 	std::vector<std::unique_ptr<EnumDeclAST>> Enums;
+	std::vector<std::unique_ptr<ConstDeclAST>> Consts;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
 
 	ModuleAST() = default;

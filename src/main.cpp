@@ -373,6 +373,22 @@ static int compileAndRun(const std::string &filename,
 	fillUnionBodies(module.get());
 	fillEnumBodies(module.get());
 
+	// Register module-scope `const NAME[: T]? = expr;` bindings. These
+	// are inlined at use sites (see AstTag::Variable in ast.cpp), so we
+	// only need to teach the codegen context about them — no LLVM
+	// globals get emitted.
+	auto registerConsts = [&](ModuleAST *m) {
+		for (auto &c : m->Consts) {
+			codegenCtx.registerModuleConst(c->Name, c->InitExpr,
+			                               c->DeclaredType);
+		}
+	};
+	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
+		if (path == "std") continue;
+		registerConsts(importedModule.get());
+	}
+	registerConsts(module.get());
+
 	// Two-pass codegen: declare every function's prototype first, then
 	// emit bodies. Without this, calling a function defined later in the
 	// file (or another module) would fail with "Unknown function". This

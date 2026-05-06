@@ -1027,6 +1027,21 @@ std::unique_ptr<DestructuringImportDeclAST> Parser::parseDestructuringImport() {
 	return std::make_unique<DestructuringImportDeclAST>(std::move(names), path);
 }
 
+std::unique_ptr<ConstDeclAST> Parser::parseConstDecl() {
+	consume(TOK_CONST, "Expected 'const' for module-scope constant");
+	consume(TOK_IDENTIFIER, "Expected identifier for constant name");
+	std::string name = previous().lexeme;
+
+	TypeIdx declared = kNoType;
+	if (match(TOK_COLON)) { declared = parseType(); }
+
+	consume(TOK_EQUAL, "Expected '=' in module-scope const declaration");
+	NodeIdx init = parseLogicalOr();
+	consume(TOK_SEMI, "Expected ';' after module-scope const declaration");
+
+	return std::make_unique<ConstDeclAST>(std::move(name), declared, init);
+}
+
 std::unique_ptr<ModuleAST> Parser::parse() {
 	auto module = std::make_unique<ModuleAST>();
 
@@ -1044,6 +1059,12 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 
 			if (check(TOK_IDENTIFIER)) {
 				advance();
+				// `const NAME : T = …` — typed module const.
+				if (check(TOK_COLON)) {
+					current = saved;
+					module->Consts.push_back(parseConstDecl());
+					continue;
+				}
 				if (check(TOK_EQUAL)) {
 					advance();
 					if (check(TOK_IMPORT)) {
@@ -1066,6 +1087,11 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 						module->Enums.push_back(parseEnumDecl());
 						continue;
 					}
+					// `const NAME = expr;` — untyped module const,
+					// type inferred from the initializer.
+					current = saved;
+					module->Consts.push_back(parseConstDecl());
+					continue;
 				}
 			}
 
