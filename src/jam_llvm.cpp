@@ -462,9 +462,13 @@ JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block) {
 // ============================================================================
 
 JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder, JamTypeRef type,
-                               const char *name) {
-	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateAlloca(UNWRAP_TYPE(type),
-	                                                        nullptr, name));
+                               uint64_t alignBytes, const char *name) {
+	auto *inst = UNWRAP_BUILDER(builder)->CreateAlloca(UNWRAP_TYPE(type),
+	                                                   nullptr, name);
+	if (alignBytes != 0) {
+		inst->setAlignment(llvm::Align(alignBytes));
+	}
+	return WRAP_VALUE(inst);
 }
 
 JamValueRef JamLLVMBuildLoad(JamBuilderRef builder, JamTypeRef type,

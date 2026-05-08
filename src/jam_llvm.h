@@ -224,8 +224,16 @@ JAM_EXTERN_C JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block);
 // Instructions - Memory
 // ============================================================================
 
+// Stack alloca with an explicit alignment in bytes. Pass 0 to fall back to
+// LLVM's data-layout-derived inference, but prefer passing the type's real
+// alignment (via JamCodegenContext::typeAlign). LLVM's getPrefTypeAlign
+// over-aligns aggregates relative to what C/C++/Zig produce on the same
+// target — Zig works around this the same way (see Zig codegen/llvm.zig
+// `buildAllocaInner` which always calls `setAlignment` on the result).
 JAM_EXTERN_C JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder,
-                                            JamTypeRef type, const char *name);
+                                            JamTypeRef type,
+                                            uint64_t alignBytes,
+                                            const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildLoad(JamBuilderRef builder,
                                           JamTypeRef type, JamValueRef ptr,
                                           const char *name);

@@ -614,8 +614,10 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 				// 0, and store each payload arg at its computed offset
 				// within the payload area. Then load the whole struct
 				// to return as an SSA value.
+				uint64_t enumAlign =
+				    einfo->maxPayloadAlign > 1 ? einfo->maxPayloadAlign : 1;
 				JamValueRef alloca = JamLLVMBuildAlloca(
-				    ctx.getBuilder(), enumLLVMType, "enum.tmp");
+				    ctx.getBuilder(), enumLLVMType, enumAlign, "enum.tmp");
 				// Store tag at field 0.
 				JamValueRef tagPtr = JamLLVMBuildStructGEP(
 				    ctx.getBuilder(), enumLLVMType, alloca, 0, "enum.tag");
@@ -692,7 +694,8 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		if (calleeRabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
 			calleeSretPointee = ctx.getLLVMType(calleeAST->ReturnType);
 			calleeSretSlot = JamLLVMBuildAlloca(
-			    ctx.getBuilder(), calleeSretPointee, "sretslot");
+			    ctx.getBuilder(), calleeSretPointee,
+			    ctx.typeAlign(calleeAST->ReturnType), "sretslot");
 		}
 	}
 
@@ -755,7 +758,8 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					JamTypeRef llvmTy =
 					    ctx.getLLVMType(calleeAST->Args[i].Type);
 					JamValueRef tmp = JamLLVMBuildAlloca(
-					    ctx.getBuilder(), llvmTy, "argtmp");
+					    ctx.getBuilder(), llvmTy,
+					    ctx.typeAlign(calleeAST->Args[i].Type), "argtmp");
 					JamValueRef val = codegenNode(ctx, args[i], llvmTy);
 					if (!val) return nullptr;
 					val = coerceTo(ctx, val, llvmTy);
@@ -1103,8 +1107,8 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	const std::string &name = sp.get(nameId);
 
 	JamTypeRef VarType = ctx.getLLVMType(type);
-	JamValueRef Alloca =
-	    JamLLVMBuildAlloca(ctx.getBuilder(), VarType, name.c_str());
+	JamValueRef Alloca = JamLLVMBuildAlloca(
+	    ctx.getBuilder(), VarType, ctx.typeAlign(type), name.c_str());
 
 	if (initIdx != kNoNode) {
 		const AstNode &initNode = ns.get(initIdx);
@@ -1342,8 +1346,11 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 		}
 	}
 
-	JamValueRef Alloca =
-	    JamLLVMBuildAlloca(ctx.getBuilder(), VarType, varName.c_str());
+	// For-loop induction variable is always an integer here; alignment is
+	// the integer's byte width.
+	uint64_t loopVarAlign = JamLLVMGetIntTypeWidth(VarType) / 8;
+	JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), VarType,
+	                                        loopVarAlign, varName.c_str());
 	JamLLVMBuildStore(ctx.getBuilder(), StartVal, Alloca);
 
 	JamValueRef OldVal = ctx.getVariable(varName);
@@ -1677,8 +1684,11 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	}
 	JamValueRef scrutPtr = nullptr;
 	if (scrutIsEnum) {
+		const auto *einfo = ctx.findEnumByLLVMType(scrutType);
+		uint64_t scrutAlign =
+		    einfo && einfo->maxPayloadAlign > 1 ? einfo->maxPayloadAlign : 1;
 		scrutPtr = JamLLVMBuildAlloca(ctx.getBuilder(), scrutType,
-		                              "match.scrut");
+		                              scrutAlign, "match.scrut");
 		JamLLVMBuildStore(ctx.getBuilder(), scrut, scrutPtr);
 	}
 
@@ -1790,7 +1800,8 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 				JamValueRef fieldVal = JamLLVMBuildLoad(
 				    ctx.getBuilder(), fieldLLVM, fieldPtr, name.c_str());
 				JamValueRef bindAlloca = JamLLVMBuildAlloca(
-				    ctx.getBuilder(), fieldLLVM, name.c_str());
+				    ctx.getBuilder(), fieldLLVM, ctx.typeAlign(ty),
+				    name.c_str());
 				JamLLVMBuildStore(ctx.getBuilder(), fieldVal, bindAlloca);
 				ctx.setVariable(name, bindAlloca);
 				ctx.setVariableType(name, ty);
@@ -1991,8 +2002,10 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 			}
 			// E2 unit variant: build a {tag, payload-undef} struct value.
 			JamTypeRef enumLLVMType = einfo->type;
+			uint64_t enumAlign =
+			    einfo->maxPayloadAlign > 1 ? einfo->maxPayloadAlign : 1;
 			JamValueRef alloca = JamLLVMBuildAlloca(
-			    ctx.getBuilder(), enumLLVMType, "enum.unit");
+			    ctx.getBuilder(), enumLLVMType, enumAlign, "enum.unit");
 			JamValueRef tagPtr = JamLLVMBuildStructGEP(
 			    ctx.getBuilder(), enumLLVMType, alloca, 0, "enum.tag");
 			JamLLVMBuildStore(ctx.getBuilder(), tagConst, tagPtr);
@@ -2429,7 +2442,8 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 		} else {
 			JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
 			JamValueRef Alloca = JamLLVMBuildAlloca(
-			    ctx.getBuilder(), ArgType, Args[i].Name.c_str());
+			    ctx.getBuilder(), ArgType, ctx.typeAlign(Args[i].Type),
+			    Args[i].Name.c_str());
 			JamLLVMBuildStore(ctx.getBuilder(), param, Alloca);
 			ctx.setVariable(Args[i].Name, Alloca);
 		}
