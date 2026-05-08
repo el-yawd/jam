@@ -955,14 +955,15 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 			    "Cannot assign to field of non-struct: " + varName);
 		}
 
-		JamValueRef outerValue = JamLLVMBuildLoad(ctx.getBuilder(), info->type,
-		                                          alloca, varName.c_str());
-
-		std::vector<JamValueRef> values;
-		std::vector<unsigned> indices;
-		std::vector<std::string> pathNames;
+		// Walk the field chain with struct GEPs so we end up with a pointer
+		// straight to the leaf field, then store only that field. The earlier
+		// approach loaded the whole struct, ran an extractvalue/insertvalue
+		// dance, and stored the whole struct back — wasteful in the IR and
+		// in unoptimized machine code, plus it loaded poison from an uninit
+		// alloca whenever the struct hadn't been fully initialized.
+		JamValueRef leafPtr = alloca;
+		JamTypeRef leafLLVMType = info->type;
 		TypeIdx typeAtLevel = varTy;
-		values.push_back(outerValue);
 		TypeIdx leafFieldType = kNoType;
 		for (size_t i = 0; i < path.size(); i++) {
 			const auto *curInfo = ctx.lookupStruct(typeAtLevel);
@@ -971,34 +972,24 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 				                         sp.get(path[i]) + "' on non-struct");
 			}
 			const std::string &fieldName = sp.get(path[i]);
-			pathNames.push_back(fieldName);
 			int idx = ctx.getFieldIndex(curInfo->name, fieldName);
 			if (idx < 0) {
 				throw std::runtime_error("Unknown field '" + fieldName +
 				                         "' in " + curInfo->name);
 			}
-			indices.push_back(static_cast<unsigned>(idx));
-			if (i + 1 < path.size()) {
-				JamValueRef inner = JamLLVMBuildExtractValue(
-				    ctx.getBuilder(), values.back(),
-				    static_cast<unsigned>(idx), fieldName.c_str());
-				values.push_back(inner);
-				typeAtLevel = curInfo->fields[idx].second;
-			} else {
-				leafFieldType = curInfo->fields[idx].second;
+			leafPtr = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), leafLLVMType, leafPtr,
+			    static_cast<unsigned>(idx), fieldName.c_str());
+			typeAtLevel = curInfo->fields[idx].second;
+			leafLLVMType = ctx.getLLVMType(typeAtLevel);
+			if (i + 1 == path.size()) {
+				leafFieldType = typeAtLevel;
 			}
 		}
 
 		JamTypeRef expected = ctx.getLLVMType(leafFieldType);
 		JamValueRef newValue = coerceTo(ctx, rhsVal, expected);
-
-		for (size_t i = path.size(); i > 0; i--) {
-			newValue = JamLLVMBuildInsertValue(
-			    ctx.getBuilder(), values[i - 1], newValue, indices[i - 1],
-			    pathNames[i - 1].c_str());
-		}
-
-		JamLLVMBuildStore(ctx.getBuilder(), newValue, alloca);
+		JamLLVMBuildStore(ctx.getBuilder(), newValue, leafPtr);
 		return rhsVal;
 	}
 
@@ -2069,10 +2060,13 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 		    "Direct member access codegen not yet implemented");
 	}
 
+	// Walk the field chain with struct GEPs and load only the leaf field —
+	// the previous code loaded the whole struct and walked it with
+	// extractvalue, which is N×fieldSize of pointless memory traffic in
+	// debug builds and reads poison from any uninitialized fields.
 	JamValueRef alloca = ctx.getVariable(varName);
-	JamValueRef value = JamLLVMBuildLoad(ctx.getBuilder(), info->type, alloca,
-	                                     varName.c_str());
-
+	JamValueRef leafPtr = alloca;
+	JamTypeRef leafLLVMType = info->type;
 	TypeIdx currentType = varTy;
 	for (StringIdx fldId : path) {
 		const auto *curInfo = ctx.lookupStruct(currentType);
@@ -2086,12 +2080,13 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 			throw std::runtime_error("Unknown field '" + fieldName +
 			                         "' in struct " + curInfo->name);
 		}
-		value = JamLLVMBuildExtractValue(ctx.getBuilder(), value,
-		                                 static_cast<unsigned>(idx),
-		                                 fieldName.c_str());
+		leafPtr = JamLLVMBuildStructGEP(ctx.getBuilder(), leafLLVMType,
+		                                leafPtr, static_cast<unsigned>(idx),
+		                                fieldName.c_str());
 		currentType = curInfo->fields[idx].second;
+		leafLLVMType = ctx.getLLVMType(currentType);
 	}
-	return value;
+	return JamLLVMBuildLoad(ctx.getBuilder(), leafLLVMType, leafPtr, "field");
 	(void)n;
 }
 
