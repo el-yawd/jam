@@ -1,0 +1,112 @@
+const { assert } = import("test");
+
+// MVS P1: parser-only support for parameter mode keywords.
+//
+// These tests verify that the parser accepts the four parameter modes
+// (default = let, mut, move, undefined) and that programs using them
+// compile and run identically to the same programs without the mode
+// annotations. Semantic enforcement (init analysis, exclusivity,
+// scope-escape, drop synthesis) lands in P2 and beyond. See docs/MVS.md.
+
+// --- Default mode (no keyword): read-only borrow ---
+fn readDefault(x: u32) u32 {
+    return x;
+}
+
+// --- mut: exclusive read-write borrow ---
+fn modifyMut(x: mut u32) u32 {
+    x = x + 1;
+    return x;
+}
+
+// --- move: consume ownership ---
+fn moveValue(buf: move u32) u32 {
+    return buf;
+}
+
+// --- undefined: write to uninitialized destination ---
+fn writeUndef(out: undefined u32) u32 {
+    out = 42;
+    return out;
+}
+
+// --- All four modes mixed in one signature ---
+fn mixedModes(a: u32, b: mut u32, c: move u32, d: undefined u32) u32 {
+    b = b + 1;
+    d = 100;
+    return a + b + c + d;
+}
+
+// --- Mode applied to a pointer-typed parameter ---
+// `mut *mut u32` reads as: mut-mode borrow of a pointer-to-mut-u32.
+// The mode keyword sits after `:`; the pointer's own `mut` qualifier
+// stays inside the type. No ambiguity (pointer types start with `*`).
+fn modifyMutPtr(p: mut *mut u32) u32 {
+    return p.*;
+}
+
+// --- Parameter named `out` is allowed: `out` is not a reserved word ---
+fn paramNamedOut(out: u32) u32 {
+    return out;
+}
+
+// --- Mode applied to an array type ---
+// Declared but not invoked in P2 — calling a function with an
+// `undefined`-mode parameter requires callsite mode propagation, which
+// lands in P4. The signature alone exercises the parser.
+fn writeArray(arr: undefined [4]u8) u8 {
+    arr[0] = 1;
+    arr[1] = 2;
+    arr[2] = 3;
+    arr[3] = 4;
+    return arr[2];
+}
+
+// --- Local helper for the test path (no undefined-mode in signature) ---
+fn fillThenReadHelper() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 1;
+    arr[1] = 2;
+    arr[2] = 3;
+    arr[3] = 4;
+    return arr[2];
+}
+
+// --- Tests ---
+
+tfn readDefaultParses() {
+    assert(readDefault(7), 7);
+}
+
+tfn modifyMutParses() {
+    assert(modifyMut(10), 11);
+}
+
+tfn moveValueParses() {
+    assert(moveValue(99), 99);
+}
+
+tfn writeUndefParses() {
+    assert(writeUndef(0), 42);
+}
+
+tfn mixedModesParses() {
+    var initial: u32 = 50;
+    assert(mixedModes(1, 2, 3, initial), 107);
+}
+
+tfn modifyMutPtrParses() {
+    var x: u32 = 33;
+    var p: *mut u32 = &x;
+    assert(modifyMutPtr(p), 33);
+}
+
+tfn paramNamedOutParses() {
+    assert(paramNamedOut(123), 123);
+}
+
+tfn writeArrayParses() {
+    // P4 will let us call writeArray with `undefined` callsite propagation.
+    // Until then, exercise the equivalent body via a helper.
+    assert(fillThenReadHelper(), 3);
+}

@@ -1,0 +1,145 @@
+const { assert } = import("test");
+
+// MVS P2: definite-initialization analysis. These tests exercise programs
+// that the analyzer must accept — they correctly initialize bindings
+// before reading them on every reachable control-flow path.
+//
+// Programs that should *fail* the analysis (must-fail tests) require a
+// dedicated test runner — that infrastructure lands in P7. Until then,
+// must-fail behavior is verified manually with one-off bad-input files.
+
+// --- Direct init then read ---
+fn directInitRead() u32 {
+    var x: u32 = 5;
+    return x;
+}
+
+// --- Declare undefined, assign, then read ---
+fn undefinedThenAssign() u32 {
+    var x: u32 = undefined;
+    x = 42;
+    return x;
+}
+
+// --- Multiple bindings, all initialized ---
+fn multipleBindings() u32 {
+    var a: u32 = 1;
+    var b: u32 = 2;
+    var c: u32 = 3;
+    return a + b + c;
+}
+
+// --- if/else with both branches initing ---
+fn ifElseBothInit() u32 {
+    var x: u32 = undefined;
+    if (true) {
+        x = 100;
+    } else {
+        x = 200;
+    }
+    return x;
+}
+
+// --- Re-assignment after init is fine ---
+fn reassign() u32 {
+    var x: u32 = 10;
+    x = 20;
+    x = 30;
+    return x;
+}
+
+// --- Partial init via field write counts as init in P2 (imprecise but
+//     matches existing array/struct usage patterns) ---
+const Vec = struct {
+    x: u32,
+    y: u32,
+};
+
+fn partialInitStruct() u32 {
+    var v: Vec = undefined;
+    v.x = 7;
+    v.y = 11;
+    return v.x + v.y;
+}
+
+fn partialInitArray() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    return arr[2];
+}
+
+// --- For-loop body fills array; post-loop read is fine (P2 assumes the
+//     range body executes at least once) ---
+fn forLoopFill() u8 {
+    var arr: [16]u8 = undefined;
+    for i in 0:16 {
+        arr[i] = i;
+    }
+    return arr[7];
+}
+
+// --- Address-of an uninit binding is allowed; `&x` does not read x.
+//     P2 does not track writes through pointers, so we explicitly init
+//     x by direct assignment after taking its address.
+fn addressOfUninit() u8 {
+    var x: u8 = undefined;
+    var p: *mut u8 = &x;     // & does not trigger a read check on x
+    x = 99;
+    return x;
+}
+
+// --- Return inside one branch; the other branch reaches the next stmt ---
+fn returnInBranch(b: bool) u32 {
+    var x: u32 = undefined;
+    if (b) {
+        return 0;
+    } else {
+        x = 50;
+    }
+    return x;
+}
+
+// --- Tests ---
+
+tfn directInitReadOK() {
+    assert(directInitRead(), 5);
+}
+
+tfn undefinedThenAssignOK() {
+    assert(undefinedThenAssign(), 42);
+}
+
+tfn multipleBindingsOK() {
+    assert(multipleBindings(), 6);
+}
+
+tfn ifElseBothInitOK() {
+    assert(ifElseBothInit(), 100);
+}
+
+tfn reassignOK() {
+    assert(reassign(), 30);
+}
+
+tfn partialInitStructOK() {
+    assert(partialInitStruct(), 18);
+}
+
+tfn partialInitArrayOK() {
+    assert(partialInitArray(), 30);
+}
+
+tfn forLoopFillOK() {
+    assert(forLoopFill(), 7);
+}
+
+tfn addressOfUninitOK() {
+    assert(addressOfUninit(), 99);
+}
+
+tfn returnInBranchOK() {
+    assert(returnInBranch(false), 50);
+}

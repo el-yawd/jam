@@ -2002,7 +2002,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	std::vector<JamTypeRef> ArgTypes;
 	if (!isTest) {
 		for (const auto &arg : Args) {
-			ArgTypes.push_back(ctx.getLLVMType(arg.second));
+			ArgTypes.push_back(ctx.getLLVMType(arg.Type));
 		}
 	}
 
@@ -2025,7 +2025,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	if (isExtern || isExport || Name == "main") {
 		JamLLVMSetFunctionCallConv(F, JAM_CALLCONV_C);
 		for (unsigned i = 0; i < Args.size(); i++) {
-			if (Args[i].second == BuiltinType::Bool) {
+			if (Args[i].Type == BuiltinType::Bool) {
 				JamLLVMAddParamAttrZeroExt(F, i);
 			}
 		}
@@ -2034,7 +2034,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 
 	for (unsigned i = 0; i < Args.size(); i++) {
 		JamValueRef param = JamLLVMGetParam(F, i);
-		JamLLVMSetValueName(param, Args[i].first.c_str());
+		JamLLVMSetValueName(param, Args[i].Name.c_str());
 	}
 
 	return F;
@@ -2055,13 +2055,13 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 
 	ctx.clearVariables();
 	for (unsigned i = 0; i < Args.size(); i++) {
-		JamTypeRef ArgType = ctx.getLLVMType(Args[i].second);
+		JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
 		JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), ArgType,
-		                                        Args[i].first.c_str());
+		                                        Args[i].Name.c_str());
 		JamValueRef param = JamLLVMGetParam(F, i);
 		JamLLVMBuildStore(ctx.getBuilder(), param, Alloca);
-		ctx.setVariable(Args[i].first, Alloca);
-		ctx.setVariableType(Args[i].first, Args[i].second);
+		ctx.setVariable(Args[i].Name, Alloca);
+		ctx.setVariableType(Args[i].Name, Args[i].Type);
 	}
 
 	for (NodeIdx stmt : Body) { codegenNode(ctx, stmt); }

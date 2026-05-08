@@ -16,12 +16,42 @@
 
 class JamCodegenContext;
 
+// Parameter passing mode under MVS (mutable value semantics).
+//
+// Default (Let)      — read-only borrow; param is initialized at entry,
+//                      cannot be reassigned, caller's binding unchanged.
+// Mut                — exclusive read-write borrow; param is initialized
+//                      at entry, may be read and written, caller's binding
+//                      stays initialized after the call.
+// Move               — consume ownership; caller's binding becomes
+//                      uninitialized after the call.
+// Undefined          — write-to-uninit destination; param is uninitialized
+//                      at entry, function must initialize before any return,
+//                      caller's binding becomes initialized after the call.
+//
+// See docs/MVS.md §2 for the full specification. Modes are static-only;
+// the calling convention is unchanged at the LLVM IR level (see §7).
+enum class ParamMode : uint8_t {
+	Let = 0,
+	Mut,
+	Move,
+	Undefined,
+};
+
+// One function parameter. Mode defaults to Let when not annotated at the
+// declaration site (the common case for read-only parameters).
+struct Param {
+	std::string Name;
+	TypeIdx Type;
+	ParamMode Mode = ParamMode::Let;
+};
+
 // Function declaration. The body is a sequence of flat-AST node indices
 // owned by the shared NodeStore on JamCodegenContext.
 class FunctionAST {
   public:
 	std::string Name;
-	std::vector<std::pair<std::string, TypeIdx>> Args;  // (name, type)
+	std::vector<Param> Args;
 	TypeIdx ReturnType;  // kNoType if void / unspecified
 	std::vector<NodeIdx> Body;
 	bool isExtern;
@@ -30,11 +60,9 @@ class FunctionAST {
 	bool isTest;
 	bool isVarArgs;
 
-	FunctionAST(std::string Name,
-	            std::vector<std::pair<std::string, TypeIdx>> Args,
-	            TypeIdx ReturnType, std::vector<NodeIdx> Body,
-	            bool isExtern = false, bool isExport = false,
-	            bool isPub = false, bool isTest = false,
+	FunctionAST(std::string Name, std::vector<Param> Args, TypeIdx ReturnType,
+	            std::vector<NodeIdx> Body, bool isExtern = false,
+	            bool isExport = false, bool isPub = false, bool isTest = false,
 	            bool isVarArgs = false)
 	    : Name(std::move(Name)), Args(std::move(Args)), ReturnType(ReturnType),
 	      Body(std::move(Body)), isExtern(isExtern), isExport(isExport),

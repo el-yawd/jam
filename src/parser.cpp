@@ -815,7 +815,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 
 	consume(TOK_OPEN_PAREN, "Expected '(' after function name");
 
-	std::vector<std::pair<std::string, TypeIdx>> args;
+	std::vector<Param> args;
 	bool isVarArgs = false;
 	if (!check(TOK_CLOSE_PAREN)) {
 		do {
@@ -831,8 +831,26 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 			std::string paramName = previous().lexeme;
 
 			consume(TOK_COLON, "Expected ':' after parameter name");
+
+			// Optional mode keyword between `:` and the type.
+			//   x: u32             — Let (default, read-only)
+			//   x: mut u32         — Mut (exclusive read-write)
+			//   x: move List       — Move (consume ownership)
+			//   x: undefined Buf   — Undefined (write to uninit destination)
+			//
+			// `*mut T` pointer types start with `*`, not `mut`, so there is
+			// no conflict with the existing pointer syntax. See MVS.md §2.
+			ParamMode mode = ParamMode::Let;
+			if (match(TOK_MUT)) {
+				mode = ParamMode::Mut;
+			} else if (match(TOK_MOVE)) {
+				mode = ParamMode::Move;
+			} else if (match(TOK_UNDEFINED)) {
+				mode = ParamMode::Undefined;
+			}
+
 			TypeIdx paramType = parseType();
-			args.emplace_back(std::move(paramName), paramType);
+			args.push_back(Param{std::move(paramName), paramType, mode});
 		} while (match(TOK_COMMA));
 	}
 

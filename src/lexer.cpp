@@ -134,6 +134,8 @@ void Lexer::identifier() {
 		addToken(TOK_AS, text);
 	} else if (text == "undefined") {
 		addToken(TOK_UNDEFINED, text);
+	} else if (text == "move") {
+		addToken(TOK_MOVE, text);
 	} else if (text == "u1" || text == "u8" || text == "u16" || text == "u32" ||
 	           text == "u64" || text == "i8" || text == "i16" ||
 	           text == "i32" || text == "i64" || text == "f32" ||

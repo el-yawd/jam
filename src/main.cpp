@@ -22,6 +22,7 @@
 #include "ast.h"
 #include "cabi.h"
 #include "codegen.h"
+#include "init_analysis.h"
 #include "jam_llvm.h"
 #include "lexer.h"
 #include "module_resolver.h"
@@ -426,6 +427,27 @@ static int compileAndRun(const std::string &filename,
 		for (auto &func : importedModule->Functions) {
 			if (func->isPub) { func->defineBody(codegenCtx); }
 		}
+	}
+
+	// MVS P2: definite-init analysis runs after every prototype is in
+	// scope but before any body is codegen'd. Errors abort compilation
+	// — bodies of bad functions are never lowered to LLVM IR.
+	{
+		std::vector<jam::init_analysis::Diagnostic> allDiags;
+		for (FunctionAST *function : mainModuleEmits) {
+			if (function->isExtern) continue;
+			auto diags = jam::init_analysis::analyze(
+			    *function, codegenCtx.getNodeStore(),
+			    codegenCtx.getStringPool(), tokens);
+			for (auto &d : diags) {
+				std::cerr << filename << ":" << d.line
+				          << ": error: " << d.message << "\n";
+			}
+			allDiags.insert(allDiags.end(),
+			                std::make_move_iterator(diags.begin()),
+			                std::make_move_iterator(diags.end()));
+		}
+		if (!allDiags.empty()) { return 1; }
 	}
 
 	// Pass 2b: bodies for the main module's functions.
