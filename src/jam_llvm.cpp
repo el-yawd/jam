@@ -409,6 +409,19 @@ void JamLLVMAddRetAttrZeroExt(JamFunctionRef func) {
 	UNWRAP_FUNCTION(func)->addRetAttr(llvm::Attribute::ZExt);
 }
 
+void JamLLVMAddParamAttrSret(JamFunctionRef func, unsigned argIdx,
+                             JamTypeRef pointeeType, unsigned align) {
+	llvm::Function *F = UNWRAP_FUNCTION(func);
+	llvm::LLVMContext &ctx = F->getContext();
+	llvm::Type *ty = UNWRAP_TYPE(pointeeType);
+	F->addParamAttr(argIdx,
+	                llvm::Attribute::getWithStructRetType(ctx, ty));
+	F->addParamAttr(argIdx, llvm::Attribute::NoAlias);
+	F->addParamAttr(argIdx,
+	                llvm::Attribute::getWithAlignment(
+	                    ctx, llvm::Align(align)));
+}
+
 void JamLLVMSetValueName(JamValueRef val, const char *name) {
 	UNWRAP_VALUE(val)->setName(name);
 }

@@ -47,20 +47,23 @@ fn fillThenReturnValue(out: undefined u32) u32 {
 // --- Tests ---
 
 tfn doubleByValueOK() {
-    assert(doubleByValue(5), 10);
+    var n: u32 = 5;
+    assert(doubleByValue(&n), 10);
 }
 
 tfn pickFieldAOK() {
     var p: Pair = undefined;
     p.a = 9;
     p.b = 0;
-    assert(pickFieldA(p), 10);
+    assert(pickFieldA(&p), 10);
 }
 
 tfn computeFromMutOK() {
-    assert(computeFromMut(7), 108);
+    var n: u32 = 7;
+    assert(computeFromMut(&n), 108);
 }
 
 tfn fillThenReturnValueOK() {
-    assert(fillThenReturnValue(0), 42);
+    var x: u32 = undefined;
+    assert(fillThenReturnValue(&x), 42);
 }

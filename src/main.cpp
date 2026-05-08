@@ -419,6 +419,9 @@ static int compileAndRun(const std::string &filename,
 		}
 		function->declarePrototype(codegenCtx);
 		mainModuleEmits.push_back(function.get());
+		// P9: register by source-level name so call codegen can recover
+		// parameter modes for callsite ABI decisions.
+		codegenCtx.registerFunctionAST(function->Name, function.get());
 	}
 
 	// Pass 2a: bodies for pub functions in imported modules.

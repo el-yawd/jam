@@ -49,8 +49,9 @@ fn letCaller() u32 {
     return first + second;
 }
 
-// --- mut arg: caller passes by-value today (no & required pre-P9);
-//     post-call the binding is still Init. ---
+// --- mut arg: caller passes `&n` (pointer to its storage); the function
+//     mutates through the pointer and the caller observes the change.
+//     P9.2/P9.3 made `mut` lower as `ptr align A` at the LLVM level.
 fn doubleIt(x: mut u32) u32 {
     x = x + x;
     return x;
@@ -58,7 +59,9 @@ fn doubleIt(x: mut u32) u32 {
 
 fn mutCaller() u32 {
     var n: u32 = 7;
-    var doubled: u32 = doubleIt(n);
+    var doubled: u32 = doubleIt(&n);
+    // Post P9, n is now 14 in the caller (the function mutated it
+    // through the pointer). read(n) sees the new value.
     var stillUsable: u32 = read(n);
     return doubled + stillUsable;
 }
@@ -91,7 +94,10 @@ tfn letCallerOK() {
 }
 
 tfn mutCallerOK() {
-    assert(mutCaller(), 22);
+    // doubleIt(&n) mutates caller's n: 7 → 14. Returns 14.
+    // read(n) sees the new value, returns n + 1 = 15.
+    // Total: 14 + 15 = 29.
+    assert(mutCaller(), 29);
 }
 
 tfn mixedCallerOK() {

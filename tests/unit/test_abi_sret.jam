@@ -1,0 +1,61 @@
+const { assert } = import("test");
+
+// MVS P9.6: aggregates larger than 16 bytes are returned via sret —
+// the caller pre-allocates a result slot, the function takes its
+// address as a leading `ptr noalias sret(%T) align A` argument, and
+// stores the result through that pointer before returning void. From
+// the source perspective this is invisible: `var x: Big = makeBig(N);`
+// behaves like a normal value-typed return.
+
+const Big = struct {
+    a: u64,
+    b: u64,
+    c: u64,
+};
+
+fn makeBig(seed: u64) Big {
+    var b: Big = undefined;
+    b.a = seed;
+    b.b = seed * 2;
+    b.c = seed * 3;
+    return b;
+}
+
+// sret call inside a larger expression — chains: the load of the sret
+// slot becomes a regular value, available for further uses.
+fn sumOfMakeBig(seed: u64) u64 {
+    var b: Big = makeBig(seed);
+    return b.a + b.b + b.c;
+}
+
+// sret callee that takes a large parameter (P9.5 + P9.6 together).
+fn passThroughBig(b: Big) Big {
+    var copy: Big = undefined;
+    copy.a = b.a + 1;
+    copy.b = b.b + 1;
+    copy.c = b.c + 1;
+    return copy;
+}
+
+tfn makeBigOK() {
+    var b: Big = makeBig(7);
+    assert(b.a, 7);
+    assert(b.b, 14);
+    assert(b.c, 21);
+}
+
+tfn sumOfMakeBigOK() {
+    // makeBig(5) → {5, 10, 15}; sum = 30.
+    assert(sumOfMakeBig(5) as u32, 30);
+}
+
+tfn passThroughBigOK() {
+    var src: Big = undefined;
+    src.a = 100;
+    src.b = 200;
+    src.c = 300;
+    var got: Big = passThroughBig(src);
+    assert(got.a, 101);
+    assert(got.b, 201);
+    assert(got.c, 301);
+}

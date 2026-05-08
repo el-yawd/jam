@@ -87,7 +87,8 @@ tfn moveValueParses() {
 }
 
 tfn writeUndefParses() {
-    assert(writeUndef(0), 42);
+    var x: u32 = undefined;
+    assert(writeUndef(&x), 42);
 }
 
 tfn mixedModesParses() {

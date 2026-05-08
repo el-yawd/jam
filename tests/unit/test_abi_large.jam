@@ -1,0 +1,79 @@
+const { assert } = import("test");
+
+// MVS P9.5: aggregates larger than 16 bytes lower as `ptr align A` even
+// when the parameter mode is the default `let`. The caller does NOT
+// write `&x` — the address-passing is implicit, preserving by-value
+// source semantics while avoiding the by-value copy at the LLVM level.
+
+const Big = struct {
+    a: u64,
+    b: u64,
+    c: u64,
+};
+
+const Wide = struct {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+    e: u32,
+    f: u32,
+};
+
+fn sumBig(b: Big) u64 {
+    return b.a + b.b + b.c;
+}
+
+fn sumWide(w: Wide) u32 {
+    return w.a + w.b + w.c + w.d + w.e + w.f;
+}
+
+// Move-mode of a large aggregate: same ABI as let-mode at the callee
+// (the analyzer marks the caller's binding Uninit afterwards, but the
+// runtime ABI is identical).
+fn consumeBig(b: move Big) u64 {
+    return b.a + b.b + b.c;
+}
+
+// Sanity: a function taking a large aggregate as an inner argument
+// alongside scalars.
+fn pickField(prefix: u32, b: Big) u64 {
+    return prefix as u64 + b.b;
+}
+
+tfn sumBigOK() {
+    var x: Big = undefined;
+    x.a = 10;
+    x.b = 20;
+    x.c = 30;
+    assert(sumBig(x), 60);
+}
+
+tfn sumWideOK() {
+    var w: Wide = undefined;
+    w.a = 1;
+    w.b = 2;
+    w.c = 3;
+    w.d = 4;
+    w.e = 5;
+    w.f = 6;
+    assert(sumWide(w), 21);
+}
+
+tfn consumeBigOK() {
+    var x: Big = undefined;
+    x.a = 100;
+    x.b = 200;
+    x.c = 300;
+    assert(consumeBig(x), 600);
+    // After consumeBig, x is moved-out — the analyzer would reject any
+    // subsequent read of x. We just don't read it.
+}
+
+tfn pickFieldOK() {
+    var x: Big = undefined;
+    x.a = 0;
+    x.b = 42;
+    x.c = 0;
+    assert(pickField(8, x), 50);
+}

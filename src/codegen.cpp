@@ -395,6 +395,21 @@ void JamCodegenContext::popDropScope() {
 
 void JamCodegenContext::clearDrops() { dropScopes.clear(); }
 
+// P9: function-AST lookup. main.cpp registers each Jam-defined function
+// by source-level name so call codegen can recover the parameter modes
+// and route ByPointer-classified Let/Move args through implicit
+// address-of at the call site.
+void JamCodegenContext::registerFunctionAST(const std::string &name,
+                                            const FunctionAST *fn) {
+	functionAsts[name] = fn;
+}
+
+const FunctionAST *
+JamCodegenContext::getFunctionAST(const std::string &name) const {
+	auto it = functionAsts.find(name);
+	return (it == functionAsts.end()) ? nullptr : it->second;
+}
+
 const JamCodegenContext::ModuleConstInfo *
 JamCodegenContext::getModuleConst(const std::string &name) const {
 	auto it = moduleConsts.find(name);

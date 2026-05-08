@@ -195,6 +195,16 @@ JAM_EXTERN_C bool JamLLVMFunctionIsVarArg(JamFunctionRef func);
 JAM_EXTERN_C void JamLLVMAddParamAttrZeroExt(JamFunctionRef func,
                                              unsigned argIdx);
 JAM_EXTERN_C void JamLLVMAddRetAttrZeroExt(JamFunctionRef func);
+
+// P9.6: mark a function parameter as the sret (struct-return) slot.
+// Equivalent to LLVM `sret(<type>) align <a> noalias`. The argument
+// must be `ptr`-typed; the pointee type and alignment are passed
+// explicitly. Used by codegen for functions returning aggregates whose
+// size exceeds the by-value threshold.
+JAM_EXTERN_C void JamLLVMAddParamAttrSret(JamFunctionRef func,
+                                          unsigned argIdx,
+                                          JamTypeRef pointeeType,
+                                          unsigned align);
 JAM_EXTERN_C void JamLLVMSetValueName(JamValueRef val, const char *name);
 JAM_EXTERN_C JamTypeRef JamLLVMGetReturnType(JamFunctionRef func);
 JAM_EXTERN_C bool JamLLVMVerifyFunction(JamFunctionRef func);

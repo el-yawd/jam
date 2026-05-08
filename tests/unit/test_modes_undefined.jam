@@ -56,27 +56,32 @@ fn mixedModesUndef(a: u32, b: mut u32, out: undefined u32) u32 {
 // --- Tests ---
 
 tfn writeOutOK() {
-    assert(writeOut(0), 42);
+    var x: u32 = undefined;
+    assert(writeOut(&x), 42);
 }
 
 tfn writeOutStructOK() {
     var seed: Vec = undefined;
     seed.x = 0;
     seed.y = 0;
-    assert(writeOutStruct(seed), 18);
+    assert(writeOutStruct(&seed), 18);
 }
 
 tfn writeOutArrayOK() {
     var seed: [4]u8 = undefined;
     seed[0] = 0;
-    assert(writeOutArray(seed), 3);
+    assert(writeOutArray(&seed), 3);
 }
 
 tfn writeOutInBothOK() {
-    assert(writeOutInBoth(true, 0), 100);
-    assert(writeOutInBoth(false, 0), 200);
+    var x: u32 = undefined;
+    assert(writeOutInBoth(true, &x), 100);
+    var y: u32 = undefined;
+    assert(writeOutInBoth(false, &y), 200);
 }
 
 tfn mixedModesUndefOK() {
-    assert(mixedModesUndef(10, 5, 0), 16);
+    var b: u32 = 5;
+    var out: u32 = undefined;
+    assert(mixedModesUndef(10, &b, &out), 16);
 }

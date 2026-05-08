@@ -11,6 +11,7 @@
 #include "jam_llvm.h"
 #include <cstdint>
 #include <stdexcept>
+#include "abi.h"
 #include <string>
 #include <vector>
 
@@ -23,6 +24,10 @@ JamBasicBlockRef CurrentLoopBreak = nullptr;
 // if/match scopes — get their drops fired before the branch leaves the
 // loop. SIZE_MAX means "no enclosing loop body active here".
 size_t CurrentLoopBodyScopeIdx = SIZE_MAX;
+
+// Forward declaration so codegenCall (P9.5 auto-address path) can call
+// codegenAddressOf which is defined further down in the file.
+static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n);
 
 // ---------------------------------------------------------------------------
 // Local helpers
@@ -141,10 +146,17 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 		TypeIdx varTy = ctx.getVariableType(name);
 		const TypeKey &k = ctx.getTypePool().get(varTy);
 
+		// Resolve the binding's LLVM type from the source-level TypeIdx
+		// rather than from the alloca instruction's allocated-type. This
+		// keeps the codegen working uniformly whether the variable is
+		// backed by an `alloca` (locals, value-passed params) or by a
+		// function argument that's already a pointer to caller storage
+		// (P9 mode-aware ABI for `mut` / `undefined` params).
+		JamTypeRef allocatedType = ctx.getLLVMType(varTy);
+
 		if (k.kind == TypeKind::PtrMany) {
 			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
 			outElemType = ctx.getLLVMType(elemTy);
-			JamTypeRef allocatedType = JamLLVMGetAllocatedType(alloca);
 			JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(),
 			                                      allocatedType, alloca,
 			                                      name.c_str());
@@ -157,7 +169,6 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 			    "or declare as `[*]T` for many-item indexing");
 		}
 
-		JamTypeRef allocatedType = JamLLVMGetAllocatedType(alloca);
 		outElemType = JamLLVMGetArrayElementType(allocatedType);
 		return JamLLVMBuildArrayGEP(ctx.getBuilder(), allocatedType, alloca,
 		                            idxVal, "idxgep");
@@ -660,21 +671,97 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		throw std::runtime_error("Unknown function referenced: " + callee);
 	}
 
+	// P9.5: when the callee's parameter is a Let/Move-mode aggregate that
+	// the ABI classifier sends ByPointer (size > 16 B), the call site
+	// implicitly passes the address of the arg's storage rather than the
+	// value. The user does NOT write `&` for these — by-value semantics
+	// are preserved at the source level; the pointer is purely an ABI
+	// optimization. (Mut and Undefined modes still require explicit `&`
+	// at the call site since their borrow shape is user-visible.)
+	const FunctionAST *calleeAST = ctx.getFunctionAST(callee);
+
+	// P9.6 sret: when the callee returns a large aggregate, the call
+	// site allocates a result slot and passes its address as the
+	// leading argument. The call itself returns void; the "value" of
+	// the call expression is a load from the slot.
+	JamValueRef calleeSretSlot = nullptr;
+	JamTypeRef calleeSretPointee = nullptr;
+	if (calleeAST && !calleeAST->isExtern && calleeAST->ReturnType != kNoType) {
+		jam::abi::ReturnABI calleeRabi =
+		    jam::abi::classifyReturn(calleeAST->ReturnType, ctx);
+		if (calleeRabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
+			calleeSretPointee = ctx.getLLVMType(calleeAST->ReturnType);
+			calleeSretSlot = JamLLVMBuildAlloca(
+			    ctx.getBuilder(), calleeSretPointee, "sretslot");
+		}
+	}
+
+	// The user's arg count needs to match the callee's *source-level*
+	// parameter count. The LLVM declaredParamCount also includes the
+	// sret slot when applicable; compensate so the user-facing error
+	// message matches what the user wrote.
 	unsigned declaredParamCount = JamLLVMCountParams(CalleeF);
+	unsigned userParamCount =
+	    declaredParamCount - (calleeSretSlot != nullptr ? 1u : 0u);
 	bool isVarArg = JamLLVMFunctionIsVarArg(CalleeF);
-	if (isVarArg ? argCount < declaredParamCount
-	             : argCount != declaredParamCount) {
+	if (isVarArg ? argCount < userParamCount
+	             : argCount != userParamCount) {
 		throw std::runtime_error("Incorrect number of arguments passed to " +
 		                         callee);
 	}
 
+	const unsigned calleeSretOffset = (calleeSretSlot != nullptr) ? 1u : 0u;
+
 	std::vector<JamValueRef> ArgsV;
+	if (calleeSretSlot != nullptr) {
+		ArgsV.push_back(calleeSretSlot);
+	}
 	for (unsigned i = 0; i < argCount; i++) {
-		if (i < declaredParamCount) {
-			JamTypeRef expected = JamLLVMTypeOf(JamLLVMGetParam(CalleeF, i));
-			JamValueRef argVal = codegenNode(ctx, args[i], expected);
-			if (!argVal) return nullptr;
-			argVal = coerceTo(ctx, argVal, expected);
+		if (i < userParamCount) {
+			JamTypeRef expected = JamLLVMTypeOf(
+			    JamLLVMGetParam(CalleeF, i + calleeSretOffset));
+
+			bool autoAddress = false;
+			if (calleeAST && i < calleeAST->Args.size()) {
+				const Param &p = calleeAST->Args[i];
+				if (p.Mode == ParamMode::Let || p.Mode == ParamMode::Move) {
+					auto pabi = jam::abi::classifyParam(p.Mode, p.Type, ctx);
+					if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {
+						autoAddress = true;
+					}
+				}
+			}
+
+			JamValueRef argVal;
+			if (autoAddress) {
+				const AstNode &argNode = ctx.getNodeStore().get(args[i]);
+				if (argNode.tag == AstTag::Variable ||
+				    argNode.tag == AstTag::Index ||
+				    argNode.tag == AstTag::MemberAccess) {
+					// lvalue: take its address directly via the same
+					// path that the explicit `&` operator uses.
+					AstNode fakeAddrOf{
+					    AstTag::AddressOf, 0, 0, 0,
+					    static_cast<uint32_t>(args[i]), 0};
+					argVal = codegenAddressOf(ctx, fakeAddrOf);
+				} else {
+					// rvalue: codegen as a value, store into a fresh
+					// stack slot, pass the slot's address.
+					JamTypeRef llvmTy =
+					    ctx.getLLVMType(calleeAST->Args[i].Type);
+					JamValueRef tmp = JamLLVMBuildAlloca(
+					    ctx.getBuilder(), llvmTy, "argtmp");
+					JamValueRef val = codegenNode(ctx, args[i], llvmTy);
+					if (!val) return nullptr;
+					val = coerceTo(ctx, val, llvmTy);
+					JamLLVMBuildStore(ctx.getBuilder(), val, tmp);
+					argVal = tmp;
+				}
+			} else {
+				argVal = codegenNode(ctx, args[i], expected);
+				if (!argVal) return nullptr;
+				argVal = coerceTo(ctx, argVal, expected);
+			}
 			ArgsV.push_back(argVal);
 		} else {
 			JamValueRef argVal = codegenNode(ctx, args[i]);
@@ -685,8 +772,17 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 
 	const char *callName =
 	    JamLLVMTypeIsVoid(JamLLVMGetReturnType(CalleeF)) ? "" : "calltmp";
-	return JamLLVMBuildCall(ctx.getBuilder(), CalleeF, ArgsV.data(),
-	                        ArgsV.size(), callName);
+	JamValueRef callResult = JamLLVMBuildCall(
+	    ctx.getBuilder(), CalleeF, ArgsV.data(), ArgsV.size(), callName);
+
+	// P9.6: when sret was used, the call returned void and the actual
+	// result lives in the pre-allocated slot. Load it so the surrounding
+	// expression sees the value.
+	if (calleeSretSlot != nullptr) {
+		return JamLLVMBuildLoad(ctx.getBuilder(), calleeSretPointee,
+		                        calleeSretSlot, "sretload");
+	}
+	return callResult;
 }
 
 // Forward decls — these helpers are defined further down (alongside
@@ -706,6 +802,24 @@ static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 		JamLLVMBuildRetVoid(ctx.getBuilder());
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	}
+
+	// P9.6: when the enclosing function returns via sret, the codegen
+	// stores the return value into the caller-provided slot rather than
+	// returning by value. The slot's LLVM pointee type tells us what
+	// shape the codegen of the return expression should produce.
+	JamValueRef sretSlot = ctx.getSretSlot();
+	if (sretSlot != nullptr) {
+		JamFunctionRef func = JamLLVMGetBasicBlockParent(
+		    JamLLVMGetInsertBlock(ctx.getBuilder()));
+		(void)func;  // sret functions return void; LLVM-level RetType is void
+		JamValueRef RetVal = codegenNode(ctx, retIdx);
+		if (!RetVal) return nullptr;
+		JamLLVMBuildStore(ctx.getBuilder(), RetVal, sretSlot);
+		emitAllScopeDrops(ctx);
+		JamLLVMBuildRetVoid(ctx.getBuilder());
+		return RetVal;
+	}
+
 	JamFunctionRef func = JamLLVMGetBasicBlockParent(
 	    JamLLVMGetInsertBlock(ctx.getBuilder()));
 	JamTypeRef expected = JamLLVMGetReturnType(func);
@@ -737,7 +851,7 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 		if (!alloca) {
 			throw std::runtime_error("Unknown variable: " + name);
 		}
-		JamTypeRef expected = JamLLVMGetAllocatedType(alloca);
+		JamTypeRef expected = ctx.getLLVMType(ctx.getVariableType(name));
 		JamValueRef rhsVal = codegenNode(ctx, valueIdx, expected);
 		if (!rhsVal) return nullptr;
 		rhsVal = coerceTo(ctx, rhsVal, expected);
@@ -764,7 +878,7 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 			                         name);
 		}
 		JamTypeRef pointeeType = ctx.getLLVMType(pointee);
-		JamTypeRef ptrType = JamLLVMGetAllocatedType(alloca);
+		JamTypeRef ptrType = ctx.getLLVMType(ctx.getVariableType(name));
 		JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(), ptrType,
 		                                      alloca, name.c_str());
 		JamValueRef rhsVal = codegenNode(ctx, valueIdx, pointeeType);
@@ -914,7 +1028,7 @@ static JamValueRef codegenDeref(JamCodegenContext &ctx, const AstNode &n) {
 		throw std::runtime_error("Cannot dereference non-pointer: " + name);
 	}
 	JamTypeRef pointeeType = ctx.getLLVMType(pointee);
-	JamTypeRef ptrType = JamLLVMGetAllocatedType(alloca);
+	JamTypeRef ptrType = ctx.getLLVMType(ctx.getVariableType(name));
 	JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(), ptrType, alloca,
 	                                      name.c_str());
 	return JamLLVMBuildLoad(ctx.getBuilder(), pointeeType, ptrVal, "deref");
@@ -1039,9 +1153,12 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	return Alloca;
 }
 
-// P8.1: emit a single drop call for one tracked binding. Loads the
-// binding's value out of its alloca (until P9's mode-aware ABI lowers
-// `mut self` as a pointer) and calls the mangled drop fn.
+// P8.1 + P9: emit a single drop call for one tracked binding. P9's
+// mode-aware ABI now lowers `fn drop(self: mut T)` as a pointer-typed
+// parameter, so the call site passes the binding's storage address
+// directly — no load-value-then-pass-by-value workaround. The drop fn
+// reads/writes self through the pointer and the caller's storage is
+// genuinely affected.
 static void emitOneDrop(JamCodegenContext &ctx,
                         const JamCodegenContext::DropEntry &e) {
 	std::string mangled = mangledFunctionName(*e.dropFn, ctx.getTypePool(),
@@ -1049,9 +1166,7 @@ static void emitOneDrop(JamCodegenContext &ctx,
 	JamFunctionRef dropFn =
 	    JamLLVMGetFunction(ctx.getModule(), mangled.c_str());
 	if (!dropFn) return;
-	JamValueRef val = JamLLVMBuildLoad(ctx.getBuilder(), e.llvmType,
-	                                   e.alloca, "drop_self");
-	JamValueRef args[1] = {val};
+	JamValueRef args[1] = {e.alloca};
 	JamLLVMBuildCall(ctx.getBuilder(), dropFn, args, 1, "");
 }
 
@@ -1237,6 +1352,16 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 
 	JamValueRef OldVal = ctx.getVariable(varName);
 	ctx.setVariable(varName, Alloca);
+	// Record a source-level TypeIdx for the loop variable so subsequent
+	// reads via codegenNode(Variable) can recover the LLVM load type.
+	// The variable's type is whatever integer the range bounds inferred
+	// to; treat it as unsigned by default (range syntax is `0:N`).
+	if (JamLLVMTypeIsInteger(VarType)) {
+		ctx.setVariableType(
+		    varName,
+		    ctx.getTypePool().internInt(
+		        static_cast<uint16_t>(JamLLVMGetIntTypeWidth(VarType)), false));
+	}
 
 	JamBasicBlockRef CondBB = JamLLVMAppendBasicBlock(TheFunction, "forcond");
 	JamBasicBlockRef LoopBB = JamLLVMAppendBasicBlock(TheFunction, "forloop");
@@ -1986,7 +2111,8 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
 		JamValueRef V = ctx.getVariable(name);
 		if (V) {
-			JamTypeRef LoadType = JamLLVMGetAllocatedType(V);
+			JamTypeRef LoadType =
+			    ctx.getLLVMType(ctx.getVariableType(name));
 			return JamLLVMBuildLoad(ctx.getBuilder(), LoadType, V,
 			                        name.c_str());
 		}
@@ -2159,16 +2285,50 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	std::string funcName =
 	    mangledFunctionName(*this, ctx.getTypePool(), ctx.getStringPool());
 
+	// P9.6 return ABI: large aggregates returned by Jam-defined fns
+	// (not extern, not test) are sret — caller passes a leading
+	// `ptr sret(%T) align A` arg, callee stores into it and returns
+	// void. Small returns stay direct.
+	jam::abi::ReturnABI rabi =
+	    (isTest || isExtern)
+	        ? jam::abi::ReturnABI{jam::abi::ReturnABI::Kind::Direct,
+	                              (isTest || ReturnType == kNoType)
+	                                  ? ctx.getVoidType()
+	                                  : ctx.getLLVMType(ReturnType),
+	                              0}
+	        : jam::abi::classifyReturn(ReturnType, ctx);
+
 	std::vector<JamTypeRef> ArgTypes;
+	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
+		// sret slot leads the LLVM arg list.
+		ArgTypes.push_back(
+		    JamLLVMPointerType(ctx.getLLVMType(ReturnType), 0));
+	}
 	if (!isTest) {
 		for (const auto &arg : Args) {
-			ArgTypes.push_back(ctx.getLLVMType(arg.Type));
+			// P9 mode-aware ABI. classifyParam decides per-(mode, type)
+			// whether the parameter is passed by value (the type's natural
+			// LLVM representation) or by pointer.
+			//
+			// `extern fn` declarations use Let-mode parameters with pointer
+			// types like `*const T` written explicitly; classifyParam
+			// returns ByValue for pointer-typed scalars, so the C ABI
+			// continues to be respected.
+			jam::abi::ParamABI pabi =
+			    jam::abi::classifyParam(arg.Mode, arg.Type, ctx);
+			if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {
+				ArgTypes.push_back(JamLLVMPointerType(
+				    ctx.getLLVMType(arg.Type), 0));
+			} else {
+				ArgTypes.push_back(pabi.llvmType);
+			}
 		}
 	}
 
-	JamTypeRef RetType = (isTest || ReturnType == kNoType)
-	                         ? ctx.getVoidType()
-	                         : ctx.getLLVMType(ReturnType);
+	JamTypeRef RetType =
+	    (rabi.kind == jam::abi::ReturnABI::Kind::Indirect)
+	        ? ctx.getVoidType()
+	        : rabi.directType;
 
 	JamTypeRef FT = JamLLVMFunctionType(RetType, ArgTypes.data(),
 	                                    ArgTypes.size(), isVarArgs);
@@ -2176,24 +2336,35 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	JamFunctionRef F =
 	    JamLLVMAddFunction(ctx.getModule(), funcName.c_str(), FT);
 
+	// Apply sret attributes to the leading parameter when applicable.
+	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
+		JamLLVMAddParamAttrSret(F, 0, ctx.getLLVMType(ReturnType),
+		                        rabi.sretAlign);
+	}
+
 	if (isExtern || isExport || Name == "main") {
 		JamLLVMSetLinkage((JamValueRef)F, JAM_LINKAGE_EXTERNAL);
 	} else {
 		JamLLVMSetLinkage((JamValueRef)F, JAM_LINKAGE_INTERNAL);
 	}
 
+	// P9.6: when the function uses sret, the user's parameter at source
+	// index `i` lives at LLVM index `i + 1` (the sret slot is index 0).
+	const unsigned argOffset =
+	    (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) ? 1u : 0u;
+
 	if (isExtern || isExport || Name == "main") {
 		JamLLVMSetFunctionCallConv(F, JAM_CALLCONV_C);
 		for (unsigned i = 0; i < Args.size(); i++) {
 			if (Args[i].Type == BuiltinType::Bool) {
-				JamLLVMAddParamAttrZeroExt(F, i);
+				JamLLVMAddParamAttrZeroExt(F, i + argOffset);
 			}
 		}
 		if (ReturnType == BuiltinType::Bool) { JamLLVMAddRetAttrZeroExt(F); }
 	}
 
 	for (unsigned i = 0; i < Args.size(); i++) {
-		JamValueRef param = JamLLVMGetParam(F, i);
+		JamValueRef param = JamLLVMGetParam(F, i + argOffset);
 		JamLLVMSetValueName(param, Args[i].Name.c_str());
 	}
 
@@ -2217,13 +2388,45 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	ctx.clearVariables();
 	ctx.clearDrops();
 	ctx.pushDropScope();  // function-level scope
+
+	// P9.6: if this function uses sret, the leading LLVM arg is the
+	// caller-provided result slot. Record it so codegenReturn writes
+	// through it; user parameters shift one slot to the right.
+	jam::abi::ReturnABI rabi =
+	    isExtern
+	        ? jam::abi::ReturnABI{jam::abi::ReturnABI::Kind::Direct,
+	                              ReturnType == kNoType
+	                                  ? ctx.getVoidType()
+	                                  : ctx.getLLVMType(ReturnType),
+	                              0}
+	        : jam::abi::classifyReturn(ReturnType, ctx);
+	unsigned argOffset = 0;
+	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
+		ctx.setSretSlot(JamLLVMGetParam(F, 0));
+		argOffset = 1;
+	} else {
+		ctx.setSretSlot(nullptr);
+	}
+
 	for (unsigned i = 0; i < Args.size(); i++) {
-		JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
-		JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), ArgType,
-		                                        Args[i].Name.c_str());
-		JamValueRef param = JamLLVMGetParam(F, i);
-		JamLLVMBuildStore(ctx.getBuilder(), param, Alloca);
-		ctx.setVariable(Args[i].Name, Alloca);
+		// P9 mode-aware ABI: ByValue parameters are stored to a local
+		// alloca on entry (matching the existing pattern for value
+		// semantics). ByPointer parameters are *already* pointers to
+		// caller-owned storage; we register the parameter directly as
+		// the variable's place — reads will load through it, writes
+		// will store through it, and the caller observes the mutations.
+		jam::abi::ParamABI pabi =
+		    jam::abi::classifyParam(Args[i].Mode, Args[i].Type, ctx);
+		JamValueRef param = JamLLVMGetParam(F, i + argOffset);
+		if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {
+			ctx.setVariable(Args[i].Name, param);
+		} else {
+			JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
+			JamValueRef Alloca = JamLLVMBuildAlloca(
+			    ctx.getBuilder(), ArgType, Args[i].Name.c_str());
+			JamLLVMBuildStore(ctx.getBuilder(), param, Alloca);
+			ctx.setVariable(Args[i].Name, Alloca);
+		}
 		ctx.setVariableType(Args[i].Name, Args[i].Type);
 	}
 
