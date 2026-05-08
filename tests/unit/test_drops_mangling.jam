@@ -1,0 +1,79 @@
+const { assert } = import("test");
+
+// MVS P8.2a: two `fn drop(self: mut T)` for different types coexist
+// because the codegen mangles each to `__drop_<TypeName>` at the LLVM
+// level. Each fires for its own type at scope exit.
+
+const A = struct {
+    sink: *mut u32,
+};
+
+const B = struct {
+    sink: *mut u32,
+};
+
+fn drop(self: mut A) {
+    var p: *mut u32 = self.sink;
+    p.* = p.* + 10;
+}
+
+fn drop(self: mut B) {
+    var p: *mut u32 = self.sink;
+    p.* = p.* + 100;
+}
+
+fn dropOneA() u32 {
+    var hits: u32 = 0;
+    var doubled: u32 = onlyA(&hits);
+    return hits + doubled;
+}
+
+fn onlyA(sink: *mut u32) u32 {
+    var a: A = undefined;
+    a.sink = sink;
+    return 1;
+}
+
+fn dropOneB() u32 {
+    var hits: u32 = 0;
+    var v: u32 = onlyB(&hits);
+    return hits + v;
+}
+
+fn onlyB(sink: *mut u32) u32 {
+    var b: B = undefined;
+    b.sink = sink;
+    return 2;
+}
+
+fn dropBoth() u32 {
+    var hits: u32 = 0;
+    var v: u32 = bothInOne(&hits);
+    return hits + v;
+}
+
+fn bothInOne(sink: *mut u32) u32 {
+    var a: A = undefined;
+    a.sink = sink;
+    var b: B = undefined;
+    b.sink = sink;
+    return 3;
+}
+
+// --- Tests ---
+
+tfn dropAOnly() {
+    // A's drop bumps sink by 10 → hits=10. Function returns 1. Total=11.
+    assert(dropOneA(), 11);
+}
+
+tfn dropBOnly() {
+    // B's drop bumps sink by 100 → hits=100. Function returns 2. Total=102.
+    assert(dropOneB(), 102);
+}
+
+tfn dropBothInOneScope() {
+    // Both fire — sink += 10 (a's drop) and += 100 (b's drop). hits=110.
+    // Function returns 3. Total=113.
+    assert(dropBoth(), 113);
+}

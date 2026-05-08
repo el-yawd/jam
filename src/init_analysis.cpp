@@ -37,6 +37,7 @@
 
 #include "init_analysis.h"
 #include "ast.h"
+#include <algorithm>
 #include <utility>
 
 namespace jam {
@@ -60,8 +61,11 @@ struct Result {
 class Analyzer {
   public:
 	Analyzer(const NodeStore &nodes, const StringPool &strings,
-	         const std::vector<Token> &tokens)
-	    : nodes_(nodes), strings_(strings), tokens_(tokens) {}
+	         const std::vector<Token> &tokens,
+	         const FunctionRegistry *registry, const drops::DropRegistry *drops,
+	         const TypePool *types)
+	    : nodes_(nodes), strings_(strings), tokens_(tokens),
+	      registry_(registry), drops_(drops), types_(types) {}
 
 	std::vector<Diagnostic> run(const FunctionAST &fn);
 
@@ -79,15 +83,64 @@ class Analyzer {
 	Result analyzeStructLit(NodeIdx idx, NameMap state);
 
 	void checkVariableRead(NodeIdx idx, const NameMap &state);
+	void checkUndefinedParamsInit(const NameMap &state, NodeIdx anchor);
+	void checkDropBearingLocalsInit(const NameMap &state, NodeIdx anchor);
+	void checkScopeEscape(NodeIdx exprIdx);
 	void emitError(std::string message, NodeIdx anchor, std::string varName);
 	int lineOf(NodeIdx idx) const;
+
+	// Walk an argument expression (`x`, `&x`, `&p.x`, `&arr[i]`, `p.*`)
+	// down to the leftmost Variable AST node, and return that node's name
+	// StringIdx. Returns kNoString if the expression's base isn't a
+	// trackable binding (e.g. a literal, a complex computed value).
+	StringIdx findBasePathBinding(NodeIdx argIdx) const;
+
+	// One step in a borrow path: a field projection, an array indexing,
+	// or a dereference. Used by the exclusivity check (P5) to compare two
+	// arg expressions for overlapping access.
+	struct PathStep {
+		enum Kind : uint8_t { Field, Index, Deref };
+		Kind kind;
+		bool indexIsConst;  // valid when kind == Index
+		uint32_t fieldName; // StringIdx; valid when kind == Field
+		uint64_t constIndex;// valid when kind == Index && indexIsConst
+	};
+	struct BorrowPath {
+		StringIdx base = kNoString;  // base binding name, or kNoString if
+		                             // the arg isn't a simple lvalue chain
+		std::vector<PathStep> steps; // root → leaf order after extraction
+	};
+
+	BorrowPath extractPath(NodeIdx argIdx) const;
+	static bool pathsOverlap(const BorrowPath &a, const BorrowPath &b);
 
 	static NameMap mergeMaps(const NameMap &a, const NameMap &b);
 
 	const NodeStore &nodes_;
 	const StringPool &strings_;
 	const std::vector<Token> &tokens_;
+	const FunctionRegistry *registry_;
+	const drops::DropRegistry *drops_;
+	const TypePool *types_;
 	std::vector<Diagnostic> diagnostics_;
+
+	// Pointer to the current function's parameter list. Set in run(),
+	// cleared on exit. Used by checkUndefinedParamsInit to find every
+	// `undefined`-mode parameter without allocating a separate vector
+	// of names. Lifetime is bounded by the run() activation that set it.
+	const std::vector<Param> *args_ = nullptr;
+	bool hasUndefinedParam_ = false;
+
+	// Static type per binding name. Populated as parameter list and
+	// VarDecls are walked. Used by P8's drop-bearing check on `move` args.
+	// Reset per function in run().
+	std::unordered_map<std::string, TypeIdx> varTypes_;
+
+	// Look up the drop function for `bindingName` if its type is a struct
+	// declared with `fn drop(self: mut StructName)`. Returns nullptr when
+	// no drop is registered, when the binding's type is unknown, or when
+	// the drop or type registry is unavailable.
+	const FunctionAST *lookupDropFor(const std::string &bindingName) const;
 };
 
 // --------------------------------------------------------------------------
@@ -95,10 +148,26 @@ class Analyzer {
 // --------------------------------------------------------------------------
 
 std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
+	args_ = &fn.Args;
+	hasUndefinedParam_ = false;
+	varTypes_.clear();
+
 	NameMap state;
-	// P2: parameters enter as Init regardless of declared mode. P3 will
-	// honor `undefined`-mode parameters by entering as Uninit.
-	for (const Param &p : fn.Args) { state[p.Name] = InitState::Init; }
+	// P3: parameter entry state depends on the declared mode.
+	//   Undefined → Uninit (caller hands an uninitialized destination)
+	//   Let / Mut / Move → Init (caller's binding is valid)
+	// `move` does not change anything for the callee's view of its own
+	// parameter — the moved-from-ness applies to the *caller's* binding
+	// after the call (P4 work).
+	for (const Param &p : fn.Args) {
+		if (p.Mode == ParamMode::Undefined) {
+			state[p.Name] = InitState::Uninit;
+			hasUndefinedParam_ = true;
+		} else {
+			state[p.Name] = InitState::Init;
+		}
+		varTypes_[p.Name] = p.Type;
+	}
 
 	Result r{std::move(state), false};
 	for (NodeIdx stmt : fn.Body) {
@@ -111,6 +180,17 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 		r = analyze(stmt, std::move(r.state));
 	}
 
+	// P3 + P8.2: if control reaches the end of the body without an
+	// explicit return, every `undefined`-mode parameter and every
+	// drop-bearing local must have been initialized. (Functions that
+	// always return on every path produce r.terminated == true and skip
+	// this check; the per-return checks in analyzeReturn cover them.)
+	if (!r.terminated) {
+		checkUndefinedParamsInit(r.state, kNoNode);
+		checkDropBearingLocalsInit(r.state, kNoNode);
+	}
+
+	args_ = nullptr;
 	return std::move(diagnostics_);
 }
 
@@ -215,8 +295,10 @@ Result Analyzer::analyzeVarDecl(NodeIdx idx, NameMap state) {
 	const AstNode &n = nodes_.get(idx);
 	ExtraIdx extra = n.lhs;
 	StringIdx nameIdx = nodes_.getExtra(extra + 0);
+	TypeIdx typeIdx = static_cast<TypeIdx>(nodes_.getExtra(extra + 1));
 	NodeIdx initIdx = nodes_.getExtra(extra + 2);
 	const std::string &name = strings_.get(nameIdx);
+	varTypes_[name] = typeIdx;
 
 	if (initIdx == kNoNode) {
 		// Should not happen — Jam syntactically requires an initializer
@@ -444,8 +526,19 @@ Result Analyzer::analyzeMatch(NodeIdx idx, NameMap state) {
 
 Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 	const AstNode &n = nodes_.get(idx);
+	// P5.5: scope-escape check before any reads of the operand. Returning
+	// `&` of a borrow-shaped (mut/undefined) parameter would extend the
+	// borrow's lifetime past the call frame. Returning the parameter as
+	// a value (without `&`) is a copy and is fine — that's value semantics.
+	if (n.lhs != kNoNode) checkScopeEscape(n.lhs);
+
 	Result r{std::move(state), false};
 	if (n.lhs != kNoNode) { r = analyze(n.lhs, std::move(r.state)); }
+	// P3: every `undefined`-mode parameter must be Init on every return path.
+	checkUndefinedParamsInit(r.state, idx);
+	// P8.2: every drop-bearing local must be Init too — codegen will emit
+	// drop on it at this exit, and dropping uninit memory is UB.
+	checkDropBearingLocalsInit(r.state, idx);
 	r.terminated = true;
 	return r;
 }
@@ -453,15 +546,232 @@ Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 	// Call: d.lhs = StringIdx (callee), d.rhs = ExtraIdx → [argCount, args...]
 	const AstNode &n = nodes_.get(idx);
+	StringIdx calleeIdx = n.lhs;
+	const std::string &calleeName = strings_.get(calleeIdx);
+
+	// Look up the callee in the registry. Unknown callees (extern fns,
+	// std imports we didn't register, indirect calls) skip mode
+	// propagation — args are walked normally for read checks, but no
+	// post-call state changes apply.
+	const FunctionAST *callee = nullptr;
+	if (registry_) {
+		auto it = registry_->find(calleeName);
+		if (it != registry_->end()) callee = it->second;
+	}
+
 	ExtraIdx extra = n.rhs;
 	uint32_t argCount = nodes_.getExtra(extra);
-	Result r{std::move(state), false};
+
+	// Pre-pass: collect (path, mode) for each arg so we can run the
+	// exclusivity check (P5) before applying any state transitions.
+	// Doing this first means a flagged conflict still surfaces even if
+	// one of the args would have terminated the analysis (rare).
+	struct ArgInfo {
+		NodeIdx argIdx;
+		ParamMode mode;
+		BorrowPath path;
+	};
+	std::vector<ArgInfo> argInfos;
+	argInfos.reserve(argCount);
 	for (uint32_t i = 0; i < argCount; i++) {
+		NodeIdx argIdx = nodes_.getExtra(extra + 1 + i);
+		ParamMode mode = ParamMode::Let;
+		if (callee && i < callee->Args.size()) {
+			mode = callee->Args[i].Mode;
+		}
+		argInfos.push_back({argIdx, mode, extractPath(argIdx)});
+	}
+
+	// P5: exclusivity rule. For each pair of args with overlapping paths,
+	// the borrow set is OK only if both modes are Let (multiple readers).
+	// Any other combination on overlapping paths is rejected.
+	for (std::size_t i = 0; i < argInfos.size(); i++) {
+		for (std::size_t j = i + 1; j < argInfos.size(); j++) {
+			const ArgInfo &a = argInfos[i];
+			const ArgInfo &b = argInfos[j];
+			if (a.mode == ParamMode::Let && b.mode == ParamMode::Let)
+				continue;
+			if (!pathsOverlap(a.path, b.path)) continue;
+			if (a.path.base == kNoString) continue;  // un-tracked, skip
+			const std::string &name = strings_.get(a.path.base);
+			emitError("conflicting borrows of `" + name +
+			              "` in the same call: at least one access is "
+			              "exclusive (mut/move/undefined)",
+			          a.argIdx, name);
+		}
+	}
+
+	Result r{std::move(state), false};
+	for (const ArgInfo &info : argInfos) {
 		if (r.terminated) return r;
-		NodeIdx arg = nodes_.getExtra(extra + 1 + i);
-		r = analyze(arg, std::move(r.state));
+		// Walk the arg expression. For `let`/`mut`/`move` modes the walk
+		// includes a read-check on the base binding (it must already be
+		// Init). For `undefined` mode the caller is supposed to pass an
+		// AddressOf of an Uninit slot — and `&x` skips the read-check on
+		// `x` thanks to the AddressOf bypass in analyze().
+		r = analyze(info.argIdx, std::move(r.state));
+		if (r.terminated) return r;
+
+		// Post-call mode effect on the caller's binding.
+		//   move      — caller's binding moves into the callee; becomes Uninit.
+		//   undefined — callee writes through the address; becomes Init.
+		//   let / mut — no caller-side state change.
+		if (info.mode == ParamMode::Move ||
+		    info.mode == ParamMode::Undefined) {
+			if (info.path.base != kNoString) {
+				const std::string &name = strings_.get(info.path.base);
+
+				// P8 foundation: reject `move` on a drop-bearing binding
+				// until move-aware drop tracking lands in P8.1. Without
+				// it, codegen would emit drop on the moved-out slot at
+				// scope exit — a double-free.
+				if (info.mode == ParamMode::Move &&
+				    lookupDropFor(name) != nullptr) {
+					emitError("cannot `move` binding `" + name +
+					              "` of drop-bearing type — drop+move "
+					              "tracking is not yet implemented (P8.1); "
+					              "consider passing as `mut` or `let` "
+					              "instead",
+					          info.argIdx, name);
+				}
+
+				r.state[name] =
+				    (info.mode == ParamMode::Move) ? InitState::Uninit
+				                                   : InitState::Init;
+			}
+		}
 	}
 	return r;
+}
+
+StringIdx Analyzer::findBasePathBinding(NodeIdx argIdx) const {
+	NodeIdx cur = argIdx;
+	while (cur != kNoNode) {
+		const AstNode &n = nodes_.get(cur);
+		switch (n.tag) {
+		case AstTag::Variable:
+			return n.lhs;
+		case AstTag::AddressOf:
+		case AstTag::MemberAccess:
+		case AstTag::Index:
+		case AstTag::Deref:
+			cur = n.lhs;
+			break;
+		default:
+			// Not a simple lvalue chain — no trackable base binding.
+			return kNoString;
+		}
+	}
+	return kNoString;
+}
+
+// Extract a borrow path from a call-arg expression. The expression must
+// be a chain of `&`, `.field`, `[idx]`, `.*` rooted at a Variable node;
+// any other shape leaves `base = kNoString` and the caller skips the
+// exclusivity check for that arg (we can't reason about its identity).
+//
+// `&` is transparent — it indicates a non-default borrow at the callsite
+// but does not contribute a step to the path. The path's exclusivity
+// status comes from the parameter mode, not from the `&` token.
+Analyzer::BorrowPath Analyzer::extractPath(NodeIdx argIdx) const {
+	BorrowPath path;
+	NodeIdx cur = argIdx;
+	while (cur != kNoNode) {
+		const AstNode &n = nodes_.get(cur);
+		switch (n.tag) {
+		case AstTag::Variable:
+			path.base = n.lhs;
+			std::reverse(path.steps.begin(), path.steps.end());
+			return path;
+		case AstTag::AddressOf:
+			// Pass through; not a path step.
+			cur = n.lhs;
+			break;
+		case AstTag::MemberAccess: {
+			PathStep s;
+			s.kind = PathStep::Field;
+			s.indexIsConst = false;
+			s.fieldName = n.rhs;
+			s.constIndex = 0;
+			path.steps.push_back(s);
+			cur = n.lhs;
+			break;
+		}
+		case AstTag::Index: {
+			PathStep s;
+			s.kind = PathStep::Index;
+			s.fieldName = 0;
+			NodeIdx idxExpr = n.rhs;
+			const AstNode &idxNode = nodes_.get(idxExpr);
+			if (idxNode.tag == AstTag::NumberLit) {
+				// d.lhs = lo32, d.rhs = hi32, flags bit 0 = isNeg
+				uint64_t mag = uint64_t(idxNode.lhs) |
+				               (uint64_t(idxNode.rhs) << 32);
+				s.indexIsConst = ((idxNode.flags & 1u) == 0);
+				s.constIndex = mag;
+			} else {
+				s.indexIsConst = false;
+				s.constIndex = 0;
+			}
+			path.steps.push_back(s);
+			cur = n.lhs;
+			break;
+		}
+		case AstTag::Deref: {
+			PathStep s;
+			s.kind = PathStep::Deref;
+			s.indexIsConst = false;
+			s.fieldName = 0;
+			s.constIndex = 0;
+			path.steps.push_back(s);
+			cur = n.lhs;
+			break;
+		}
+		default:
+			// Computed expression — not a tracked path. Leave base as
+			// kNoString so the exclusivity check skips it.
+			path.steps.clear();
+			return path;
+		}
+	}
+	return path;
+}
+
+// Two paths overlap when one is a prefix of the other (or they are
+// equal). Per MVS.md §4.1:
+//   - Same base required; different bases → disjoint.
+//   - Step-by-step compare on common prefix:
+//       Field vs Field: same name? continue : disjoint
+//       Index vs Index: both const & equal? continue : differ-const? disjoint
+//                       at least one dynamic? conservatively overlap
+//       Deref vs Deref: continue
+//       different kinds: disjoint
+//   - When all common steps match and one path runs out: overlap (prefix).
+bool Analyzer::pathsOverlap(const BorrowPath &a, const BorrowPath &b) {
+	if (a.base == kNoString || b.base == kNoString) return false;
+	if (a.base != b.base) return false;
+	std::size_t common = std::min(a.steps.size(), b.steps.size());
+	for (std::size_t i = 0; i < common; i++) {
+		const PathStep &sa = a.steps[i];
+		const PathStep &sb = b.steps[i];
+		if (sa.kind != sb.kind) return false;
+		switch (sa.kind) {
+		case PathStep::Field:
+			if (sa.fieldName != sb.fieldName) return false;
+			break;
+		case PathStep::Index:
+			if (sa.indexIsConst && sb.indexIsConst) {
+				if (sa.constIndex != sb.constIndex) return false;
+			} else {
+				// At least one dynamic index — conservatively overlap.
+				return true;
+			}
+			break;
+		case PathStep::Deref:
+			break;  // both deref through the same pointer position
+		}
+	}
+	return true;
 }
 
 Result Analyzer::analyzeStructLit(NodeIdx idx, NameMap state) {
@@ -511,6 +821,126 @@ void Analyzer::checkVariableRead(NodeIdx idx, const NameMap &state) {
 	}
 }
 
+void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
+                                          NodeIdx anchor) {
+	// Walk only the bindings that are *currently in scope* — i.e.,
+	// present in the merged state map at this exit point. Bindings
+	// declared inside a now-exited inner block have already been dropped
+	// at their own scope end (P8.3 codegen), and the merge has removed
+	// them from the state map; checking them here would produce false
+	// positives because varTypes_ retains every name we've ever seen.
+	//
+	// For each in-scope binding whose type has a registered drop fn,
+	// the codegen will synthesize a drop call at this exit. If the
+	// binding is Uninit or MaybeInit, drop runs on garbage memory.
+	if (!drops_ || !types_) return;
+	for (const auto &sv : state) {
+		const std::string &name = sv.first;
+		// Skip parameters — drops for owning-mode params would belong to
+		// the caller's binding, not the callee. Today's codegen only
+		// drops `var` locals (P8.1).
+		bool isParam = false;
+		if (args_) {
+			for (const Param &p : *args_) {
+				if (p.Name == name) { isParam = true; break; }
+			}
+		}
+		if (isParam) continue;
+
+		auto vt = varTypes_.find(name);
+		if (vt == varTypes_.end()) continue;
+		const TypeKey &k = types_->get(vt->second);
+		if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named)
+			continue;
+		StringIdx structNameIdx = static_cast<StringIdx>(k.a);
+		if (structNameIdx == kNoString) continue;
+		const std::string &structName = strings_.get(structNameIdx);
+		if (drops_->find(structName) == drops_->end()) continue;
+
+		InitState s = sv.second;
+		if (s == InitState::Init) continue;
+
+		std::string msg = "drop-bearing binding `" + name + "` of type `" +
+		                  structName + "` ";
+		if (s == InitState::Uninit) {
+			msg += "must be initialized before this exit — drop runs on it "
+			       "and would otherwise read uninit memory";
+		} else {
+			msg += "may not be initialized on every path that reaches this "
+			       "exit — drop runs on it on every path";
+		}
+		emitError(std::move(msg), anchor, name);
+	}
+}
+
+void Analyzer::checkScopeEscape(NodeIdx exprIdx) {
+	// Only `&`-rooted expressions can carry a borrow out of the function.
+	// Returning a parameter "by value" (`return p;`, `return p.x;`) is
+	// runtime-equivalent to a copy, so we don't flag it.
+	if (exprIdx == kNoNode || args_ == nullptr) return;
+	const AstNode &top = nodes_.get(exprIdx);
+	if (top.tag != AstTag::AddressOf) return;
+
+	// Walk the path under the `&` to find the base Variable. We descend
+	// through MemberAccess / Index (so `&p.field` and `&arr[i]` are
+	// covered) but stop at Deref (the dereferenced pointee is itself
+	// data, not the borrow path).
+	NodeIdx cur = top.lhs;
+	while (cur != kNoNode) {
+		const AstNode &m = nodes_.get(cur);
+		switch (m.tag) {
+		case AstTag::Variable: {
+			StringIdx nameId = m.lhs;
+			const std::string &name = strings_.get(nameId);
+			for (const Param &p : *args_) {
+				if (p.Name != name) continue;
+				if (p.Mode != ParamMode::Mut &&
+				    p.Mode != ParamMode::Undefined)
+					return;
+				const char *modeStr =
+				    (p.Mode == ParamMode::Mut) ? "mut" : "undefined";
+				std::string msg = "cannot return `&` of `";
+				msg += modeStr;
+				msg += "`-mode parameter `" + name +
+				       "` — borrows are second-class and cannot escape "
+				       "the function";
+				emitError(std::move(msg), exprIdx, name);
+				return;
+			}
+			return;  // not a parameter at all
+		}
+		case AstTag::MemberAccess:
+		case AstTag::Index:
+			cur = m.lhs;
+			break;
+		default:
+			// Deref or anything else: not a borrow path on the parameter.
+			return;
+		}
+	}
+}
+
+void Analyzer::checkUndefinedParamsInit(const NameMap &state, NodeIdx anchor) {
+	// Fast path: most functions have no `undefined`-mode parameters at all.
+	// Skip the iteration over fn.Args entirely in that case.
+	if (!hasUndefinedParam_ || args_ == nullptr) return;
+	for (const Param &p : *args_) {
+		if (p.Mode != ParamMode::Undefined) continue;
+		auto it = state.find(p.Name);
+		InitState s = (it == state.end()) ? InitState::Uninit : it->second;
+		if (s == InitState::Init) continue;
+		std::string msg;
+		if (s == InitState::Uninit) {
+			msg = "`undefined`-mode parameter `" + p.Name +
+			      "` was not initialized before this return";
+		} else {
+			msg = "`undefined`-mode parameter `" + p.Name +
+			      "` may not be initialized on every path that reaches this return";
+		}
+		emitError(std::move(msg), anchor, p.Name);
+	}
+}
+
 int Analyzer::lineOf(NodeIdx idx) const {
 	if (idx == kNoNode) return 0;
 	const AstNode &n = nodes_.get(idx);
@@ -552,9 +982,25 @@ NameMap Analyzer::mergeMaps(const NameMap &a, const NameMap &b) {
 
 std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
                                 const StringPool &strings,
-                                const std::vector<Token> &tokens) {
-	Analyzer a(nodes, strings, tokens);
+                                const std::vector<Token> &tokens,
+                                const FunctionRegistry *registry,
+                                const drops::DropRegistry *drops,
+                                const TypePool *types) {
+	Analyzer a(nodes, strings, tokens, registry, drops, types);
 	return a.run(fn);
+}
+
+const FunctionAST *Analyzer::lookupDropFor(const std::string &bindingName) const {
+	if (!drops_ || !types_) return nullptr;
+	auto vit = varTypes_.find(bindingName);
+	if (vit == varTypes_.end()) return nullptr;
+	const TypeKey &k = types_->get(vit->second);
+	if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named) return nullptr;
+	StringIdx structNameIdx = static_cast<StringIdx>(k.a);
+	if (structNameIdx == kNoString) return nullptr;
+	const std::string &structName = strings_.get(structNameIdx);
+	auto dit = drops_->find(structName);
+	return (dit == drops_->end()) ? nullptr : dit->second;
 }
 
 }  // namespace init_analysis

@@ -1,0 +1,99 @@
+const { assert } = import("test");
+
+// MVS P4: callsite mode propagation. The analyzer looks up each callee's
+// parameter modes and updates the caller's binding states accordingly:
+//   - move arg     → caller's base binding becomes Uninit
+//   - undefined arg → caller's base binding becomes Init
+//   - let / mut    → caller's binding state unchanged
+//
+// These tests cover *runtime-correct* must-pass cases. The runtime ABI
+// is currently mode-agnostic (lowered identically to today's by-value /
+// pointer parameters — see MVS.md §7), so the patterns here are the ones
+// that compile and run end-to-end. Mode-aware ABI lowering lands in P9.
+//
+// Must-fail cases (read after move; uninit read of a let-mode arg) are
+// verified manually until P7 wires the must-fail test runner.
+
+// --- move arg consumes caller binding; P4 marks it Uninit, but we don't
+//     read it after, so the program is well-typed. ---
+fn consume(buf: move u32) u32 {
+    return buf;
+}
+
+fn moveCaller() u32 {
+    var x: u32 = 100;
+    var taken: u32 = consume(x);
+    return taken;
+}
+
+// --- move multiple args; each gets its own propagation ---
+fn consumeTwo(a: move u32, b: move u32) u32 {
+    return a + b;
+}
+
+fn moveTwoCaller() u32 {
+    var p: u32 = 5;
+    var q: u32 = 7;
+    return consumeTwo(p, q);
+}
+
+// --- let arg leaves caller's binding Init; can keep using it ---
+fn read(x: u32) u32 {
+    return x + 1;
+}
+
+fn letCaller() u32 {
+    var x: u32 = 10;
+    var first: u32 = read(x);
+    var second: u32 = read(x);
+    return first + second;
+}
+
+// --- mut arg: caller passes by-value today (no & required pre-P9);
+//     post-call the binding is still Init. ---
+fn doubleIt(x: mut u32) u32 {
+    x = x + x;
+    return x;
+}
+
+fn mutCaller() u32 {
+    var n: u32 = 7;
+    var doubled: u32 = doubleIt(n);
+    var stillUsable: u32 = read(n);
+    return doubled + stillUsable;
+}
+
+// --- Mixing: move + let in one signature, caller picks the right shape ---
+fn mixedConsumer(taken: move u32, kept: u32) u32 {
+    return taken + kept;
+}
+
+fn mixedCaller() u32 {
+    var a: u32 = 100;
+    var b: u32 = 200;
+    var sum: u32 = mixedConsumer(a, b);
+    var bAgain: u32 = read(b);
+    return sum + bAgain;
+}
+
+// --- Tests ---
+
+tfn moveCallerOK() {
+    assert(moveCaller(), 100);
+}
+
+tfn moveTwoCallerOK() {
+    assert(moveTwoCaller(), 12);
+}
+
+tfn letCallerOK() {
+    assert(letCaller(), 22);
+}
+
+tfn mutCallerOK() {
+    assert(mutCaller(), 22);
+}
+
+tfn mixedCallerOK() {
+    assert(mixedCaller(), 501);
+}

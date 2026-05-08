@@ -1,0 +1,101 @@
+const { assert } = import("test");
+
+// MVS P8.1: codegen emits drop calls at function exit for in-scope
+// bindings of drop-bearing types. The drop fn observes the value,
+// so we use a side-channel (writing to a counter through a pointer)
+// to verify the drop ran at the right time.
+
+const Counter = struct {
+    value: u32,
+    sink: *mut u32,
+};
+
+// `fn drop(self: mut Counter)` is the user-defined destructor. When a
+// `var c: Counter = ...;` goes out of scope, the codegen synthesizes a
+// call to drop(&c). We bump the sink-pointed value so we can observe it
+// from the test harness.
+fn drop(self: mut Counter) {
+    // Pointer-deref assignment is only supported on a pointer-typed local
+    // today, so move the field into a temp before reading/writing.
+    var p: *mut u32 = self.sink;
+    p.* = p.* + 1;
+}
+
+fn singleScope() u32 {
+    var hits: u32 = 0;
+    var c: Counter = undefined;
+    c.value = 7;
+    c.sink = &hits;
+    // c drops here at function end → hits becomes 1
+    return c.value + 100;
+}
+
+fn callerObservingDrop() u32 {
+    var hits: u32 = 0;
+    var doubled: u32 = wrapsCounter(&hits);
+    // After wrapsCounter returns, its local Counter has dropped → hits == 1
+    return hits + doubled;
+}
+
+fn wrapsCounter(sink: *mut u32) u32 {
+    var c: Counter = undefined;
+    c.value = 5;
+    c.sink = sink;
+    var d: Counter = undefined;
+    d.value = 11;
+    d.sink = sink;
+    // Both c and d drop at function exit (reverse-decl: d first, then c).
+    // Each drop bumps `*sink` by 1 → sink becomes 2.
+    return c.value + d.value;
+}
+
+fn earlyReturnDropsToo(b: bool) u32 {
+    var hits: u32 = 0;
+    var doubled: u32 = early(b, &hits);
+    return hits + doubled;
+}
+
+fn early(b: bool, sink: *mut u32) u32 {
+    var c: Counter = undefined;
+    c.value = 13;
+    c.sink = sink;
+    if (b) {
+        return c.value;
+    }
+    return c.value + 1;
+}
+
+// --- Tests ---
+
+tfn singleScopeDropsAtFunctionEnd() {
+    // After singleScope returns, its local hits has been incremented
+    // by drop. But hits is local to singleScope and doesn't escape;
+    // we can only observe via return values. Inside singleScope we
+    // increment hits THROUGH a pointer in `c`, so by the time of the
+    // implicit ret, the hits slot has been bumped. Then we return
+    // c.value + 100 = 107. Drop ran AFTER c.value was read but the
+    // count is internal — we can't observe it from here.
+    //
+    // The test below exercises the cross-function case where drop's
+    // side effect is observable.
+    assert(singleScope(), 107);
+}
+
+tfn callerObservingDropOK() {
+    // wrapsCounter declares two drop-bearing locals. Both drop at exit,
+    // each bumping `hits` once → 2. Return is c.value + d.value = 16.
+    // callerObservingDrop returns hits (2) + doubled (16) = 18.
+    assert(callerObservingDrop(), 18);
+}
+
+tfn earlyReturnDropsTrue() {
+    // b=true: early returns c.value (13). Drop fires before ret → hits=1.
+    // earlyReturnDropsToo returns hits (1) + 13 = 14.
+    assert(earlyReturnDropsToo(true), 14);
+}
+
+tfn earlyReturnDropsFalse() {
+    // b=false: early returns c.value+1 (14). Drop fires before ret → hits=1.
+    // earlyReturnDropsToo returns hits (1) + 14 = 15.
+    assert(earlyReturnDropsToo(false), 15);
+}

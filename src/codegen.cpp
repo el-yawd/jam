@@ -375,6 +375,26 @@ void JamCodegenContext::registerModuleConst(const std::string &name,
 	moduleConsts[name] = ModuleConstInfo{init, declared};
 }
 
+// P8.1+P8.3: drop tracking with a scope stack. registerLocalDrop pushes
+// to the topmost active scope; pushDropScope/popDropScope are called at
+// block boundaries by the codegen. clearDrops resets the entire stack
+// (called at function-body entry).
+void JamCodegenContext::registerLocalDrop(const std::string &name,
+                                          JamValueRef alloca,
+                                          JamTypeRef llvmType,
+                                          const FunctionAST *dropFn) {
+	if (dropScopes.empty()) dropScopes.emplace_back();
+	dropScopes.back().push_back(DropEntry{name, alloca, llvmType, dropFn});
+}
+
+void JamCodegenContext::pushDropScope() { dropScopes.emplace_back(); }
+
+void JamCodegenContext::popDropScope() {
+	if (!dropScopes.empty()) dropScopes.pop_back();
+}
+
+void JamCodegenContext::clearDrops() { dropScopes.clear(); }
+
 const JamCodegenContext::ModuleConstInfo *
 JamCodegenContext::getModuleConst(const std::string &name) const {
 	auto it = moduleConsts.find(name);

@@ -78,7 +78,17 @@ void Parser::consume(TokenType type, const std::string &message) {
 	throw std::runtime_error(message);
 }
 
-NodeIdx Parser::emit(AstNode n) { return nodes->addNode(n); }
+NodeIdx Parser::emit(AstNode n) {
+	// Most call sites pass mainToken=0; default to "the most recently
+	// consumed token" so error messages report meaningful line numbers
+	// without forcing every emit site to thread the token index. Sites
+	// that need a specific token (e.g. a construct's start keyword
+	// rather than its closing punctuation) can set mainToken explicitly.
+	if (n.mainToken == 0 && current > 0) {
+		n.mainToken = static_cast<uint32_t>(current - 1);
+	}
+	return nodes->addNode(n);
+}
 
 // Walk a chain of MemberAccess nodes back to its root Variable and produce
 // the dotted qualified name. Used to resolve `std.fmt.println`-style call

@@ -9,6 +9,7 @@
 #define INIT_ANALYSIS_H
 
 #include "ast_flat.h"
+#include "drop_registry.h"
 #include "token.h"
 #include <cstdint>
 #include <string>
@@ -54,26 +55,42 @@ struct Diagnostic {
 	std::string varName;
 };
 
+// Map of function name → FunctionAST* used by the analyzer to look up
+// callee parameter modes for callsite propagation (P4). The map is
+// borrowed; the analyzer never owns the FunctionAST pointers. May be
+// null, in which case mode propagation is conservatively skipped at
+// every call site (caller's bindings are unchanged).
+using FunctionRegistry = std::unordered_map<std::string, const FunctionAST *>;
+
 // Run the definite-init analysis on a function body. Returns an empty
 // vector on success; on failure, the vector contains every detected
 // uninit-read with location info.
 //
-// P2 scope: tracks per-binding init state for locals declared with
-// `var name: T = ...`. Function parameters enter as `Init` regardless of
-// their declared mode (mode-aware entry states land in P3).
+// Scope (cumulative through P4):
+//   - Tracks per-binding init state for locals declared with
+//     `var name: T = ...`.
+//   - Parameter entry state: Undefined-mode → Uninit, all other modes → Init.
+//   - At every return and at function fall-through, every Undefined-mode
+//     parameter must have reached Init.
+//   - Each call propagates caller-side state per the callee's parameter
+//     modes: `move` arg ⇒ caller's base binding becomes Uninit;
+//     `undefined` arg ⇒ caller's base binding becomes Init.
 //
 // Control-flow handling:
 //   - Straight-line statement sequence: states thread through.
 //   - if/else: states merge at the join (Init + Uninit = MaybeInit).
 //   - return: terminates flow on its path; the alternative path's
 //     state survives the merge unchanged.
-//   - while/for/match: P2 conservative pass — body is analyzed once
-//     against the pre-loop state, and the post state merges body output
-//     with pre-loop. This is sound for most practical patterns; a
-//     fixed-point iteration may replace it later.
+//   - while/for/match: conservative pass — body is analyzed once against
+//     the pre-loop state, and the post state merges body output with
+//     pre-loop. For-loops over a range additionally assume the body runs
+//     at least once. May replace with fixed-point iteration later.
 std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
                                 const StringPool &strings,
-                                const std::vector<Token> &tokens);
+                                const std::vector<Token> &tokens,
+                                const FunctionRegistry *registry = nullptr,
+                                const drops::DropRegistry *drops = nullptr,
+                                const TypePool *types = nullptr);
 
 }  // namespace init_analysis
 }  // namespace jam

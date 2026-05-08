@@ -9,6 +9,7 @@
 #define CODEGEN_H
 
 #include "ast_flat.h"
+#include "drop_registry.h"
 #include "jam_llvm.h"
 #include <map>
 #include <string>
@@ -155,6 +156,39 @@ class JamCodegenContext {
 	                         TypeIdx declared);
 	const ModuleConstInfo *getModuleConst(const std::string &name) const;
 
+	// MVS P8.1: drop emission state.
+	//
+	// The DropRegistry pointer is set once per module before codegen begins
+	// and lives for the duration of the run. When VarDecl codegen sees a
+	// declaration whose type has a registered drop fn, the binding is
+	// pushed to `drops_`. At every Return — and at the implicit
+	// fall-through end of a function body — the codegen emits a call to
+	// each entry's drop fn in reverse declaration order, then clears the
+	// list for the next function.
+	struct DropEntry {
+		std::string name;
+		JamValueRef alloca;
+		JamTypeRef llvmType;          // LLVM type of the binding's storage
+		const FunctionAST *dropFn;    // borrowed; lives on the ModuleAST
+	};
+	void setDropRegistry(const jam::drops::DropRegistry *r) { dropRegistry = r; }
+	const jam::drops::DropRegistry *getDropRegistry() const {
+		return dropRegistry;
+	}
+	// P8.3 scope-aware drops: each lexical block (function body, if/else
+	// arm, while/for body, match arm body) has its own DropEntry vector.
+	// pushDropScope/popDropScope are called at block boundaries; the
+	// codegen emits drops for the topmost scope at the end of each block
+	// and for *every* active scope at every Return.
+	void registerLocalDrop(const std::string &name, JamValueRef alloca,
+	                       JamTypeRef llvmType, const FunctionAST *dropFn);
+	void pushDropScope();
+	void popDropScope();
+	const std::vector<std::vector<DropEntry>> &getDropScopes() const {
+		return dropScopes;
+	}
+	void clearDrops();
+
   private:
 	JamContextRef ctx;
 	JamModuleRef mod;
@@ -170,6 +204,10 @@ class JamCodegenContext {
 	mutable NodeStore nodeStore;
 	// Lazy LLVM type per TypeIdx (built once, reused). Indexed by TypeIdx.
 	mutable std::vector<JamTypeRef> llvmTypeCache;
+
+	// P8.1+P8.3 drop state (see DropEntry / setDropRegistry above).
+	const jam::drops::DropRegistry *dropRegistry = nullptr;
+	std::vector<std::vector<DropEntry>> dropScopes;
 };
 
 #endif  // CODEGEN_H

@@ -1,0 +1,99 @@
+const { assert } = import("test");
+
+// MVS P8.4: drops fire correctly on `break` and `continue`. Bindings
+// declared in a loop body — possibly under nested scopes — are dropped
+// before the branch leaves (or restarts) the loop.
+
+const Bumper = struct {
+    sink: *mut u32,
+};
+
+fn drop(self: mut Bumper) {
+    var p: *mut u32 = self.sink;
+    p.* = p.* + 1;
+}
+
+// --- break drops the loop-body locals ---
+fn breakDropsBody() u32 {
+    var hits: u32 = 0;
+    breakInner(&hits);
+    return hits;
+}
+
+fn breakInner(sink: *mut u32) {
+    for i in 0:10 {
+        var x: Bumper = undefined;
+        x.sink = sink;
+        if (i == 3) {
+            // x must drop before the break exits the loop → bumps once
+            break;
+        }
+        // x also drops at end of normal iter → another bump
+    }
+}
+
+// --- continue drops the loop-body locals (and re-enters next iter) ---
+fn continueDropsBody() u32 {
+    var hits: u32 = 0;
+    continueInner(&hits);
+    return hits;
+}
+
+fn continueInner(sink: *mut u32) {
+    for i in 0:5 {
+        var x: Bumper = undefined;
+        x.sink = sink;
+        if (i == 2) {
+            // x must drop before the continue jumps to next iter
+            continue;
+        }
+        // x also drops at end of iter
+    }
+}
+
+// --- break inside a nested if drops BOTH the if-body and the loop-body
+//     locals (drop order: innermost first) ---
+fn breakNestedScopes() u32 {
+    var hits: u32 = 0;
+    breakNestedInner(&hits);
+    return hits;
+}
+
+fn breakNestedInner(sink: *mut u32) {
+    for i in 0:10 {
+        var outer: Bumper = undefined;
+        outer.sink = sink;
+        if (i == 1) {
+            var inner: Bumper = undefined;
+            inner.sink = sink;
+            // break should drop: inner first, then outer, then exit
+            // → bumps twice on this path
+            break;
+        }
+        // For non-break iterations, only outer drops at end → 1 each
+    }
+}
+
+// --- Tests ---
+
+tfn breakDropsBodyOK() {
+    // Iters 0,1,2: x drops at end of body (3 bumps)
+    // Iter 3: x drops on break (1 bump)
+    // Total: 4
+    assert(breakDropsBody(), 4);
+}
+
+tfn continueDropsBodyOK() {
+    // Iters 0,1: x drops at end of body (2 bumps)
+    // Iter 2: x drops on continue (1 bump)
+    // Iters 3,4: x drops at end of body (2 bumps)
+    // Total: 5
+    assert(continueDropsBody(), 5);
+}
+
+tfn breakNestedScopesOK() {
+    // Iter 0: outer drops at end of body (1 bump)
+    // Iter 1: inner drops on break, then outer drops on break (2 bumps), exit
+    // Total: 3
+    assert(breakNestedScopes(), 3);
+}

@@ -429,16 +429,32 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
-	// MVS P2: definite-init analysis runs after every prototype is in
-	// scope but before any body is codegen'd. Errors abort compilation
-	// — bodies of bad functions are never lowered to LLVM IR.
+	// MVS P2–P5.5 + P8 foundation/P8.1: definite-init + mode-aware
+	// callsite analysis runs after every prototype is in scope but
+	// before any body is codegen'd. The drop registry is built here and
+	// kept alive for the whole codegen pass — codegen reads it via the
+	// codegenCtx pointer to emit drops at scope exit. Errors abort
+	// compilation; bodies of bad functions are never lowered.
+	jam::drops::DropRegistry dropRegistry = jam::drops::buildDropRegistry(
+	    *module, codegenCtx.getTypePool(), codegenCtx.getStringPool());
+	codegenCtx.setDropRegistry(&dropRegistry);
 	{
+		jam::init_analysis::FunctionRegistry fnRegistry;
+		for (auto &fn : module->Functions) { fnRegistry[fn->Name] = fn.get(); }
+		for (const auto &kv : resolver.getLoadedModules()) {
+			if (kv.first == "std") continue;
+			for (auto &fn : kv.second->Functions) {
+				if (fn->isPub) { fnRegistry[fn->Name] = fn.get(); }
+			}
+		}
+
 		std::vector<jam::init_analysis::Diagnostic> allDiags;
 		for (FunctionAST *function : mainModuleEmits) {
 			if (function->isExtern) continue;
 			auto diags = jam::init_analysis::analyze(
 			    *function, codegenCtx.getNodeStore(),
-			    codegenCtx.getStringPool(), tokens);
+			    codegenCtx.getStringPool(), tokens, &fnRegistry,
+			    &dropRegistry, &codegenCtx.getTypePool());
 			for (auto &d : diags) {
 				std::cerr << filename << ":" << d.line
 				          << ": error: " << d.message << "\n";

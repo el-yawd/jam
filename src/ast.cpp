@@ -16,6 +16,13 @@
 
 JamBasicBlockRef CurrentLoopContinue = nullptr;
 JamBasicBlockRef CurrentLoopBreak = nullptr;
+// P8.4: index into the drop-scope stack of the *currently enclosing
+// loop body's scope*. On `break` / `continue`, the codegen emits drops
+// for every scope from the top down to (and including) this index, so
+// locals declared inside the loop body — possibly under nested
+// if/match scopes — get their drops fired before the branch leaves the
+// loop. SIZE_MAX means "no enclosing loop body active here".
+size_t CurrentLoopBodyScopeIdx = SIZE_MAX;
 
 // ---------------------------------------------------------------------------
 // Local helpers
@@ -682,20 +689,35 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	                        ArgsV.size(), callName);
 }
 
+// Forward decls — these helpers are defined further down (alongside
+// FunctionAST codegen for mangledFunctionName, alongside codegenVarDecl
+// for the drop emitters) so the source order can stay readable without
+// re-ordering large blocks.
+static std::string mangledFunctionName(const FunctionAST &fn,
+                                       const TypePool &types,
+                                       const StringPool &strings);
+static void emitTopScopeDrops(JamCodegenContext &ctx);
+static void emitAllScopeDrops(JamCodegenContext &ctx);
+
 static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 	NodeIdx retIdx = static_cast<NodeIdx>(n.lhs);
 	if (retIdx == kNoNode) {
+		emitAllScopeDrops(ctx);
 		JamLLVMBuildRetVoid(ctx.getBuilder());
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	}
 	JamFunctionRef func = JamLLVMGetBasicBlockParent(
 	    JamLLVMGetInsertBlock(ctx.getBuilder()));
 	JamTypeRef expected = JamLLVMGetReturnType(func);
+	// Codegen the return value BEFORE emitting drops so reads of any
+	// drop-bearing binding still see live storage. Then emit drops for
+	// every active scope (innermost first), then the actual ret.
 	JamValueRef RetVal = codegenNode(ctx, retIdx, expected);
 	if (!RetVal) return nullptr;
 	if (JamLLVMTypeIsInteger(expected)) {
 		RetVal = coerceTo(ctx, RetVal, expected);
 	}
+	emitAllScopeDrops(ctx);
 	JamLLVMBuildRet(ctx.getBuilder(), RetVal);
 	return RetVal;
 }
@@ -992,7 +1014,87 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 
 	ctx.setVariable(name, Alloca);
 	ctx.setVariableType(name, type);
+
+	// P8.1: register the binding for drop emission at scope exit if its
+	// type has a user-defined `fn drop(self: mut T)`. The init analyzer
+	// has already rejected `move` on drop-bearing bindings (P8 foundation),
+	// so codegen can emit drops unconditionally without double-free risk
+	// from caller-side moves. (Bindings declared `= undefined` and never
+	// assigned would still drop on uninit memory; tracking that is P8.2.)
+	if (const auto *reg = ctx.getDropRegistry()) {
+		const TypeKey &k = ctx.getTypePool().get(type);
+		if (k.kind == TypeKind::Struct || k.kind == TypeKind::Named) {
+			StringIdx structNameIdx = static_cast<StringIdx>(k.a);
+			if (structNameIdx != kNoString) {
+				const std::string &structName =
+				    ctx.getStringPool().get(structNameIdx);
+				auto it = reg->find(structName);
+				if (it != reg->end()) {
+					ctx.registerLocalDrop(name, Alloca, VarType,
+					                      it->second);
+				}
+			}
+		}
+	}
 	return Alloca;
+}
+
+// P8.1: emit a single drop call for one tracked binding. Loads the
+// binding's value out of its alloca (until P9's mode-aware ABI lowers
+// `mut self` as a pointer) and calls the mangled drop fn.
+static void emitOneDrop(JamCodegenContext &ctx,
+                        const JamCodegenContext::DropEntry &e) {
+	std::string mangled = mangledFunctionName(*e.dropFn, ctx.getTypePool(),
+	                                          ctx.getStringPool());
+	JamFunctionRef dropFn =
+	    JamLLVMGetFunction(ctx.getModule(), mangled.c_str());
+	if (!dropFn) return;
+	JamValueRef val = JamLLVMBuildLoad(ctx.getBuilder(), e.llvmType,
+	                                   e.alloca, "drop_self");
+	JamValueRef args[1] = {val};
+	JamLLVMBuildCall(ctx.getBuilder(), dropFn, args, 1, "");
+}
+
+// P8.3: emit drops for the topmost active scope, in reverse declaration
+// order. Used at the end of nested blocks (if/else arms, while/for body,
+// match arm body, function body fall-through) just before branching to
+// the merge / cond / next-statement BB.
+static void emitTopScopeDrops(JamCodegenContext &ctx) {
+	const auto &scopes = ctx.getDropScopes();
+	if (scopes.empty()) return;
+	const auto &top = scopes.back();
+	for (auto it = top.rbegin(); it != top.rend(); ++it) {
+		emitOneDrop(ctx, *it);
+	}
+}
+
+// P8.3: emit drops for every active scope, innermost-first. Used at every
+// `return` statement so a return inside a nested block drops both the
+// block-scoped locals and the outer function-scoped locals.
+static void emitAllScopeDrops(JamCodegenContext &ctx) {
+	const auto &scopes = ctx.getDropScopes();
+	for (auto sit = scopes.rbegin(); sit != scopes.rend(); ++sit) {
+		for (auto eit = sit->rbegin(); eit != sit->rend(); ++eit) {
+			emitOneDrop(ctx, *eit);
+		}
+	}
+}
+
+// P8.4: emit drops for every scope from the innermost down to (and
+// including) `targetScopeIdx`. Used by `break` and `continue` to drop
+// the loop body's locals — and any deeper nested scopes — before
+// branching out of (or to the next iteration of) the loop. The function
+// scope and any other scopes outside the target index are preserved.
+static void emitDropsThroughScope(JamCodegenContext &ctx,
+                                  std::size_t targetScopeIdx) {
+	const auto &scopes = ctx.getDropScopes();
+	if (scopes.empty() || targetScopeIdx >= scopes.size()) return;
+	for (std::size_t i = scopes.size(); i > targetScopeIdx; i--) {
+		const auto &scope = scopes[i - 1];
+		for (auto it = scope.rbegin(); it != scope.rend(); ++it) {
+			emitOneDrop(ctx, *it);
+		}
+	}
 }
 
 static JamValueRef codegenIf(JamCodegenContext &ctx, const AstNode &n) {
@@ -1017,22 +1119,28 @@ static JamValueRef codegenIf(JamCodegenContext &ctx, const AstNode &n) {
 	JamLLVMBuildCondBr(ctx.getBuilder(), CondV, ThenBB, ElseBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), ThenBB);
+	ctx.pushDropScope();
 	for (uint32_t i = 0; i < thenCount; i++) {
 		codegenNode(ctx, ns.getExtra(extra + 2 + i));
 	}
 	if (!JamLLVMGetBasicBlockTerminator(
 	        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		emitTopScopeDrops(ctx);
 		JamLLVMBuildBr(ctx.getBuilder(), MergeBB);
 	}
+	ctx.popDropScope();
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), ElseBB);
+	ctx.pushDropScope();
 	for (uint32_t i = 0; i < elseCount; i++) {
 		codegenNode(ctx, ns.getExtra(extra + 2 + thenCount + i));
 	}
 	if (!JamLLVMGetBasicBlockTerminator(
 	        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		emitTopScopeDrops(ctx);
 		JamLLVMBuildBr(ctx.getBuilder(), MergeBB);
 	}
+	ctx.popDropScope();
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), MergeBB);
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
@@ -1055,6 +1163,7 @@ static JamValueRef codegenWhile(JamCodegenContext &ctx, const AstNode &n) {
 
 	JamBasicBlockRef PrevContinue = CurrentLoopContinue;
 	JamBasicBlockRef PrevBreak = CurrentLoopBreak;
+	std::size_t PrevLoopScope = CurrentLoopBodyScopeIdx;
 	CurrentLoopContinue = CondBB;
 	CurrentLoopBreak = AfterBB;
 
@@ -1065,6 +1174,7 @@ static JamValueRef codegenWhile(JamCodegenContext &ctx, const AstNode &n) {
 	if (!CondV) {
 		CurrentLoopContinue = PrevContinue;
 		CurrentLoopBreak = PrevBreak;
+		CurrentLoopBodyScopeIdx = PrevLoopScope;
 		return nullptr;
 	}
 	JamTypeRef condType = JamLLVMTypeOf(CondV);
@@ -1073,17 +1183,23 @@ static JamValueRef codegenWhile(JamCodegenContext &ctx, const AstNode &n) {
 	JamLLVMBuildCondBr(ctx.getBuilder(), CondV, LoopBB, AfterBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), LoopBB);
+	// P8.4: the loop body's scope is the next one to be pushed.
+	CurrentLoopBodyScopeIdx = ctx.getDropScopes().size();
+	ctx.pushDropScope();
 	for (uint32_t i = 0; i < bodyCount; i++) {
 		codegenNode(ctx, ns.getExtra(extra + 1 + i));
 	}
 	if (!JamLLVMGetBasicBlockTerminator(
 	        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		emitTopScopeDrops(ctx);
 		JamLLVMBuildBr(ctx.getBuilder(), CondBB);
 	}
+	ctx.popDropScope();
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), AfterBB);
 	CurrentLoopContinue = PrevContinue;
 	CurrentLoopBreak = PrevBreak;
+	CurrentLoopBodyScopeIdx = PrevLoopScope;
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
@@ -1130,6 +1246,7 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 
 	JamBasicBlockRef PrevContinue = CurrentLoopContinue;
 	JamBasicBlockRef PrevBreak = CurrentLoopBreak;
+	std::size_t PrevLoopScope = CurrentLoopBodyScopeIdx;
 	CurrentLoopContinue = IncrBB;
 	CurrentLoopBreak = AfterBB;
 
@@ -1143,13 +1260,17 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	JamLLVMBuildCondBr(ctx.getBuilder(), CondV, LoopBB, AfterBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), LoopBB);
+	CurrentLoopBodyScopeIdx = ctx.getDropScopes().size();
+	ctx.pushDropScope();
 	for (uint32_t i = 0; i < bodyCount; i++) {
 		codegenNode(ctx, ns.getExtra(extra + 4 + i));
 	}
 	if (!JamLLVMGetBasicBlockTerminator(
 	        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		emitTopScopeDrops(ctx);
 		JamLLVMBuildBr(ctx.getBuilder(), IncrBB);
 	}
+	ctx.popDropScope();
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), IncrBB);
 	JamValueRef CurVarForInc = JamLLVMBuildLoad(ctx.getBuilder(), VarType,
@@ -1166,6 +1287,7 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 
 	CurrentLoopContinue = PrevContinue;
 	CurrentLoopBreak = PrevBreak;
+	CurrentLoopBodyScopeIdx = PrevLoopScope;
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
@@ -1559,6 +1681,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		// support, M3). Arms that terminate via `return` / `break` /
 		// `continue` don't fall through to merge and aren't recorded.
 		JamValueRef lastValue = nullptr;
+		ctx.pushDropScope();
 		for (uint32_t b = 0; b < bodyCount; b++) {
 			lastValue = codegenNode(ctx,
 			                         ns.getExtra(extra + bodyStart + b));
@@ -1566,9 +1689,11 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		JamBasicBlockRef armEndBB =
 		    JamLLVMGetInsertBlock(ctx.getBuilder());
 		if (!JamLLVMGetBasicBlockTerminator(armEndBB)) {
+			emitTopScopeDrops(ctx);
 			armResults.push_back({armEndBB, lastValue});
 			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
 		}
+		ctx.popDropScope();
 
 		pos = bodyStart + bodyCount;
 	}
@@ -1577,15 +1702,18 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	if (elseBodyCount > 0) {
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), fallBB);
 		JamValueRef lastValue = nullptr;
+		ctx.pushDropScope();
 		for (uint32_t b = 0; b < elseBodyCount; b++) {
 			lastValue = codegenNode(ctx, ns.getExtra(extra + 2 + b));
 		}
 		JamBasicBlockRef elseEndBB =
 		    JamLLVMGetInsertBlock(ctx.getBuilder());
 		if (!JamLLVMGetBasicBlockTerminator(elseEndBB)) {
+			emitTopScopeDrops(ctx);
 			armResults.push_back({elseEndBB, lastValue});
 			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
 		}
+		ctx.popDropScope();
 	}
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), mergeBB);
@@ -1903,12 +2031,18 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		if (!CurrentLoopBreak) {
 			throw std::runtime_error("break statement not inside a loop");
 		}
+		// P8.4: drop all scopes inside (and including) the enclosing
+		// loop body before exiting the loop.
+		emitDropsThroughScope(ctx, CurrentLoopBodyScopeIdx);
 		JamLLVMBuildBr(ctx.getBuilder(), CurrentLoopBreak);
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	case AstTag::Continue:
 		if (!CurrentLoopContinue) {
 			throw std::runtime_error("continue statement not inside a loop");
 		}
+		// P8.4: drop all scopes inside (and including) the enclosing
+		// loop body before jumping to the next iteration.
+		emitDropsThroughScope(ctx, CurrentLoopBodyScopeIdx);
 		JamLLVMBuildBr(ctx.getBuilder(), CurrentLoopContinue);
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	case AstTag::ImportLit:
@@ -1996,8 +2130,34 @@ JamValueRef resolveLvaluePtr(JamCodegenContext &ctx, NodeIdx node,
 // callees in source order.
 // ---------------------------------------------------------------------------
 
+// P8.2: name-mangling for `fn drop(self: mut T)`. When the source-level
+// name "drop" coincides with a recognizable drop-fn signature, mangle to
+// "__drop_<TypeName>" at the LLVM level so multiple types can each have
+// their own drop fn without colliding. Used by declarePrototype,
+// defineBody, and the drop-emission helper so all three see the same
+// LLVM function name.
+static std::string mangledFunctionName(const FunctionAST &fn,
+                                       const TypePool &types,
+                                       const StringPool &strings) {
+	if (fn.isTest) return "__test_" + fn.Name;
+	if (fn.Name == "drop" && fn.Args.size() == 1) {
+		const Param &p = fn.Args[0];
+		if (p.Name == "self" && p.Mode == ParamMode::Mut) {
+			const TypeKey &k = types.get(p.Type);
+			if (k.kind == TypeKind::Struct || k.kind == TypeKind::Named) {
+				StringIdx ni = static_cast<StringIdx>(k.a);
+				if (ni != kNoString) {
+					return "__drop_" + strings.get(ni);
+				}
+			}
+		}
+	}
+	return fn.Name;
+}
+
 JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
-	std::string funcName = isTest ? ("__test_" + Name) : Name;
+	std::string funcName =
+	    mangledFunctionName(*this, ctx.getTypePool(), ctx.getStringPool());
 
 	std::vector<JamTypeRef> ArgTypes;
 	if (!isTest) {
@@ -2043,7 +2203,8 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	if (isExtern) return;
 
-	std::string funcName = isTest ? ("__test_" + Name) : Name;
+	std::string funcName =
+	    mangledFunctionName(*this, ctx.getTypePool(), ctx.getStringPool());
 	JamFunctionRef F = JamLLVMGetFunction(ctx.getModule(), funcName.c_str());
 	if (!F) {
 		throw std::runtime_error(
@@ -2054,6 +2215,8 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), BB);
 
 	ctx.clearVariables();
+	ctx.clearDrops();
+	ctx.pushDropScope();  // function-level scope
 	for (unsigned i = 0; i < Args.size(); i++) {
 		JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
 		JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), ArgType,
@@ -2066,10 +2229,18 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 
 	for (NodeIdx stmt : Body) { codegenNode(ctx, stmt); }
 
-	if (ReturnType == kNoType && !JamLLVMGetBasicBlockTerminator(
-	                                JamLLVMGetInsertBlock(ctx.getBuilder()))) {
-		JamLLVMBuildRetVoid(ctx.getBuilder());
+	if (!JamLLVMGetBasicBlockTerminator(
+	        JamLLVMGetInsertBlock(ctx.getBuilder()))) {
+		// Implicit fall-through end of body — emit drops for the
+		// function-level scope (the only active scope at this point) and
+		// then the implicit terminator.
+		emitTopScopeDrops(ctx);
+		if (ReturnType == kNoType) {
+			JamLLVMBuildRetVoid(ctx.getBuilder());
+		}
 	}
+	ctx.popDropScope();
+	ctx.clearDrops();
 }
 
 JamFunctionRef FunctionAST::codegen(JamCodegenContext &ctx) {

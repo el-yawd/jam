@@ -1,0 +1,80 @@
+const { assert } = import("test");
+
+// MVS P5: exclusivity rule. For two arguments to the same call to
+// coexist legally, either both must be `let` (read-only) or their paths
+// must be disjoint. Overlapping paths with at least one non-Let mode
+// are rejected.
+//
+// These tests cover the must-pass cases that already worked under
+// P1-P4 and continue to work with P5's check active. Must-fail cases
+// (overlapping mut + let, mut + move, move + move on overlapping paths)
+// are verified manually until P7 wires up the must-fail test runner.
+
+// --- Multiple `let` reads of the same binding: OK ---
+fn add(a: u32, b: u32) u32 {
+    return a + b;
+}
+
+fn doubleSelf() u32 {
+    var x: u32 = 21;
+    return add(x, x);
+}
+
+// --- Disjoint sub-paths of the same struct: OK ---
+const Pair = struct {
+    a: u32,
+    b: u32,
+};
+
+fn addPair(a: u32, b: u32) u32 {
+    return a + b;
+}
+
+fn disjointFields() u32 {
+    var p: Pair = undefined;
+    p.a = 10;
+    p.b = 20;
+    return addPair(p.a, p.b);
+}
+
+// --- Disjoint constant indices: OK ---
+fn addTwo(a: u8, b: u8) u8 {
+    return a + b;
+}
+
+fn disjointArrayIndices() u8 {
+    var arr: [4]u8 = undefined;
+    arr[0] = 1;
+    arr[1] = 2;
+    arr[2] = 3;
+    arr[3] = 4;
+    return addTwo(arr[0], arr[2]);
+}
+
+// --- Same-path move + return: OK (single arg, no overlap with itself) ---
+fn consume(buf: move u32) u32 {
+    return buf;
+}
+
+fn singleMove() u32 {
+    var x: u32 = 42;
+    return consume(x);
+}
+
+// --- Tests ---
+
+tfn doubleSelfOK() {
+    assert(doubleSelf(), 42);
+}
+
+tfn disjointFieldsOK() {
+    assert(disjointFields(), 30);
+}
+
+tfn disjointArrayIndicesOK() {
+    assert(disjointArrayIndices(), 4);
+}
+
+tfn singleMoveOK() {
+    assert(singleMove(), 42);
+}

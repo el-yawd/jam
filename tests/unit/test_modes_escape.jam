@@ -1,0 +1,66 @@
+const { assert } = import("test");
+
+// MVS P5.5: scope-escape check. A `mut` or `undefined` parameter is a
+// second-class borrow into the caller's storage; returning a reference
+// (`&`) rooted at it would extend the borrow's lifetime past the call
+// frame and dangle. The check rejects only `return &param-or-subpath`
+// — returning the parameter as a value is a copy and is legal.
+//
+// Must-fail cases (return &p, return &p.field, return &out for
+// undefined param) are verified manually until the must-fail runner
+// lands in P7.
+
+// --- Returning a mut param's *value* is fine (it's a copy) ---
+fn doubleByValue(x: mut u32) u32 {
+    x = x + x;
+    return x;
+}
+
+// --- Returning a sub-path of a mut param by value is fine ---
+const Pair = struct {
+    a: u32,
+    b: u32,
+};
+
+fn pickFieldA(p: mut Pair) u32 {
+    p.a = p.a + 1;
+    return p.a;
+}
+
+// --- Returning the deref of a pointer-typed mut param is fine ---
+fn loadThroughMutPtr(p: mut *mut u32) u32 {
+    return p.*;
+}
+
+// --- Returning a fresh value computed from mut param: fine ---
+fn computeFromMut(x: mut u32) u32 {
+    x = x + 100;
+    return x + 1;
+}
+
+// --- Returning an undefined param's value (after init) is fine ---
+fn fillThenReturnValue(out: undefined u32) u32 {
+    out = 42;
+    return out;
+}
+
+// --- Tests ---
+
+tfn doubleByValueOK() {
+    assert(doubleByValue(5), 10);
+}
+
+tfn pickFieldAOK() {
+    var p: Pair = undefined;
+    p.a = 9;
+    p.b = 0;
+    assert(pickFieldA(p), 10);
+}
+
+tfn computeFromMutOK() {
+    assert(computeFromMut(7), 108);
+}
+
+tfn fillThenReturnValueOK() {
+    assert(fillThenReturnValue(0), 42);
+}

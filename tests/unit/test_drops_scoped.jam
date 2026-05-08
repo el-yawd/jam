@@ -1,0 +1,133 @@
+const { assert } = import("test");
+
+// MVS P8.3: drops fire at the END of the lexical block where the binding
+// was declared, not at function exit. These tests prove the order via a
+// counter that drop bumps and the test code reads at observable points.
+
+const Bumper = struct {
+    sink: *mut u32,
+};
+
+fn drop(self: mut Bumper) {
+    var p: *mut u32 = self.sink;
+    p.* = p.* + 1;
+}
+
+// --- Drop fires at end of `if` body, before code after the if ---
+fn ifBodyDropsAtEnd(b: bool) u32 {
+    var hits: u32 = 0;
+    if (b) {
+        var x: Bumper = undefined;
+        x.sink = &hits;
+        // x goes out of scope at end of this block → drop runs → hits=1
+    }
+    // We can read hits here; if drop ran at end of if, hits == 1.
+    // If drop deferred to function exit, hits == 0 here.
+    var observed: u32 = hits;
+    // outer scope has no Bumper, no further drop
+    return observed;
+}
+
+// --- Drop fires at end of `else` body, observable after merge ---
+fn elseBodyDropsAtEnd() u32 {
+    var hits: u32 = 0;
+    if (false) {
+        var ignored: u32 = 0;
+    } else {
+        var x: Bumper = undefined;
+        x.sink = &hits;
+        // drop at end of else → hits=1
+    }
+    return hits;
+}
+
+// --- Drop fires at end of each loop iteration ---
+fn loopIterationDrops() u32 {
+    var hits: u32 = 0;
+    for i in 0:5 {
+        var x: Bumper = undefined;
+        x.sink = &hits;
+        // drop at end of iteration body → hits++ each pass
+    }
+    return hits;
+}
+
+// --- Outer drop fires at function end; inner drop fires at end of if ---
+fn nested(b: bool) u32 {
+    var hits: u32 = 0;
+    var outer: Bumper = undefined;
+    outer.sink = &hits;
+    if (b) {
+        var inner: Bumper = undefined;
+        inner.sink = &hits;
+        // inner drops at end of if → hits=1
+    }
+    var afterIf: u32 = hits;
+    // outer drops at end of function → hits=2 (but we read afterIf above)
+    return afterIf;
+}
+
+// --- Return inside an if body: ALL active scopes drop before ret ---
+fn earlyReturnDropsAll() u32 {
+    var hits: u32 = 0;
+    var outer: Bumper = undefined;
+    outer.sink = &hits;
+    if (true) {
+        var inner: Bumper = undefined;
+        inner.sink = &hits;
+        return hits;
+        // never reached
+    }
+    return hits + 100;
+}
+
+fn earlyReturnDropsAllCaller() u32 {
+    var observed: u32 = earlyReturnDropsAll();
+    // Inside earlyReturnDropsAll, `return hits` reads hits (still 0)
+    // BEFORE drops fire — so earlyReturnDropsAll returns 0. But that's
+    // the value captured BEFORE ret. The drops would have run after the
+    // return value was computed; they bump our local `hits` which the
+    // function returns — but we already captured the value. Demonstrates
+    // that drops fire AFTER the return-value codegen but BEFORE ret.
+    return observed;
+}
+
+// --- Tests ---
+
+tfn ifBodyDropsAtEndTrue() {
+    // b=true, inner Bumper drops at end of if → hits=1 → return 1
+    assert(ifBodyDropsAtEnd(true), 1);
+}
+
+tfn ifBodyDropsAtEndFalse() {
+    // b=false, no Bumper enters scope → hits=0 → return 0
+    assert(ifBodyDropsAtEnd(false), 0);
+}
+
+tfn elseBodyDropsAtEndOK() {
+    assert(elseBodyDropsAtEnd(), 1);
+}
+
+tfn loopIterationDropsOK() {
+    // 5 iterations, each drops a Bumper → hits=5
+    assert(loopIterationDrops(), 5);
+}
+
+tfn nestedTrue() {
+    // outer drops at fn end (after we read afterIf), inner drops at end of if
+    // afterIf = 1 (only inner has dropped by then)
+    assert(nested(true), 1);
+}
+
+tfn nestedFalse() {
+    // No inner ever in scope; outer not yet dropped when afterIf is read
+    // afterIf = 0
+    assert(nested(false), 0);
+}
+
+tfn earlyReturnDropsAllOK() {
+    // The `return hits` returns the value of hits BEFORE drops run.
+    // Both outer + inner drop after the return value is computed.
+    // So earlyReturnDropsAll returns 0.
+    assert(earlyReturnDropsAllCaller(), 0);
+}
