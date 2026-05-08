@@ -41,7 +41,9 @@ build:
 	clang++ -c ./src/symbol_table.cpp -o ./symbol_table.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
 	clang++ -c ./src/number_literal.cpp -o ./number_literal.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
 	clang++ -c ./src/init_analysis.cpp -o ./init_analysis.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
-	clang++ -o ./jam.out ./jam_llvm.o ./main.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o ./init_analysis.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
+	clang++ -c ./src/drop_registry.cpp -o ./drop_registry.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -c ./src/abi.cpp -o ./abi.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -o ./jam.out ./jam_llvm.o ./main.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o ./init_analysis.o ./drop_registry.o ./abi.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
 	@echo "Build complete! Executable: ./jam.out"
 
 # CMake-based build (recommended)
@@ -117,8 +119,29 @@ test-unit: build
 	@echo "Running Jam unit tests..."
 	./jam.out test tests/unit
 
-# Run all tests: Jam language tests + C++ compiler unit tests
-test: test-unit
+# Run init-analyzer C++ tests (in-process: drives lexer + parser +
+# analyzer over source strings and asserts on the structured Diagnostic
+# vector). Replaces the old shell-based must-fail runner — same coverage,
+# precise assertions, no fork+exec, no stderr scraping.
+test-init: build
+	@echo ""
+	@echo "Building and running init-analyzer C++ tests..."
+	clang++ -c ./tests/cpp/test_init_analysis.cpp -o ./test_init_analysis.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -o ./init_tests ./test_init_analysis.o ./jam_llvm.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o ./init_analysis.o ./drop_registry.o ./abi.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
+	./init_tests
+
+# Run ABI classifier C++ tests (P9.1). Pure unit tests of the
+# (mode, type) → ParamABI / type → ReturnABI mappings; no runtime
+# dependency on a parsed program.
+test-abi: build
+	@echo ""
+	@echo "Building and running ABI classifier C++ tests..."
+	clang++ -c ./tests/cpp/test_abi.cpp -o ./test_abi.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -o ./abi_tests ./test_abi.o ./jam_llvm.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o ./init_analysis.o ./drop_registry.o ./abi.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
+	./abi_tests
+
+# Run all tests: Jam must-pass + analyzer C++ tests + ABI C++ tests + existing C++ tests
+test: test-unit test-init test-abi
 	@echo ""
 	@echo "Running C++ unit tests..."
 	cd tests/cpp && ./build_and_run.sh
