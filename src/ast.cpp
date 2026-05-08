@@ -722,7 +722,12 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			    JamLLVMGetParam(CalleeF, i + calleeSretOffset));
 
 			bool autoAddress = false;
-			if (calleeAST && i < calleeAST->Args.size()) {
+			// P9.8: extern callees follow the C ABI literally; never
+			// auto-address. The user wrote the FFI-facing parameter
+			// types directly, and LLVM's backend handles any byval
+			// passing per the platform's MEMORY classification.
+			if (calleeAST && !calleeAST->isExtern &&
+			    i < calleeAST->Args.size()) {
 				const Param &p = calleeAST->Args[i];
 				if (p.Mode == ParamMode::Let || p.Mode == ParamMode::Move) {
 					auto pabi = jam::abi::classifyParam(p.Mode, p.Type, ctx);
@@ -2306,14 +2311,20 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	}
 	if (!isTest) {
 		for (const auto &arg : Args) {
+			if (isExtern) {
+				// P9.8: extern fns follow the C ABI literally. The user
+				// already wrote the parameter types as they want them
+				// to appear at the FFI boundary (e.g. `*const T` for a
+				// pointer arg, `u32` for a scalar). LLVM's backend
+				// handles `byval` for large aggregates per the
+				// platform's MEMORY classification; we do NOT
+				// re-classify with mode-aware rules.
+				ArgTypes.push_back(ctx.getLLVMType(arg.Type));
+				continue;
+			}
 			// P9 mode-aware ABI. classifyParam decides per-(mode, type)
 			// whether the parameter is passed by value (the type's natural
 			// LLVM representation) or by pointer.
-			//
-			// `extern fn` declarations use Let-mode parameters with pointer
-			// types like `*const T` written explicitly; classifyParam
-			// returns ByValue for pointer-typed scalars, so the C ABI
-			// continues to be respected.
 			jam::abi::ParamABI pabi =
 			    jam::abi::classifyParam(arg.Mode, arg.Type, ctx);
 			if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {

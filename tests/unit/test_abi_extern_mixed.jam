@@ -1,0 +1,111 @@
+const { assert } = import("test");
+
+// MVS P9.8: extern fns follow the C ABI literally — mode-aware ABI
+// rules don't apply at the FFI boundary. These tests confirm that
+// (a) Jam functions using P9 modes can call extern fns with primitive
+// and pointer arguments, (b) extern fns retain their C-ABI shape
+// regardless of what the surrounding Jam code is doing, and (c) all
+// the existing extern patterns (snprintf, printf, etc.) continue to
+// compose cleanly with the new ABI.
+
+extern fn snprintf(buf: *mut[] u8, size: u64, fmt: *const[] u8, ...) i32;
+extern fn strlen(s: *const[] u8) u64;
+
+// Jam-defined helper using a `mut` parameter that internally calls an
+// extern fn. The mut param is pointer-passed under P9.3; the extern
+// call uses pointer args via Jam-source `&` syntax — no auto-address.
+fn fillFromExtern(buf: mut [16]u8) i32 {
+    var written: i32 = snprintf(&buf[0], 16, "n=%d", 42);
+    return written;
+}
+
+tfn fillFromExternOK() {
+    var buf: [16]u8 = undefined;
+    buf[0] = 0;
+    var n: i32 = fillFromExtern(&buf);
+    // snprintf wrote "n=42" (4 chars) into the buffer.
+    assert(n, 4);
+    assert(buf[0], 110);  // 'n'
+    assert(buf[1], 61);   // '='
+    assert(buf[2], 52);   // '4'
+    assert(buf[3], 50);   // '2'
+    assert(buf[4], 0);    // null terminator from snprintf
+}
+
+// Jam-defined function that returns a large aggregate (sret under
+// P9.6) and internally calls extern strlen. Confirms sret + extern
+// don't interfere.
+const Stats = struct {
+    a: u64,
+    b: u64,
+    c: u64,
+};
+
+fn statsOf(s: *const[] u8) Stats {
+    var out: Stats = undefined;
+    out.a = strlen(s);
+    out.b = out.a * 2;
+    out.c = out.a * 3;
+    return out;
+}
+
+tfn statsOfOK() {
+    // strlen("hello") = 5
+    var st: Stats = statsOf("hello");
+    assert(st.a, 5);
+    assert(st.b, 10);
+    assert(st.c, 15);
+}
+
+// Address-of-struct-field passed to an extern fn — exercises the
+// cross between Jam's struct codegen, the address-of operator on a
+// field path, and the C ABI's plain-pointer parameter shape.
+const Bag = struct {
+    one: u8,
+    two: u8,
+    three: u8,
+    four: u8,
+};
+
+fn fillField(b: mut Bag) i32 {
+    // snprintf writes "hi" + NUL into the slot starting at &b.one.
+    return snprintf(&b.one, 4, "hi");
+}
+
+tfn fillFieldOK() {
+    var b: Bag = undefined;
+    b.one = 0;
+    b.two = 0;
+    b.three = 0;
+    b.four = 0;
+    var n: i32 = fillField(&b);
+    assert(n, 2);
+    assert(b.one, 104);  // 'h'
+    assert(b.two, 105);  // 'i'
+    assert(b.three, 0);  // NUL
+    // b.four was past the size limit, untouched.
+    assert(b.four, 0);
+}
+
+// Multi-mode function: one let, one mut, one undefined; calls two
+// extern fns in its body. Confirms the ABI machinery doesn't get
+// confused when several mode kinds and FFI calls coexist in one fn.
+fn multimode(prefix: u32, target: mut [8]u8, out: undefined u32) i32 {
+    var written: i32 = snprintf(&target[0], 8, "p=%d", prefix);
+    var len: u64 = strlen(&target[0]);
+    out = len as u32;
+    return written;
+}
+
+tfn multimodeOK() {
+    var buf: [8]u8 = undefined;
+    buf[0] = 0;
+    var written: u32 = undefined;
+    var n: i32 = multimode(7, &buf, &written);
+    assert(n, 3);                // "p=7" is 3 chars
+    assert(written as u32, 3);   // strlen of "p=7" is 3
+    assert(buf[0], 112);         // 'p'
+    assert(buf[1], 61);          // '='
+    assert(buf[2], 55);          // '7'
+    assert(buf[3], 0);           // NUL
+}
