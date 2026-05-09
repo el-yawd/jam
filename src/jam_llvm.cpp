@@ -5,18 +5,6 @@
  * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
  */
 
-/*
- * Jam LLVM Wrapper Implementation
- *
- * This file contains all LLVM C++ API interaction, providing a C interface
- * to the rest of the Jam compiler. This approach:
- * 1. Reduces compile times (only this file needs LLVM headers)
- * 2. Isolates LLVM version differences
- * 3. Enables potential future self-hosting
- *
- * Inspired by Zig's zig_llvm.cpp approach.
- */
-
 #include "jam_llvm.h"
 
 #include "llvm/IR/Constants.h"
@@ -36,10 +24,6 @@
 #include "llvm/TargetParser/Host.h"
 
 #include <cstring>
-
-// ============================================================================
-// Helper macros for type casting
-// ============================================================================
 
 #define WRAP_CONTEXT(ctx) reinterpret_cast<JamContextRef>(ctx)
 #define UNWRAP_CONTEXT(ctx) reinterpret_cast<llvm::LLVMContext *>(ctx)
@@ -65,10 +49,6 @@
 #define WRAP_TARGET_MACHINE(tm) reinterpret_cast<JamTargetMachineRef>(tm)
 #define UNWRAP_TARGET_MACHINE(tm) reinterpret_cast<llvm::TargetMachine *>(tm)
 
-// ============================================================================
-// Initialization
-// ============================================================================
-
 void JamLLVMInitializeNativeTarget(void) { llvm::InitializeNativeTarget(); }
 
 void JamLLVMInitializeNativeAsmPrinter(void) {
@@ -87,19 +67,21 @@ void JamLLVMInitializeAllTargets(void) {
 	llvm::InitializeAllAsmPrinters();
 }
 
-// ============================================================================
-// Context
-// ============================================================================
-
 JamContextRef JamLLVMCreateContext(void) {
-	return WRAP_CONTEXT(new llvm::LLVMContext());
+	auto *ctx = new llvm::LLVMContext();
+	// Drop SSA value names at construction time. Clang and Zig both emit
+	// IR with auto-numbered temporaries (`%0`, `%1`, …) instead of the
+	// source-named values our codegen passes through. Names cost LLVM
+	// memory (string storage on every Value) and don't affect codegen at
+	// all — they only show up in printed IR. Discarding them here makes
+	// `--emit-ir` output match what production compilers print without
+	// having to plumb empty strings through every CreateAlloca/CreateGEP
+	// call site.
+	ctx->setDiscardValueNames(true);
+	return WRAP_CONTEXT(ctx);
 }
 
 void JamLLVMDisposeContext(JamContextRef ctx) { delete UNWRAP_CONTEXT(ctx); }
-
-// ============================================================================
-// Module
-// ============================================================================
 
 JamModuleRef JamLLVMCreateModule(const char *name, JamContextRef ctx) {
 	return WRAP_MODULE(new llvm::Module(name, *UNWRAP_CONTEXT(ctx)));
@@ -129,10 +111,6 @@ char *JamLLVMPrintModuleToString(JamModuleRef mod) {
 
 void JamLLVMDisposeMessage(char *msg) { free(msg); }
 
-// ============================================================================
-// Builder
-// ============================================================================
-
 JamBuilderRef JamLLVMCreateBuilder(JamContextRef ctx) {
 	return WRAP_BUILDER(new llvm::IRBuilder<>(*UNWRAP_CONTEXT(ctx)));
 }
@@ -149,10 +127,6 @@ void JamLLVMPositionBuilderAtEnd(JamBuilderRef builder,
 JamBasicBlockRef JamLLVMGetInsertBlock(JamBuilderRef builder) {
 	return WRAP_BLOCK(UNWRAP_BUILDER(builder)->GetInsertBlock());
 }
-
-// ============================================================================
-// Types
-// ============================================================================
 
 JamTypeRef JamLLVMInt1Type(JamContextRef ctx) {
 	return WRAP_TYPE(llvm::Type::getInt1Ty(*UNWRAP_CONTEXT(ctx)));
@@ -262,10 +236,6 @@ unsigned JamLLVMGetIntTypeWidth(JamTypeRef type) {
 	return UNWRAP_TYPE(type)->getIntegerBitWidth();
 }
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 JamValueRef JamLLVMConstInt(JamTypeRef type, uint64_t val, bool signExtend) {
 	return WRAP_VALUE(
 	    llvm::ConstantInt::get(UNWRAP_TYPE(type), val, signExtend));
@@ -296,10 +266,6 @@ JamValueRef JamLLVMConstStringInContext(JamContextRef ctx, const char *str,
 JamValueRef JamLLVMGetUndef(JamTypeRef type) {
 	return WRAP_VALUE(llvm::UndefValue::get(UNWRAP_TYPE(type)));
 }
-
-// ============================================================================
-// Global Variables
-// ============================================================================
 
 JamValueRef JamLLVMAddGlobalString(JamModuleRef mod, const char *str,
                                    const char *name) {
@@ -338,10 +304,6 @@ void JamLLVMSetInitializer(JamValueRef global, JamValueRef constantVal) {
 	llvm::cast<llvm::GlobalVariable>(UNWRAP_VALUE(global))
 	    ->setInitializer(llvm::cast<llvm::Constant>(UNWRAP_VALUE(constantVal)));
 }
-
-// ============================================================================
-// Functions
-// ============================================================================
 
 JamFunctionRef JamLLVMAddFunction(JamModuleRef mod, const char *name,
                                   JamTypeRef funcType) {
@@ -409,6 +371,42 @@ void JamLLVMAddRetAttrZeroExt(JamFunctionRef func) {
 	UNWRAP_FUNCTION(func)->addRetAttr(llvm::Attribute::ZExt);
 }
 
+// Lazily-cached host CPU + feature strings. Computed once on first call and
+// reused for every function — querying the host on every AddFunction would
+// add up across a large module.
+static const std::string &cachedHostCPU() {
+	static const std::string s = llvm::sys::getHostCPUName().str();
+	return s;
+}
+
+static const std::string &cachedHostFeatures() {
+	static const std::string s = []() {
+		std::string out;
+		auto feats = llvm::sys::getHostCPUFeatures();
+		for (auto &f : feats) {
+			if (!out.empty()) out += ',';
+			out += (f.second ? '+' : '-');
+			out += f.first().str();
+		}
+		return out;
+	}();
+	return s;
+}
+
+void JamLLVMApplyDefaultFnAttrs(JamFunctionRef func, bool isExtern) {
+	llvm::Function *F = UNWRAP_FUNCTION(func);
+	if (!isExtern) {
+		F->addFnAttr(llvm::Attribute::NoUnwind);
+		F->addFnAttr(llvm::Attribute::getWithUWTableKind(
+		    F->getContext(), llvm::UWTableKind::Sync));
+	}
+	F->addFnAttr("frame-pointer", "all");
+	const std::string &cpu = cachedHostCPU();
+	if (!cpu.empty()) F->addFnAttr("target-cpu", cpu);
+	const std::string &feats = cachedHostFeatures();
+	if (!feats.empty()) F->addFnAttr("target-features", feats);
+}
+
 void JamLLVMAddParamAttrSret(JamFunctionRef func, unsigned argIdx,
                              JamTypeRef pointeeType, unsigned align) {
 	llvm::Function *F = UNWRAP_FUNCTION(func);
@@ -434,10 +432,6 @@ bool JamLLVMVerifyFunction(JamFunctionRef func) {
 	return !llvm::verifyFunction(*UNWRAP_FUNCTION(func), &llvm::errs());
 }
 
-// ============================================================================
-// Basic Blocks
-// ============================================================================
-
 JamBasicBlockRef JamLLVMCreateBasicBlock(JamContextRef ctx, const char *name) {
 	return WRAP_BLOCK(llvm::BasicBlock::Create(*UNWRAP_CONTEXT(ctx), name));
 }
@@ -456,10 +450,6 @@ JamFunctionRef JamLLVMGetBasicBlockParent(JamBasicBlockRef block) {
 JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block) {
 	return WRAP_VALUE(UNWRAP_BLOCK(block)->getTerminator());
 }
-
-// ============================================================================
-// Instructions - Memory
-// ============================================================================
 
 JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder, JamTypeRef type,
                                uint64_t alignBytes, const char *name) {
@@ -513,10 +503,6 @@ JamValueRef JamLLVMBuildPtrGEP(JamBuilderRef builder, JamTypeRef elemType,
 	                                       llvm::ArrayRef<llvm::Value *>(indices, 1),
 	                                       name));
 }
-
-// ============================================================================
-// Instructions - Arithmetic
-// ============================================================================
 
 JamValueRef JamLLVMBuildAdd(JamBuilderRef builder, JamValueRef lhs,
                             JamValueRef rhs, const char *name) {
@@ -572,10 +558,6 @@ JamValueRef JamLLVMBuildLShr(JamBuilderRef builder, JamValueRef lhs,
 	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
 
-// ============================================================================
-// Instructions - Comparison
-// ============================================================================
-
 JamValueRef JamLLVMBuildICmp(JamBuilderRef builder, JamIntPredicate pred,
                              JamValueRef lhs, JamValueRef rhs,
                              const char *name) {
@@ -618,10 +600,6 @@ JamValueRef JamLLVMBuildICmp(JamBuilderRef builder, JamIntPredicate pred,
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateICmp(
 	    llvmPred, UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
-
-// ============================================================================
-// Instructions - Control Flow
-// ============================================================================
 
 JamValueRef JamLLVMBuildBr(JamBuilderRef builder, JamBasicBlockRef dest) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateBr(UNWRAP_BLOCK(dest)));
@@ -671,10 +649,6 @@ void JamLLVMAddIncoming(JamValueRef phi, JamValueRef *values,
 	}
 }
 
-// ============================================================================
-// Instructions - Conversions
-// ============================================================================
-
 JamValueRef JamLLVMBuildBitCast(JamBuilderRef builder, JamValueRef val,
                                 JamTypeRef destType, const char *name) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateBitCast(
@@ -706,10 +680,6 @@ JamValueRef JamLLVMBuildFPCast(JamBuilderRef builder, JamValueRef val,
 	    UNWRAP_VALUE(val), UNWRAP_TYPE(destType), name));
 }
 
-// ============================================================================
-// Instructions - Aggregates
-// ============================================================================
-
 JamValueRef JamLLVMBuildInsertValue(JamBuilderRef builder, JamValueRef agg,
                                     JamValueRef val, unsigned index,
                                     const char *name) {
@@ -723,10 +693,6 @@ JamValueRef JamLLVMBuildExtractValue(JamBuilderRef builder, JamValueRef agg,
 	    UNWRAP_VALUE(agg), index, name));
 }
 
-// ============================================================================
-// Value Utilities
-// ============================================================================
-
 JamTypeRef JamLLVMTypeOf(JamValueRef val) {
 	return WRAP_TYPE(UNWRAP_VALUE(val)->getType());
 }
@@ -735,10 +701,6 @@ JamTypeRef JamLLVMGetAllocatedType(JamValueRef alloca) {
 	return WRAP_TYPE(
 	    llvm::cast<llvm::AllocaInst>(UNWRAP_VALUE(alloca))->getAllocatedType());
 }
-
-// ============================================================================
-// Target & Code Generation
-// ============================================================================
 
 char *JamLLVMGetDefaultTargetTriple(void) {
 	return strdup(llvm::sys::getDefaultTargetTriple().c_str());

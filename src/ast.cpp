@@ -29,6 +29,13 @@ size_t CurrentLoopBodyScopeIdx = SIZE_MAX;
 // codegenAddressOf which is defined further down in the file.
 static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n);
 
+// Forward declaration so the struct-method dispatch in codegenCall can
+// translate a qualified source-level name (`File.drop`) into the LLVM
+// symbol (`__drop_File`). The implementation lives near declarePrototype.
+static std::string mangledFunctionName(const FunctionAST &fn,
+                                       const TypePool &types,
+                                       const StringPool &strings);
+
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
@@ -233,6 +240,7 @@ static JamValueRef genPrintCall(JamCodegenContext &ctx,
 		JamTypeRef printfType = JamLLVMFunctionType(
 		    printfRetType, printfParamTypes, 1, true);
 		printfFunc = JamLLVMAddFunction(ctx.getModule(), "printf", printfType);
+		JamLLVMApplyDefaultFnAttrs(printfFunc, /*isExtern=*/true);
 	}
 
 	JamFunctionRef putsFunc = JamLLVMGetFunction(ctx.getModule(), "puts");
@@ -243,6 +251,7 @@ static JamValueRef genPrintCall(JamCodegenContext &ctx,
 		JamTypeRef putsType = JamLLVMFunctionType(
 		    putsRetType, putsParamTypes, 1, false);
 		putsFunc = JamLLVMAddFunction(ctx.getModule(), "puts", putsType);
+		JamLLVMApplyDefaultFnAttrs(putsFunc, /*isExtern=*/true);
 	}
 
 	if (callee == "std.fmt.println" && argCount == 1) {
@@ -287,6 +296,7 @@ static JamValueRef genSleepCall(JamCodegenContext &ctx, const uint32_t *args,
 		                                            usleepParamTypes, 1,
 		                                            false);
 		usleepFunc = JamLLVMAddFunction(ctx.getModule(), "usleep", usleepType);
+		JamLLVMApplyDefaultFnAttrs(usleepFunc, /*isExtern=*/true);
 	}
 
 	JamValueRef msArg = codegenNode(ctx, args[0]);
@@ -367,6 +377,7 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 		JamTypeRef printfType = JamLLVMFunctionType(
 		    ctx.getInt32Type(), printfParamTypes, 1, true);
 		printfFunc = JamLLVMAddFunction(ctx.getModule(), "printf", printfType);
+		JamLLVMApplyDefaultFnAttrs(printfFunc, /*isExtern=*/true);
 	}
 	JamFunctionRef exitFunc = JamLLVMGetFunction(ctx.getModule(), "exit");
 	if (!exitFunc) {
@@ -374,6 +385,7 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 		JamTypeRef exitType = JamLLVMFunctionType(
 		    ctx.getVoidType(), exitParamTypes, 1, false);
 		exitFunc = JamLLVMAddFunction(ctx.getModule(), "exit", exitType);
+		JamLLVMApplyDefaultFnAttrs(exitFunc, /*isExtern=*/true);
 	}
 
 	JamValueRef fmtStr = JamLLVMBuildGlobalStringPtr(
@@ -667,8 +679,31 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		}
 	}
 
+	// Struct-method qualified call: `Struct.method(args...)`. Methods are
+	// registered in the function table under their qualified source-level
+	// name; the LLVM symbol is whatever mangledFunctionName produces
+	// (drop methods share the existing `__drop_T` mangling). The rest of
+	// this function uses `callee` (source-level) for FunctionAST lookups
+	// and `llvmName` for the LLVM symbol — they only differ for methods.
+	std::string llvmName = callee;
+	{
+		size_t dot = callee.find('.');
+		if (dot != std::string::npos &&
+		    callee.find('.', dot + 1) == std::string::npos) {
+			std::string typeName = callee.substr(0, dot);
+			if (ctx.getStruct(typeName)) {
+				const FunctionAST *methodAST = ctx.getFunctionAST(callee);
+				if (methodAST) {
+					llvmName = mangledFunctionName(
+					    *methodAST, ctx.getTypePool(),
+					    ctx.getStringPool());
+				}
+			}
+		}
+	}
+
 	JamFunctionRef CalleeF =
-	    JamLLVMGetFunction(ctx.getModule(), callee.c_str());
+	    JamLLVMGetFunction(ctx.getModule(), llvmName.c_str());
 	if (!CalleeF) {
 		throw std::runtime_error("Unknown function referenced: " + callee);
 	}
@@ -2354,6 +2389,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 
 	JamFunctionRef F =
 	    JamLLVMAddFunction(ctx.getModule(), funcName.c_str(), FT);
+	JamLLVMApplyDefaultFnAttrs(F, isExtern);
 
 	// Apply sret attributes to the leading parameter when applicable.
 	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {

@@ -5,17 +5,6 @@
  * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
  */
 
-/*
- * Jam LLVM Wrapper Layer
- *
- * The purpose of this file is to:
- * 1. Isolate all LLVM C++ API interaction to reduce compile times
- * 2. Provide a C interface for potential future self-hosting
- * 3. Prevent LLVM C++ headers from infecting the rest of the project
- *
- * Inspired by Zig's zig_llvm.h approach.
- */
-
 #ifndef JAM_LLVM_H
 #define JAM_LLVM_H
 
@@ -67,25 +56,13 @@ typedef enum {
 	JAM_ICMP_SLE = 41,  // signed less or equal
 } JamIntPredicate;
 
-// ============================================================================
-// Initialization
-// ============================================================================
-
 JAM_EXTERN_C void JamLLVMInitializeNativeTarget(void);
 JAM_EXTERN_C void JamLLVMInitializeNativeAsmPrinter(void);
 JAM_EXTERN_C void JamLLVMInitializeNativeAsmParser(void);
 JAM_EXTERN_C void JamLLVMInitializeAllTargets(void);
 
-// ============================================================================
-// Context
-// ============================================================================
-
 JAM_EXTERN_C JamContextRef JamLLVMCreateContext(void);
 JAM_EXTERN_C void JamLLVMDisposeContext(JamContextRef ctx);
-
-// ============================================================================
-// Module
-// ============================================================================
 
 JAM_EXTERN_C JamModuleRef JamLLVMCreateModule(const char *name,
                                               JamContextRef ctx);
@@ -98,19 +75,11 @@ JAM_EXTERN_C JamFunctionRef JamLLVMGetFunction(JamModuleRef mod,
 JAM_EXTERN_C char *JamLLVMPrintModuleToString(JamModuleRef mod);
 JAM_EXTERN_C void JamLLVMDisposeMessage(char *msg);
 
-// ============================================================================
-// Builder
-// ============================================================================
-
 JAM_EXTERN_C JamBuilderRef JamLLVMCreateBuilder(JamContextRef ctx);
 JAM_EXTERN_C void JamLLVMDisposeBuilder(JamBuilderRef builder);
 JAM_EXTERN_C void JamLLVMPositionBuilderAtEnd(JamBuilderRef builder,
                                               JamBasicBlockRef block);
 JAM_EXTERN_C JamBasicBlockRef JamLLVMGetInsertBlock(JamBuilderRef builder);
-
-// ============================================================================
-// Types
-// ============================================================================
 
 JAM_EXTERN_C JamTypeRef JamLLVMInt1Type(JamContextRef ctx);
 JAM_EXTERN_C JamTypeRef JamLLVMInt8Type(JamContextRef ctx);
@@ -143,10 +112,6 @@ JAM_EXTERN_C bool JamLLVMTypeIsPointer(JamTypeRef type);
 JAM_EXTERN_C bool JamLLVMTypeIsArray(JamTypeRef type);
 JAM_EXTERN_C unsigned JamLLVMGetIntTypeWidth(JamTypeRef type);
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 JAM_EXTERN_C JamValueRef JamLLVMConstInt(JamTypeRef type, uint64_t val,
                                          bool signExtend);
 JAM_EXTERN_C JamValueRef JamLLVMConstReal(JamTypeRef type, double val);
@@ -160,10 +125,6 @@ JAM_EXTERN_C JamValueRef JamLLVMConstStringInContext(JamContextRef ctx,
                                                      bool dontNullTerminate);
 JAM_EXTERN_C JamValueRef JamLLVMGetUndef(JamTypeRef type);
 
-// ============================================================================
-// Global Variables
-// ============================================================================
-
 JAM_EXTERN_C JamValueRef JamLLVMAddGlobalString(JamModuleRef mod,
                                                 const char *str,
                                                 const char *name);
@@ -175,10 +136,6 @@ JAM_EXTERN_C JamValueRef JamLLVMAddGlobal(JamModuleRef mod, JamTypeRef type,
 JAM_EXTERN_C void JamLLVMSetGlobalConstant(JamValueRef global, bool isConstant);
 JAM_EXTERN_C void JamLLVMSetInitializer(JamValueRef global,
                                         JamValueRef constantVal);
-
-// ============================================================================
-// Functions
-// ============================================================================
 
 JAM_EXTERN_C JamFunctionRef JamLLVMAddFunction(JamModuleRef mod,
                                                const char *name,
@@ -196,6 +153,22 @@ JAM_EXTERN_C void JamLLVMAddParamAttrZeroExt(JamFunctionRef func,
                                              unsigned argIdx);
 JAM_EXTERN_C void JamLLVMAddRetAttrZeroExt(JamFunctionRef func);
 
+// Apply the default function-level attribute set every Jam-defined function
+// should carry. Mirrors what clang and Zig emit so generated IR has the same
+// `#0` attribute group and benefits from the same codegen hints:
+//
+//   nounwind                — Jam has no exceptions; safe on every defined fn.
+//   uwtable=sync            — emit unwind tables for backtraces / debuggers.
+//   frame-pointer="all"     — keep a frame pointer (required on macOS ARM64).
+//   target-cpu=<host CPU>   — let LLVM use CPU-specific instructions.
+//   target-features=<host>  — propagate host feature set (NEON, AVX, ...).
+//
+// `isExtern` skips `nounwind` and `uwtable` for declarations of foreign
+// functions (we don't know whether they unwind, and the unwind table for
+// them is the responsibility of whatever compiled them).
+JAM_EXTERN_C void JamLLVMApplyDefaultFnAttrs(JamFunctionRef func,
+                                             bool isExtern);
+
 // P9.6: mark a function parameter as the sret (struct-return) slot.
 // Equivalent to LLVM `sret(<type>) align <a> noalias`. The argument
 // must be `ptr`-typed; the pointee type and alignment are passed
@@ -209,20 +182,12 @@ JAM_EXTERN_C void JamLLVMSetValueName(JamValueRef val, const char *name);
 JAM_EXTERN_C JamTypeRef JamLLVMGetReturnType(JamFunctionRef func);
 JAM_EXTERN_C bool JamLLVMVerifyFunction(JamFunctionRef func);
 
-// ============================================================================
-// Basic Blocks
-// ============================================================================
-
 JAM_EXTERN_C JamBasicBlockRef JamLLVMCreateBasicBlock(JamContextRef ctx,
                                                       const char *name);
 JAM_EXTERN_C JamBasicBlockRef JamLLVMAppendBasicBlock(JamFunctionRef func,
                                                       const char *name);
 JAM_EXTERN_C JamFunctionRef JamLLVMGetBasicBlockParent(JamBasicBlockRef block);
 JAM_EXTERN_C JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block);
-
-// ============================================================================
-// Instructions - Memory
-// ============================================================================
 
 // Stack alloca with an explicit alignment in bytes. Pass 0 to fall back to
 // LLVM's data-layout-derived inference, but prefer passing the type's real
@@ -262,10 +227,6 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildPtrGEP(JamBuilderRef builder,
 // Returns the element type of an array type (e.g. [200 x i8] -> i8).
 JAM_EXTERN_C JamTypeRef JamLLVMGetArrayElementType(JamTypeRef arrayType);
 
-// ============================================================================
-// Instructions - Arithmetic
-// ============================================================================
-
 JAM_EXTERN_C JamValueRef JamLLVMBuildAdd(JamBuilderRef builder, JamValueRef lhs,
                                          JamValueRef rhs, const char *name);
 JAM_EXTERN_C JamValueRef JamLLVMBuildSub(JamBuilderRef builder, JamValueRef lhs,
@@ -287,17 +248,9 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildLShr(JamBuilderRef builder,
                                           JamValueRef lhs, JamValueRef rhs,
                                           const char *name);
 
-// ============================================================================
-// Instructions - Comparison
-// ============================================================================
-
 JAM_EXTERN_C JamValueRef JamLLVMBuildICmp(JamBuilderRef builder,
                                           JamIntPredicate pred, JamValueRef lhs,
                                           JamValueRef rhs, const char *name);
-
-// ============================================================================
-// Instructions - Control Flow
-// ============================================================================
 
 JAM_EXTERN_C JamValueRef JamLLVMBuildBr(JamBuilderRef builder,
                                         JamBasicBlockRef dest);
@@ -317,10 +270,6 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildPhi(JamBuilderRef builder, JamTypeRef type,
                                          const char *name);
 JAM_EXTERN_C void JamLLVMAddIncoming(JamValueRef phi, JamValueRef *values,
                                      JamBasicBlockRef *blocks, unsigned count);
-
-// ============================================================================
-// Instructions - Conversions
-// ============================================================================
 
 JAM_EXTERN_C JamValueRef JamLLVMBuildBitCast(JamBuilderRef builder,
                                              JamValueRef val,
@@ -343,10 +292,6 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildFPCast(JamBuilderRef builder,
                                             JamTypeRef destType,
                                             const char *name);
 
-// ============================================================================
-// Instructions - Aggregates
-// ============================================================================
-
 JAM_EXTERN_C JamValueRef JamLLVMBuildInsertValue(JamBuilderRef builder,
                                                  JamValueRef agg,
                                                  JamValueRef val,
@@ -357,16 +302,8 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildExtractValue(JamBuilderRef builder,
                                                   unsigned index,
                                                   const char *name);
 
-// ============================================================================
-// Value Utilities
-// ============================================================================
-
 JAM_EXTERN_C JamTypeRef JamLLVMTypeOf(JamValueRef val);
 JAM_EXTERN_C JamTypeRef JamLLVMGetAllocatedType(JamValueRef alloca);
-
-// ============================================================================
-// Target & Code Generation
-// ============================================================================
 
 JAM_EXTERN_C char *JamLLVMGetDefaultTargetTriple(void);
 JAM_EXTERN_C char *JamLLVMGetHostCPUName(void);

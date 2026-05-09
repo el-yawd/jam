@@ -424,6 +424,50 @@ static int compileAndRun(const std::string &filename,
 		codegenCtx.registerFunctionAST(function->Name, function.get());
 	}
 
+	// Methods declared inside struct bodies (`fn name(self: ..., ...)`).
+	// v1 supports `drop` only; non-drop methods are accepted by the parser
+	// so the surface stays forward-compatible, but rejected here so we
+	// don't commit to method mangling yet. See docs/STRUCT_METHODS.md.
+	auto resolveStructName = [&](TypeIdx ty) -> std::string {
+		const auto &key = codegenCtx.getTypePool().get(ty);
+		if (key.kind != TypeKind::Struct &&
+		    key.kind != TypeKind::Named) {
+			return "";
+		}
+		return codegenCtx.getStringPool().get(
+		    static_cast<StringIdx>(key.a));
+	};
+	for (auto &s : module->Structs) {
+		for (auto &m : s->Methods) {
+			if (m->Args.empty() || m->Args[0].Name != "self") {
+				std::cerr << filename << ": error: method `" << m->Name
+				          << "` on struct `" << s->Name
+				          << "` must take `self` as its first parameter\n";
+				return 1;
+			}
+			std::string selfStruct =
+			    resolveStructName(m->Args[0].Type);
+			if (selfStruct != s->Name) {
+				std::cerr << filename << ": error: method `" << m->Name
+				          << "` on struct `" << s->Name
+				          << "` has self type `" << selfStruct
+				          << "`; expected `" << s->Name << "`\n";
+				return 1;
+			}
+			if (m->Name != "drop") {
+				std::cerr << filename
+				          << ": error: non-drop methods inside struct "
+				             "bodies are not yet supported (saw `"
+				          << s->Name << "." << m->Name << "`)\n";
+				return 1;
+			}
+			m->declarePrototype(codegenCtx);
+			codegenCtx.registerFunctionAST(
+			    s->Name + "." + m->Name, m.get());
+			mainModuleEmits.push_back(m.get());
+		}
+	}
+
 	// Pass 2a: bodies for pub functions in imported modules.
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
@@ -444,6 +488,11 @@ static int compileAndRun(const std::string &filename,
 	{
 		jam::init_analysis::FunctionRegistry fnRegistry;
 		for (auto &fn : module->Functions) { fnRegistry[fn->Name] = fn.get(); }
+		for (auto &s : module->Structs) {
+			for (auto &m : s->Methods) {
+				fnRegistry[s->Name + "." + m->Name] = m.get();
+			}
+		}
 		for (const auto &kv : resolver.getLoadedModules()) {
 			if (kv.first == "std") continue;
 			for (auto &fn : kv.second->Functions) {
@@ -485,6 +534,7 @@ static int compileAndRun(const std::string &filename,
 		JamTypeRef mainFT = JamLLVMFunctionType(mainRetType, nullptr, 0, false);
 		JamFunctionRef mainFunc =
 		    JamLLVMAddFunction(codegenCtx.getModule(), "main", mainFT);
+		JamLLVMApplyDefaultFnAttrs(mainFunc, /*isExtern=*/false);
 		JamLLVMSetLinkage((JamValueRef)mainFunc, JAM_LINKAGE_EXTERNAL);
 		JamLLVMSetFunctionCallConv(mainFunc, JAM_CALLCONV_C);
 
@@ -502,6 +552,7 @@ static int compileAndRun(const std::string &filename,
 			    codegenCtx.getInt32Type(), printfParamTypes, 1, true);
 			printfFunc = JamLLVMAddFunction(codegenCtx.getModule(), "printf",
 			                                printfType);
+			JamLLVMApplyDefaultFnAttrs(printfFunc, /*isExtern=*/true);
 		}
 
 		for (const auto &name : testFunctionNames) {

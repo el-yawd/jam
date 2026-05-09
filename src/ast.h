@@ -81,14 +81,22 @@ class FunctionAST {
 };
 
 // Top-level struct declaration: const Vec3 = struct { x: f32, y: f32 };
+//
+// Methods declared inside the struct body — `fn name(self: ..., ...) ...`
+// — live in `Methods`. The method's `FunctionAST::Name` stays as the user
+// wrote it (e.g. `"drop"`); qualification (`Vec3.drop`) is applied at
+// registration time in module dispatch. See docs/STRUCT_METHODS.md.
 class StructDeclAST {
   public:
 	std::string Name;
 	std::vector<std::pair<std::string, TypeIdx>> Fields;  // (name, type)
+	std::vector<std::unique_ptr<FunctionAST>> Methods;
 
 	StructDeclAST(std::string Name,
-	              std::vector<std::pair<std::string, TypeIdx>> Fields)
-	    : Name(std::move(Name)), Fields(std::move(Fields)) {}
+	              std::vector<std::pair<std::string, TypeIdx>> Fields,
+	              std::vector<std::unique_ptr<FunctionAST>> Methods = {})
+	    : Name(std::move(Name)), Fields(std::move(Fields)),
+	      Methods(std::move(Methods)) {}
 };
 
 // One variant of an enum declaration. Unit variants (no payload) have

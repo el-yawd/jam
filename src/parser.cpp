@@ -901,18 +901,32 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
 
 	std::vector<std::pair<std::string, TypeIdx>> fields;
+	std::vector<std::unique_ptr<FunctionAST>> methods;
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
-		consume(TOK_IDENTIFIER, "Expected field name");
+		// Method: `fn name(self: ..., ...) ReturnType { body }`. Methods
+		// can appear in any order relative to fields. parseFunction
+		// consumes the `fn` keyword itself.
+		if (check(TOK_FN)) {
+			methods.push_back(parseFunction());
+			match(TOK_COMMA);  // optional trailing comma after a method
+			continue;
+		}
+		// Field: `name: Type`. Comma separates from the next member.
+		consume(TOK_IDENTIFIER, "Expected field name or 'fn'");
 		std::string fieldName = previous().lexeme;
 		consume(TOK_COLON, "Expected ':' after field name");
 		TypeIdx fieldType = parseType();
 		fields.emplace_back(std::move(fieldName), fieldType);
-		if (!match(TOK_COMMA)) break;
+		if (!check(TOK_CLOSE_BRACE)) {
+			consume(TOK_COMMA,
+			        "Expected ',' or '}' after struct field");
+		}
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct definition");
 	consume(TOK_SEMI, "Expected ';' after struct declaration");
 
-	return std::make_unique<StructDeclAST>(name, std::move(fields));
+	return std::make_unique<StructDeclAST>(name, std::move(fields),
+	                                       std::move(methods));
 }
 
 // Parse `const Name = enum { Variant1, Variant2(T1, T2), ... };`.

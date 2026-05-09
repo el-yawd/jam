@@ -12,27 +12,49 @@
 namespace jam {
 namespace drops {
 
+// Inspect a candidate function and, if it has the drop-fn shape
+// (`fn drop(self: mut <Struct>)`), add it to the registry under the
+// struct's name. Used by both the top-level-function scan and the
+// struct-method scan below.
+static void considerDropCandidate(const FunctionAST *fn,
+                                  const TypePool &types,
+                                  const StringPool &strings,
+                                  DropRegistry &registry) {
+	if (fn->Name != "drop") return;
+	if (fn->Args.size() != 1) return;
+	const Param &p = fn->Args[0];
+	if (p.Name != "self") return;
+	if (p.Mode != ParamMode::Mut) return;
+
+	// Resolve the parameter's TypeIdx to a struct name. Both Struct and
+	// Named TypeKinds carry the struct's name in their `a` slot as a
+	// StringIdx; either form means "drop fn for that struct".
+	const TypeKey &key = types.get(p.Type);
+	if (key.kind != TypeKind::Struct && key.kind != TypeKind::Named) {
+		return;
+	}
+	StringIdx nameIdx = static_cast<StringIdx>(key.a);
+	if (nameIdx == kNoString) return;
+	const std::string &structName = strings.get(nameIdx);
+	registry[structName] = fn;
+}
+
 DropRegistry buildDropRegistry(const ModuleAST &module, const TypePool &types,
                                const StringPool &strings) {
 	DropRegistry registry;
+	// Top-level `fn drop(self: mut T)` declarations.
 	for (const auto &fn : module.Functions) {
-		if (fn->Name != "drop") continue;
-		if (fn->Args.size() != 1) continue;
-		const Param &p = fn->Args[0];
-		if (p.Name != "self") continue;
-		if (p.Mode != ParamMode::Mut) continue;
-
-		// Resolve the parameter's TypeIdx to a struct name. Both Struct
-		// and Named TypeKinds carry the struct's name in their `a` slot
-		// as a StringIdx; either form means "drop fn for that struct".
-		const TypeKey &key = types.get(p.Type);
-		if (key.kind != TypeKind::Struct && key.kind != TypeKind::Named) {
-			continue;
+		considerDropCandidate(fn.get(), types, strings, registry);
+	}
+	// Methods declared inside struct bodies. The validation in main.cpp
+	// already enforces that the self-param's type matches the enclosing
+	// struct, but we still re-derive the struct name from the param here
+	// so the registry stays self-consistent and the in-struct form is a
+	// pure synonym of the free-function form.
+	for (const auto &s : module.Structs) {
+		for (const auto &m : s->Methods) {
+			considerDropCandidate(m.get(), types, strings, registry);
 		}
-		StringIdx nameIdx = static_cast<StringIdx>(key.a);
-		if (nameIdx == kNoString) continue;
-		const std::string &structName = strings.get(nameIdx);
-		registry[structName] = fn.get();
 	}
 	return registry;
 }
