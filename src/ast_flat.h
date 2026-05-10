@@ -109,8 +109,9 @@ enum class AstTag : uint8_t {
 	StructExpr,
 
 	// Pattern match (M1: integer literals, ranges, or-patterns, wildcard).
+	// The catch-all is the wildcard pattern `_`; there is no `else` arm.
 	// d.lhs = NodeIdx (scrutinee expression)
-	// d.rhs = ExtraIdx → [armCount, elseBodyCount, elseBody...,
+	// d.rhs = ExtraIdx → [armCount,
 	//                     arm0_patIdx, arm0_bodyCount, arm0_body...,
 	//                     arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
 	MatchNode,

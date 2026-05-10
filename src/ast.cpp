@@ -1674,18 +1674,15 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
 
 	uint32_t armCount = ns.getExtra(extra);
-	uint32_t elseBodyCount = ns.getExtra(extra + 1);
 
-	// Compute the offset just past the else body — that's where arm
-	// records begin.
-	uint32_t armsOff = 2 + elseBodyCount;
+	// Arm records begin immediately after the armCount slot.
+	uint32_t armsOff = 1;
 
 	// E3 — compile-time exhaustiveness + reachability over enum
 	// variants. We scan all arm patterns once, accumulating which
 	// variants are covered and detecting duplicates (an arm that
 	// would never run because an earlier arm already covers it).
-	// Exhaustiveness fires only when there is no `else` arm and no
-	// catch-all `_`; duplicate detection runs in either case.
+	// Exhaustiveness fires when no catch-all `_` is present.
 	{
 		std::string foundEnum;
 		std::vector<std::string> coveredVariants;
@@ -1764,9 +1761,8 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			}
 		}
 
-		// Exhaustiveness: only enforced when no `else` arm and no
-		// catch-all (`_` somewhere) is present.
-		if (elseBodyCount == 0 && !foundEnum.empty() && !sawCatchAll) {
+		// Exhaustiveness: enforced when no catch-all `_` is present.
+		if (!foundEnum.empty() && !sawCatchAll) {
 			const auto *einfo = ctx.getEnum(foundEnum);
 			if (einfo) {
 				std::vector<std::string> missing;
@@ -1853,11 +1849,10 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		}
 		bodyBBs.push_back(JamLLVMAppendBasicBlock(func, "match.arm"));
 	}
-	// Where do we go if every arm fails? Else block if present, else merge.
+	// Where do we go if every arm fails? Always the merge block — match
+	// has no `else` arm, so a non-exhaustive match falls straight through
+	// (the analyzer rejects this for enum scrutinees).
 	JamBasicBlockRef fallBB = mergeBB;
-	if (elseBodyCount > 0) {
-		fallBB = JamLLVMAppendBasicBlock(func, "match.else");
-	}
 
 	// Emit each arm's pattern test in its dedicated test block.
 	uint32_t pos = armsOff;
@@ -1963,24 +1958,6 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		ctx.popDropScope();
 
 		pos = bodyStart + bodyCount;
-	}
-
-	// Else block — runs if no arm matched.
-	if (elseBodyCount > 0) {
-		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), fallBB);
-		JamValueRef lastValue = nullptr;
-		ctx.pushDropScope();
-		for (uint32_t b = 0; b < elseBodyCount; b++) {
-			lastValue = codegenNode(ctx, ns.getExtra(extra + 2 + b));
-		}
-		JamBasicBlockRef elseEndBB =
-		    JamLLVMGetInsertBlock(ctx.getBuilder());
-		if (!JamLLVMGetBasicBlockTerminator(elseEndBB)) {
-			emitTopScopeDrops(ctx);
-			armResults.push_back({elseEndBB, lastValue});
-			JamLLVMBuildBr(ctx.getBuilder(), mergeBB);
-		}
-		ctx.popDropScope();
 	}
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), mergeBB);

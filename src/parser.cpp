@@ -498,9 +498,10 @@ NodeIdx Parser::parsePattern() {
 	return emit(AstNode{AstTag::PatOr, 0, 0, 0, extra, 0});
 }
 
-// Parse a match statement: `match (expr) { Pattern Block ... else Block? }`.
+// Parse a match statement: `match (expr) { Pattern Block ... }`.
+// The catch-all is the wildcard pattern `_`; there is no `else` arm.
 // Layout in extra:
-//   [armCount, elseBodyCount, elseBody...,
+//   [armCount,
 //    arm0_patIdx, arm0_bodyCount, arm0_body...,
 //    arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
 NodeIdx Parser::parseMatch() {
@@ -515,29 +516,8 @@ NodeIdx Parser::parseMatch() {
 		std::vector<NodeIdx> body;
 	};
 	std::vector<Arm> arms;
-	std::vector<NodeIdx> elseBody;
-	bool sawElse = false;
 
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
-		// `else` arm — must be the last one.
-		if (match(TOK_ELSE)) {
-			if (sawElse) {
-				throw std::runtime_error(
-				    "Duplicate `else` arm in match");
-			}
-			sawElse = true;
-			consume(TOK_OPEN_BRACE, "Expected `{` after `else`");
-			while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
-				elseBody.push_back(parseExpression());
-			}
-			consume(TOK_CLOSE_BRACE, "Expected `}` to close `else` arm");
-			continue;
-		}
-		if (sawElse) {
-			throw std::runtime_error(
-			    "Match arms after `else` are unreachable");
-		}
-
 		Arm arm;
 		arm.pat = parsePattern();
 		consume(TOK_OPEN_BRACE, "Expected `{` to begin arm body");
@@ -550,8 +530,7 @@ NodeIdx Parser::parseMatch() {
 	consume(TOK_CLOSE_BRACE, "Expected `}` to close match body");
 
 	// Compute total extra size and pack the arms.
-	size_t total = 2;  // armCount + elseBodyCount
-	total += elseBody.size();
+	size_t total = 1;  // armCount
 	for (const Arm &a : arms) {
 		total += 2 + a.body.size();  // patIdx + bodyCount + body...
 	}
@@ -559,8 +538,6 @@ NodeIdx Parser::parseMatch() {
 	ExtraIdx extra = nodes->reserveExtra(total);
 	uint32_t pos = 0;
 	nodes->setExtra(extra + pos++, static_cast<uint32_t>(arms.size()));
-	nodes->setExtra(extra + pos++, static_cast<uint32_t>(elseBody.size()));
-	for (NodeIdx s : elseBody) { nodes->setExtra(extra + pos++, s); }
 	for (const Arm &a : arms) {
 		nodes->setExtra(extra + pos++, a.pat);
 		nodes->setExtra(extra + pos++,
