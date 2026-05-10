@@ -7,7 +7,7 @@
 // the resulting ParamABI / ReturnABI shape.
 //
 // Reference behavior (from docs/ABI.md §3):
-//   mut / undefined        → ByPointer (any size)
+//   mut                    → ByPointer (any size)
 //   let / move, scalar T   → ByValue
 //   let / move, aggregate
 //     size <= 16 bytes     → ByValue
@@ -63,13 +63,6 @@ void testMutU32IsByPointer() {
 	auto a = jam::abi::classifyParam(ParamMode::Mut, BuiltinType::U32, ctx);
 	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByPointer);
 	ASSERT_EQ(static_cast<uint32_t>(4), a.pointerAlign);
-}
-
-void testUndefinedU64IsByPointer() {
-	JamCodegenContext ctx("test");
-	auto a = jam::abi::classifyParam(ParamMode::Undefined, BuiltinType::U64, ctx);
-	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByPointer);
-	ASSERT_EQ(static_cast<uint32_t>(8), a.pointerAlign);
 }
 
 void testMoveU8IsByValueScalar() {
@@ -205,8 +198,6 @@ class ABITests {
 		                  testLetU32IsByValueScalar);
 		framework.addTest("ABI classifyParam - mut u32 ByPointer align 4",
 		                  testMutU32IsByPointer);
-		framework.addTest("ABI classifyParam - undefined u64 ByPointer align 8",
-		                  testUndefinedU64IsByPointer);
 		framework.addTest("ABI classifyParam - move u8 ByValue",
 		                  testMoveU8IsByValueScalar);
 		framework.addTest("ABI classifyParam - let small struct ByValue",

@@ -69,8 +69,6 @@ enum TokenType {
 	TOK_TILDE,      // ~ (bitwise NOT)
 	TOK_LSHIFT,     // << (left shift)
 	TOK_RSHIFT,     // >> (right shift)
-	TOK_UNDEFINED,  // undefined keyword (uninitialized storage marker;
-	                // also a parameter mode for write-to-uninit destinations)
 	TOK_MOVE,       // move keyword (parameter mode: consume ownership)
 	TOK_ELLIPSIS,   // ... (variadic marker in extern fn parameters)
 	TOK_MATCH,      // match keyword

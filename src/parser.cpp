@@ -130,9 +130,6 @@ NodeIdx Parser::parsePrimary() {
 	if (match(TOK_FALSE)) {
 		return emit(AstNode{AstTag::BoolLit, 0, 0, 0, 0, 0});
 	}
-	if (match(TOK_UNDEFINED)) {
-		return emit(AstNode{AstTag::UndefinedLit, 0, 0, 0, 0, 0});
-	}
 	if (match(TOK_STRING_LITERAL)) {
 		StringIdx s = stringPool->intern(previous().lexeme);
 		return emit(AstNode{AstTag::StringLit, 0, 0, 0, s, 0});
@@ -150,6 +147,46 @@ NodeIdx Parser::parsePrimary() {
 		return expr;
 	}
 	if (match(TOK_OPEN_BRACE)) { return parseStructLiteral(); }
+	if (match(TOK_OPEN_BRACKET)) {
+		// Array literal `[a, b, c]`, array repeat `[expr; N]`, or empty
+		// `[]` (well-typed only against a slice or zero-length array
+		// target — codegen rejects others).
+		if (match(TOK_CLOSE_BRACKET)) {
+			ExtraIdx extra = nodes->reserveExtra(1);
+			nodes->setExtra(extra, 0);
+			return emit(AstNode{AstTag::ArrayLit, 0, 0, 0, kNoType,
+			                    extra});
+		}
+		NodeIdx first = parseLogicalOr();
+		if (match(TOK_SEMI)) {
+			NodeIdx count = parseLogicalOr();
+			consume(TOK_CLOSE_BRACKET,
+			        "Expected `]` after array repeat count");
+			ExtraIdx extra = nodes->reserveExtra(2);
+			nodes->setExtra(extra, static_cast<uint32_t>(first));
+			nodes->setExtra(extra + 1, static_cast<uint32_t>(count));
+			return emit(AstNode{AstTag::ArrayRepeat, 0, 0, 0, kNoType,
+			                    extra});
+		}
+		std::vector<NodeIdx> elems;
+		elems.push_back(first);
+		while (match(TOK_COMMA)) {
+			if (check(TOK_CLOSE_BRACKET)) break;  // trailing comma
+			elems.push_back(parseLogicalOr());
+		}
+		consume(TOK_CLOSE_BRACKET,
+		        "Expected `]` or `,` in array literal");
+		ExtraIdx extra = nodes->reserveExtra(1 + elems.size());
+		nodes->setExtra(extra, static_cast<uint32_t>(elems.size()));
+		for (size_t i = 0; i < elems.size(); i++) {
+			nodes->setExtra(extra + 1 + i, elems[i]);
+		}
+		return emit(AstNode{AstTag::ArrayLit, 0, 0, 0, kNoType, extra});
+	}
+	// Generics G2: `struct { ... }` as an expression evaluates to a value
+	// of type `type` — the struct type being constructed. Used as the
+	// body of a generic type-returning function.
+	if (match(TOK_STRUCT)) { return parseStructExpression(); }
 	if (match(TOK_IDENTIFIER)) {
 		std::string name = previous().lexeme;
 		StringIdx nameId = stringPool->intern(name);
@@ -285,14 +322,46 @@ TypeIdx Parser::parseType() {
 		if (s == "f64") return BuiltinType::F64;
 		if (s == "bool" || s == "u1") return BuiltinType::Bool;
 		if (s == "str") return typePool->internSlice(BuiltinType::U8);
+		// Generics G1: `type` resolves to the singleton meta-type. A
+		// parameter of this type accepts a TypeIdx at compile time.
+		if (s == "type") return BuiltinType::Type;
 		throw std::runtime_error("Unknown base type: " + s);
 	}
 	if (match(TOK_IDENTIFIER)) {
+		const std::string &ident = previous().lexeme;
+		// Generics G3: `Self` resolves to the enclosing struct's name —
+		// the top of the parser's struct-context stack. Outside any
+		// struct body it's an error.
+		if (ident == "Self") {
+			if (structContextStack.empty()) {
+				throw std::runtime_error(
+				    "`Self` is only valid inside a struct body");
+			}
+			return typePool->internNamed(
+			    stringPool->intern(structContextStack.back()));
+		}
+		// Generics G4: `Identifier(arg, ...)` in a type position is a
+		// generic instantiation. The args are parsed recursively as
+		// types; the result is a `TypeKind::GenericCall` TypeIdx that
+		// the codegen resolves on demand via the substitution engine.
+		if (check(TOK_OPEN_PAREN)) {
+			advance();  // consume `(`
+			std::vector<TypeIdx> args;
+			if (!check(TOK_CLOSE_PAREN)) {
+				do {
+					args.push_back(parseType());
+				} while (match(TOK_COMMA));
+			}
+			consume(TOK_CLOSE_PAREN,
+			        "Expected ')' after generic type arguments");
+			return typePool->internGenericCall(
+			    stringPool->intern(ident), std::move(args));
+		}
 		// User-named types (struct / union / enum) are interned with
 		// kind = Named; codegen resolves to the concrete kind via the
 		// declaration registries. The parser does not need to know
 		// which kind the user meant.
-		return typePool->internNamed(stringPool->intern(previous().lexeme));
+		return typePool->internNamed(stringPool->intern(ident));
 	}
 	throw std::runtime_error("Expected type");
 }
@@ -522,7 +591,8 @@ NodeIdx Parser::parseExpression() {
 		if (match(TOK_COLON)) { type = parseType(); }
 
 		consume(TOK_EQUAL,
-		        "Expected '=' (use `= undefined` to leave uninitialized)");
+		        "Expected '=' (every variable must be initialized at "
+		        "declaration)");
 		NodeIdx init = parseLogicalOr();
 		consume(TOK_SEMI, "Expected ';' after variable declaration");
 
@@ -846,7 +916,6 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 			//   x: u32             — Let (default, read-only)
 			//   x: mut u32         — Mut (exclusive read-write)
 			//   x: move List       — Move (consume ownership)
-			//   x: undefined Buf   — Undefined (write to uninit destination)
 			//
 			// `*mut T` pointer types start with `*`, not `mut`, so there is
 			// no conflict with the existing pointer syntax. See MVS.md §2.
@@ -855,8 +924,6 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 				mode = ParamMode::Mut;
 			} else if (match(TOK_MOVE)) {
 				mode = ParamMode::Move;
-			} else if (match(TOK_UNDEFINED)) {
-				mode = ParamMode::Undefined;
 			}
 
 			TypeIdx paramType = parseType();
@@ -892,16 +959,9 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	                                     isPub, isTest, false);
 }
 
-std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
-	consume(TOK_CONST, "Expected 'const' for struct declaration");
-	consume(TOK_IDENTIFIER, "Expected struct name");
-	std::string name = previous().lexeme;
-	consume(TOK_EQUAL, "Expected '=' after struct name");
-	consume(TOK_STRUCT, "Expected 'struct' keyword");
-	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
-
-	std::vector<std::pair<std::string, TypeIdx>> fields;
-	std::vector<std::unique_ptr<FunctionAST>> methods;
+void Parser::parseStructBody(
+    std::vector<std::pair<std::string, TypeIdx>> &fields,
+    std::vector<std::unique_ptr<FunctionAST>> &methods) {
 	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
 		// Method: `fn name(self: ..., ...) ReturnType { body }`. Methods
 		// can appear in any order relative to fields. parseFunction
@@ -923,10 +983,48 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 		}
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct definition");
+}
+
+std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
+	consume(TOK_CONST, "Expected 'const' for struct declaration");
+	consume(TOK_IDENTIFIER, "Expected struct name");
+	std::string name = previous().lexeme;
+	consume(TOK_EQUAL, "Expected '=' after struct name");
+	consume(TOK_STRUCT, "Expected 'struct' keyword");
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
+
+	std::vector<std::pair<std::string, TypeIdx>> fields;
+	std::vector<std::unique_ptr<FunctionAST>> methods;
+	structContextStack.push_back(name);  // G3: Self resolves to this name
+	parseStructBody(fields, methods);
+	structContextStack.pop_back();
 	consume(TOK_SEMI, "Expected ';' after struct declaration");
 
 	return std::make_unique<StructDeclAST>(name, std::move(fields),
 	                                       std::move(methods));
+}
+
+NodeIdx Parser::parseStructExpression() {
+	// Caller has matched the `struct` keyword. Anonymous struct: synthetic
+	// name keyed by index in anonStructs (the substitution engine in G4
+	// reads from there to instantiate the body with concrete type args).
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
+	uint32_t idx = static_cast<uint32_t>(anonStructs.size());
+	std::string name = "__anon_struct_" + std::to_string(idx);
+
+	std::vector<std::pair<std::string, TypeIdx>> fields;
+	std::vector<std::unique_ptr<FunctionAST>> methods;
+	// G3: Self inside this anonymous struct's body resolves to the
+	// synthetic name. The substitution engine in G4 will rewrite that
+	// name to the per-instantiation struct name.
+	structContextStack.push_back(name);
+	parseStructBody(fields, methods);
+	structContextStack.pop_back();
+
+	anonStructs.push_back(std::make_unique<StructDeclAST>(
+	    std::move(name), std::move(fields), std::move(methods)));
+
+	return emit(AstNode{AstTag::StructExpr, 0, 0, 0, idx, 0});
 }
 
 // Parse `const Name = enum { Variant1, Variant2(T1, T2), ... };`.
@@ -1078,6 +1176,35 @@ std::unique_ptr<ConstDeclAST> Parser::parseConstDecl() {
 	if (match(TOK_COLON)) { declared = parseType(); }
 
 	consume(TOK_EQUAL, "Expected '=' in module-scope const declaration");
+
+	// Generics G4: try-parse the RHS as a type. If it parses as a
+	// `TypeKind::GenericCall` (e.g. `Box(i32)`) and is followed by a
+	// semicolon, treat the const as a type alias. Anything else
+	// rewinds and parses as a value expression. Save/restore the
+	// parser cursor since parseType can throw on non-type inputs.
+	int saved = current;
+	TypeIdx aliased = kNoType;
+	try {
+		TypeIdx maybeType = parseType();
+		if (typePool->get(maybeType).kind == TypeKind::GenericCall &&
+		    check(TOK_SEMI)) {
+			aliased = maybeType;
+		} else {
+			current = saved;
+		}
+	} catch (...) {
+		current = saved;
+	}
+
+	if (aliased != kNoType) {
+		consume(TOK_SEMI,
+		        "Expected ';' after module-scope const declaration");
+		auto decl = std::make_unique<ConstDeclAST>(std::move(name),
+		                                           declared, kNoNode);
+		decl->AliasedType = aliased;
+		return decl;
+	}
+
 	NodeIdx init = parseLogicalOr();
 	consume(TOK_SEMI, "Expected ';' after module-scope const declaration");
 
@@ -1142,6 +1269,11 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 
 		module->Functions.push_back(parseFunction());
 	}
+
+	// Generics G2: hand off anonymous struct bodies (`struct {...}`
+	// expressions encountered during parse) to the ModuleAST so the
+	// instantiation engine can find them by index.
+	module->AnonStructs = std::move(anonStructs);
 
 	return module;
 }

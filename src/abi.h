@@ -59,7 +59,7 @@ struct ReturnABI {
 // Classify a parameter (mode, type) pair. Pure function of its inputs;
 // safe to call any number of times. See docs/ABI.md §4.
 //
-//   mut / undefined        → always ByPointer
+//   mut                    → always ByPointer
 //   let / move, scalar T   → ByValue
 //   let / move, aggregate
 //     size <= kByValueMaxBytes → ByValue (LLVM handles register packing)

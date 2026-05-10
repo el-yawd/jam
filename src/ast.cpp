@@ -686,17 +686,83 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	// this function uses `callee` (source-level) for FunctionAST lookups
 	// and `llvmName` for the LLVM symbol — they only differ for methods.
 	std::string llvmName = callee;
+	std::string lookupName = callee;
 	{
 		size_t dot = callee.find('.');
 		if (dot != std::string::npos &&
 		    callee.find('.', dot + 1) == std::string::npos) {
 			std::string typeName = callee.substr(0, dot);
-			if (ctx.getStruct(typeName)) {
-				const FunctionAST *methodAST = ctx.getFunctionAST(callee);
+			std::string methodPart = callee.substr(dot + 1);
+
+			// Generics G6: if `typeName` is `Self` and we're inside
+			// the body of an instantiated method, the substitution
+			// context maps `Self` to the synthetic anon-struct name,
+			// which in turn maps to the instantiated struct's Named
+			// TypeIdx. Resolve it to the canonical instantiated
+			// struct name (e.g. `Box__i32`).
+			//
+			// We also handle the synthetic name directly because the
+			// parser already rewrote `Self` to `__anon_struct_<N>`
+			// in *type* positions (see parseType), but not in
+			// *expression* positions like `Self.make(...)`.
+			if (typeName == "Self") {
+				TypeIdx selfTy = ctx.lookupCurrentSubst("Self");
+				if (selfTy == kNoType) {
+					// Fall through to the regular lookup; the
+					// parser-time anon-struct name might have been
+					// substituted via the value-position path.
+				} else if (const auto *sinfo =
+				               ctx.lookupStruct(selfTy)) {
+					typeName = sinfo->name;
+				}
+			} else {
+				TypeIdx ctxTy = ctx.lookupCurrentSubst(typeName);
+				if (ctxTy != kNoType) {
+					if (const auto *sinfo =
+					        ctx.lookupStruct(ctxTy)) {
+						typeName = sinfo->name;
+					}
+				}
+			}
+
+			// Generics G4/G6: if the LHS is a type alias
+			// (`const BoxI32 = Box(i32);`), resolve it to the
+			// canonical instantiated struct name (`Box__i32`) and
+			// look up the method there. Both `BoxI32.unwrap` and
+			// `Box__i32.unwrap` dispatch to the same instantiated
+			// method.
+			std::string canonicalType = typeName;
+			TypeIdx aliasTarget = ctx.lookupTypeAlias(typeName);
+			if (aliasTarget != kNoType) {
+				if (const auto *sinfo =
+				        ctx.lookupStruct(aliasTarget)) {
+					canonicalType = sinfo->name;
+				}
+			}
+
+			if (ctx.getStruct(canonicalType)) {
+				std::string canonical =
+				    canonicalType + "." + methodPart;
+				const FunctionAST *methodAST =
+				    ctx.getFunctionAST(canonical);
+				if (!methodAST) {
+					methodAST = ctx.getFunctionAST(callee);
+				}
 				if (methodAST) {
+					lookupName = canonical;
 					llvmName = mangledFunctionName(
 					    *methodAST, ctx.getTypePool(),
 					    ctx.getStringPool());
+				} else {
+					// LHS resolved to a real struct, but it has no
+					// method by that name. Report this specifically —
+					// the most common case is a generic instantiation
+					// where the substituted T lacks an expected method
+					// (e.g. `Maybe(NoDefault).default()` body calling
+					// `T.default()` when NoDefault has no default()).
+					throw std::runtime_error(
+					    "type `" + canonicalType +
+					    "` has no method `" + methodPart + "`");
 				}
 			}
 		}
@@ -715,7 +781,11 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	// are preserved at the source level; the pointer is purely an ABI
 	// optimization. (Mut and Undefined modes still require explicit `&`
 	// at the call site since their borrow shape is user-visible.)
-	const FunctionAST *calleeAST = ctx.getFunctionAST(callee);
+	//
+	// Generics G6: lookupName is the resolved name (alias-canonicalized)
+	// for instantiated methods. For non-method calls it equals callee.
+	const FunctionAST *calleeAST = ctx.getFunctionAST(lookupName);
+	if (!calleeAST) calleeAST = ctx.getFunctionAST(callee);
 
 	// P9.6 sret: when the callee returns a large aggregate, the call
 	// site allocates a result slot and passes its address as the
@@ -845,6 +915,31 @@ static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 		emitAllScopeDrops(ctx);
 		JamLLVMBuildRetVoid(ctx.getBuilder());
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
+	}
+
+	// If the return value is a struct literal with no explicit target
+	// type (the parser leaves d.lhs == kNoType), patch it from the
+	// enclosing function's return TypeIdx so codegenStructLit knows
+	// what to construct. Mirrors what codegenVarDecl does for var
+	// decls with struct-literal initializers.
+	const AstNode &retNode = ctx.getNodeStore().get(retIdx);
+	if (retNode.tag == AstTag::StructLit &&
+	    static_cast<TypeIdx>(retNode.lhs) == kNoType) {
+		TypeIdx retTy = ctx.getCurrentReturnType();
+		if (retTy != kNoType && ctx.lookupStruct(retTy)) {
+			ctx.getNodeStore().getMut(retIdx).lhs = retTy;
+		}
+	}
+	if ((retNode.tag == AstTag::ArrayLit ||
+	     retNode.tag == AstTag::ArrayRepeat) &&
+	    static_cast<TypeIdx>(retNode.lhs) == kNoType) {
+		TypeIdx retTy = ctx.getCurrentReturnType();
+		if (retTy != kNoType) {
+			const TypeKey &k = ctx.getTypePool().get(retTy);
+			if (k.kind == TypeKind::Array) {
+				ctx.getNodeStore().getMut(retIdx).lhs = retTy;
+			}
+		}
 	}
 
 	// P9.6: when the enclosing function returns via sret, the codegen
@@ -1145,43 +1240,45 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	JamValueRef Alloca = JamLLVMBuildAlloca(
 	    ctx.getBuilder(), VarType, ctx.typeAlign(type), name.c_str());
 
-	if (initIdx != kNoNode) {
-		const AstNode &initNode = ns.get(initIdx);
-		// `= undefined` — leave alloca uninitialized.
-		if (initNode.tag != AstTag::UndefinedLit) {
-			// Patch struct literals with the declared target struct type so
-			// they can resolve fields and coerce values during their codegen.
-			if (initNode.tag == AstTag::StructLit) {
-				ctx.getNodeStore().getMut(initIdx).lhs = type;
-			}
-			JamValueRef InitVal = codegenNode(ctx, initIdx, VarType);
-			if (!InitVal) return nullptr;
-			InitVal = coerceTo(ctx, InitVal, VarType);
-			JamLLVMBuildStore(ctx.getBuilder(), InitVal, Alloca);
-		}
+	// Every var declaration carries an initializer (the parser rejects
+	// the no-init form). Patch nested literals with the declared target
+	// type so they can resolve fields and coerce values during codegen.
+	const AstNode &initNode = ns.get(initIdx);
+	if (initNode.tag == AstTag::StructLit ||
+	    initNode.tag == AstTag::ArrayLit ||
+	    initNode.tag == AstTag::ArrayRepeat) {
+		ctx.getNodeStore().getMut(initIdx).lhs = type;
 	}
-
+	// Register the binding's address BEFORE evaluating the init expression
+	// so `&self` inside a struct literal (recursive type initializer) can
+	// resolve to this alloca. The init analyzer rejects reads-before-init
+	// separately.
 	ctx.setVariable(name, Alloca);
 	ctx.setVariableType(name, type);
+	JamValueRef InitVal = codegenNode(ctx, initIdx, VarType);
+	if (!InitVal) return nullptr;
+	InitVal = coerceTo(ctx, InitVal, VarType);
+	JamLLVMBuildStore(ctx.getBuilder(), InitVal, Alloca);
 
-	// P8.1: register the binding for drop emission at scope exit if its
-	// type has a user-defined `fn drop(self: mut T)`. The init analyzer
-	// has already rejected `move` on drop-bearing bindings (P8 foundation),
-	// so codegen can emit drops unconditionally without double-free risk
-	// from caller-side moves. (Bindings declared `= undefined` and never
-	// assigned would still drop on uninit memory; tracking that is P8.2.)
-	if (const auto *reg = ctx.getDropRegistry()) {
-		const TypeKey &k = ctx.getTypePool().get(type);
-		if (k.kind == TypeKind::Struct || k.kind == TypeKind::Named) {
-			StringIdx structNameIdx = static_cast<StringIdx>(k.a);
-			if (structNameIdx != kNoString) {
-				const std::string &structName =
-				    ctx.getStringPool().get(structNameIdx);
-				auto it = reg->find(structName);
-				if (it != reg->end()) {
-					ctx.registerLocalDrop(name, Alloca, VarType,
-					                      it->second);
-				}
+	// Register the binding for drop emission at scope exit if its type has
+	// a user-defined `fn drop(self: mut T)`. With every var carrying a
+	// concrete initializer, the binding is always Init at this point —
+	// the drop call fires unconditionally at every exit reaching it.
+	{
+		// Resolve through aliases / generic instantiations to the
+		// canonical struct so the drop-fn lookup uses the actual
+		// instantiated name (e.g. `Box__i32`), not the alias the user
+		// wrote (`BoxI32`). lookupStruct handles GenericCall and
+		// alias resolution; the resulting StructInfo's `name` is
+		// canonical. lookupDropFn checks the pre-built drop registry
+		// AND the per-instantiation drop map populated by
+		// instantiateStructExpr.
+		const auto *sinfo = ctx.lookupStruct(type);
+		if (sinfo) {
+			const std::string &structName = sinfo->name;
+			if (const FunctionAST *dropFn =
+			        ctx.lookupDropFn(structName)) {
+				ctx.registerLocalDrop(name, Alloca, VarType, dropFn);
 			}
 		}
 	}
@@ -1194,6 +1291,9 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 // directly — no load-value-then-pass-by-value workaround. The drop fn
 // reads/writes self through the pointer and the caller's storage is
 // genuinely affected.
+//
+// With `undefined` removed, every drop-bearing binding is statically Init
+// at every exit reaching this drop point, so the call fires unconditionally.
 static void emitOneDrop(JamCodegenContext &ctx,
                         const JamCodegenContext::DropEntry &e) {
 	std::string mangled = mangledFunctionName(*e.dropFn, ctx.getTypePool(),
@@ -1927,6 +2027,143 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	return phi;
 }
 
+// `[a, b, c]`: build the SSA aggregate via insertvalue chain. The target
+// type must have been bound to n.lhs by the caller (var-decl, return,
+// struct-field init, etc.); reaching codegen with kNoType is a missing-
+// context error.
+//
+// Targets:
+//   • [N]T   — element list must have N entries.
+//   • []T    — only the empty form `[]` is accepted; produces an empty
+//              slice {ptr=null, len=0}. Non-empty literals targeting a
+//              slice would need a backing storage decision the language
+//              hasn't made yet.
+static JamValueRef codegenArrayLit(JamCodegenContext &ctx, const AstNode &n) {
+	TypeIdx targetType = static_cast<TypeIdx>(n.lhs);
+	if (targetType == kNoType) {
+		throw std::runtime_error(
+		    "Array literal used without a known target type");
+	}
+	const TypeKey &k = ctx.getTypePool().get(targetType);
+	const NodeStore &ns = ctx.getNodeStore();
+	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
+	uint32_t count = ns.getExtra(extra);
+
+	if (k.kind == TypeKind::Slice) {
+		if (count != 0) {
+			throw std::runtime_error(
+			    "Non-empty array literal cannot target a slice type "
+			    "directly — use a fixed-size array and slice it");
+		}
+		// {ptr=null, len=0} as a {ptr, i64} aggregate.
+		JamTypeRef sliceLLVM = ctx.getLLVMType(targetType);
+		JamValueRef sliceVal = JamLLVMGetUndef(sliceLLVM);
+		TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+		JamTypeRef elemLLVM = ctx.getLLVMType(elemTy);
+		JamTypeRef nullPtr = JamLLVMPointerType(elemLLVM, 0);
+		JamValueRef nullPtrVal = JamLLVMConstNull(nullPtr);
+		sliceVal = JamLLVMBuildInsertValue(ctx.getBuilder(), sliceVal,
+		                                   nullPtrVal, 0, "slice.ptr");
+		JamValueRef zeroLen =
+		    JamLLVMConstInt(ctx.getInt64Type(), 0, false);
+		sliceVal = JamLLVMBuildInsertValue(ctx.getBuilder(), sliceVal,
+		                                   zeroLen, 1, "slice.len");
+		return sliceVal;
+	}
+
+	if (k.kind != TypeKind::Array) {
+		throw std::runtime_error(
+		    "Array literal target type is not an array or slice");
+	}
+	TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+	uint32_t expectedLen = k.b;
+	JamTypeRef arrLLVM = ctx.getLLVMType(targetType);
+	JamTypeRef elemLLVM = ctx.getLLVMType(elemTy);
+
+	if (count != expectedLen) {
+		throw std::runtime_error(
+		    "Array literal has " + std::to_string(count) +
+		    " elements but type expects " + std::to_string(expectedLen));
+	}
+
+	JamValueRef arrVal = JamLLVMGetUndef(arrLLVM);
+	for (uint32_t i = 0; i < count; i++) {
+		NodeIdx elemIdx = static_cast<NodeIdx>(ns.getExtra(extra + 1 + i));
+		const AstNode &elemNode = ns.get(elemIdx);
+		if ((elemNode.tag == AstTag::ArrayLit ||
+		     elemNode.tag == AstTag::ArrayRepeat ||
+		     elemNode.tag == AstTag::StructLit) &&
+		    static_cast<TypeIdx>(elemNode.lhs) == kNoType) {
+			ctx.getNodeStore().getMut(elemIdx).lhs = elemTy;
+		}
+		JamValueRef elemVal = codegenNode(ctx, elemIdx, elemLLVM);
+		if (!elemVal) return nullptr;
+		elemVal = coerceTo(ctx, elemVal, elemLLVM);
+		arrVal = JamLLVMBuildInsertValue(ctx.getBuilder(), arrVal, elemVal, i,
+		                                 "elem");
+	}
+	return arrVal;
+}
+
+// `[expr; N]`: repeat `expr` N times. v1 requires N to be a constant
+// integer literal so we can build a fixed-size array; symbolic-sized
+// arrays would need a Slice or runtime fill loop, neither of which is
+// in scope yet. Codegen emits the repeat as an insertvalue chain — the
+// simplest IR; LLVM constant-folds when expr is constant.
+static JamValueRef codegenArrayRepeat(JamCodegenContext &ctx,
+                                      const AstNode &n) {
+	TypeIdx arrType = static_cast<TypeIdx>(n.lhs);
+	if (arrType == kNoType) {
+		throw std::runtime_error(
+		    "Array repeat literal used without a known target type");
+	}
+	const TypeKey &k = ctx.getTypePool().get(arrType);
+	if (k.kind != TypeKind::Array) {
+		throw std::runtime_error(
+		    "Array repeat literal target type is not an array");
+	}
+	TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+	uint32_t expectedLen = k.b;
+	JamTypeRef arrLLVM = ctx.getLLVMType(arrType);
+	JamTypeRef elemLLVM = ctx.getLLVMType(elemTy);
+
+	const NodeStore &ns = ctx.getNodeStore();
+	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
+	NodeIdx valueIdx = static_cast<NodeIdx>(ns.getExtra(extra));
+	NodeIdx countIdx = static_cast<NodeIdx>(ns.getExtra(extra + 1));
+
+	const AstNode &countNode = ns.get(countIdx);
+	if (countNode.tag != AstTag::NumberLit) {
+		throw std::runtime_error(
+		    "Array repeat count must be an integer literal");
+	}
+	uint64_t countVal = numberLitValue(countNode);
+	if (countVal != static_cast<uint64_t>(expectedLen)) {
+		throw std::runtime_error(
+		    "Array repeat count " + std::to_string(countVal) +
+		    " does not match declared length " +
+		    std::to_string(expectedLen));
+	}
+
+	const AstNode &valNode = ns.get(valueIdx);
+	if ((valNode.tag == AstTag::ArrayLit ||
+	     valNode.tag == AstTag::ArrayRepeat ||
+	     valNode.tag == AstTag::StructLit) &&
+	    static_cast<TypeIdx>(valNode.lhs) == kNoType) {
+		ctx.getNodeStore().getMut(valueIdx).lhs = elemTy;
+	}
+	JamValueRef elemVal = codegenNode(ctx, valueIdx, elemLLVM);
+	if (!elemVal) return nullptr;
+	elemVal = coerceTo(ctx, elemVal, elemLLVM);
+
+	JamValueRef arrVal = JamLLVMGetUndef(arrLLVM);
+	for (uint32_t i = 0; i < expectedLen; i++) {
+		arrVal = JamLLVMBuildInsertValue(ctx.getBuilder(), arrVal, elemVal, i,
+		                                 "rep");
+	}
+	return arrVal;
+}
+
 static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 	TypeIdx structType = static_cast<TypeIdx>(n.lhs);
 	if (structType == kNoType) {
@@ -1935,6 +2172,47 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 	}
 	const auto *info = ctx.lookupStruct(structType);
 	if (!info) {
+		// Union targets share the `{ field: value }` literal form. The
+		// untagged-union shape means exactly one field's bits are
+		// initialized; the literal must list one field and we materialize
+		// the union value via alloca/store/load (LLVM has no SSA insertvalue
+		// for the cross-field reinterpret pattern).
+		if (const auto *uinfo = ctx.lookupUnion(structType)) {
+			const NodeStore &ns = ctx.getNodeStore();
+			const StringPool &sp = ctx.getStringPool();
+			ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
+			uint32_t fieldCount = ns.getExtra(extra);
+			if (fieldCount != 1) {
+				throw std::runtime_error(
+				    "Union literal must list exactly one field, got " +
+				    std::to_string(fieldCount));
+			}
+			StringIdx fldNameId =
+			    static_cast<StringIdx>(ns.getExtra(extra + 1));
+			NodeIdx fldExprIdx =
+			    static_cast<NodeIdx>(ns.getExtra(extra + 2));
+			const std::string &fieldName = sp.get(fldNameId);
+			TypeIdx fieldTy =
+			    ctx.getUnionFieldType(uinfo->name, fieldName);
+			if (fieldTy == kNoType) {
+				throw std::runtime_error("Union `" + uinfo->name +
+				                         "` has no field `" + fieldName +
+				                         "`");
+			}
+			JamTypeRef fieldLLVM = ctx.getLLVMType(fieldTy);
+			JamValueRef fieldVal =
+			    codegenNode(ctx, fldExprIdx, fieldLLVM);
+			if (!fieldVal) return nullptr;
+			fieldVal = coerceTo(ctx, fieldVal, fieldLLVM);
+			// Alloca the union, write the chosen field, load the union back
+			// as an aggregate value.
+			JamValueRef alloca = JamLLVMBuildAlloca(
+			    ctx.getBuilder(), uinfo->type, ctx.typeAlign(structType),
+			    (uinfo->name + ".lit").c_str());
+			JamLLVMBuildStore(ctx.getBuilder(), fieldVal, alloca);
+			return JamLLVMBuildLoad(ctx.getBuilder(), uinfo->type, alloca,
+			                        "union.val");
+		}
 		throw std::runtime_error("Struct literal target is not a struct");
 	}
 
@@ -1956,12 +2234,21 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 			                         "' in struct " + info->name);
 		}
 
-		// Propagate target struct type into nested struct literals.
+		// Propagate target struct/array type into nested literals.
 		TypeIdx declaredFieldType = info->fields[idx].second;
 		const AstNode &fldNode = ns.get(fldExprIdx);
 		if (fldNode.tag == AstTag::StructLit &&
 		    ctx.lookupStruct(declaredFieldType)) {
 			ctx.getNodeStore().getMut(fldExprIdx).lhs = declaredFieldType;
+		}
+		if ((fldNode.tag == AstTag::ArrayLit ||
+		     fldNode.tag == AstTag::ArrayRepeat) &&
+		    static_cast<TypeIdx>(fldNode.lhs) == kNoType) {
+			const TypeKey &fk = ctx.getTypePool().get(declaredFieldType);
+			if (fk.kind == TypeKind::Array) {
+				ctx.getNodeStore().getMut(fldExprIdx).lhs =
+				    declaredFieldType;
+			}
 		}
 
 		JamTypeRef expectedType = ctx.getLLVMType(declaredFieldType);
@@ -2151,9 +2438,15 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 	case AstTag::StringLit:
 		return codegenStringLit(
 		    ctx, ctx.getStringPool().get(static_cast<StringIdx>(n.lhs)));
-	case AstTag::UndefinedLit:
+	case AstTag::StructExpr:
+		// Generics G2: a `struct {...}` expression evaluates to a `type`
+		// value at compile time. The substitution engine in G4 consumes
+		// these from ModuleAST::AnonStructs. Reaching this case during
+		// regular codegen means a generic function leaked through —
+		// generics should be skipped at the function-emit pass.
 		throw std::runtime_error(
-		    "`undefined` is only valid as a `var` declaration initializer");
+		    "internal: struct expression reached LLVM codegen "
+		    "(generic was not instantiated before lowering)");
 	case AstTag::Variable: {
 		const std::string &name =
 		    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
@@ -2223,6 +2516,10 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 	case AstTag::StructLit:
 		return codegenStructLit(ctx, n);
+	case AstTag::ArrayLit:
+		return codegenArrayLit(ctx, n);
+	case AstTag::ArrayRepeat:
+		return codegenArrayRepeat(ctx, n);
 	case AstTag::MatchNode:
 		return codegenMatch(ctx, n);
 	case AstTag::AsCast: {
@@ -2462,6 +2759,11 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	} else {
 		ctx.setSretSlot(nullptr);
 	}
+
+	// Record the function's source-level return TypeIdx so codegenReturn
+	// can patch struct-literal-shaped return expressions whose target
+	// type is parser-time kNoType.
+	ctx.setCurrentReturnType(ReturnType);
 
 	for (unsigned i = 0; i < Args.size(); i++) {
 		// P9 mode-aware ABI: ByValue parameters are stored to a local

@@ -1,0 +1,324 @@
+const { assert } = import("test");
+
+// Generics G1–G4: type-parameter generics with substitution-only
+// instantiation. A function whose signature is `fn F(T: type) type` is
+// a generic; calling it with concrete type arguments at compile time
+// produces a concrete type. Each distinct argument list gives a fresh
+// struct type with substituted field types.
+
+fn Identity(T: type) type {
+    return T;
+}
+
+tfn identityResolvesToArg() {
+    var a: Identity(i32) = 42;
+    var b: Identity(u8) = 7;
+    assert(a, 42);
+    assert(b as i32, 7);
+}
+
+fn Box(T: type) type {
+    return struct {
+        value: T,
+    };
+}
+
+tfn boxOfI32() {
+    var b: Box(i32) = { value: 17 };
+    assert(b.value, 17);
+}
+
+tfn boxOfU8DistinctFromBoxOfI32() {
+    var bi: Box(i32) = { value: 1 };
+    var bu: Box(u8) = { value: 2 };
+    // Both bindings hold their own struct types with their own field
+    // sizes (4 bytes vs 1 byte). Same field name; different storage.
+    assert(bi.value, 1);
+    assert(bu.value as i32, 2);
+}
+
+fn Pair(A: type, B: type) type {
+    return struct {
+        first: A,
+        second: B,
+    };
+}
+
+tfn twoParamGeneric() {
+    var p: Pair(i32, u8) = { first: 7, second: 35 };
+    assert(p.first + (p.second as i32), 42);
+}
+
+tfn sameInstantiationReusesType() {
+    var p1: Pair(i32, u8) = { first: 1, second: 2 };
+    var p2: Pair(i32, u8) = { first: 3, second: 4 };
+    // Both bindings should share the same instantiated struct type
+    // (verified by the compiler accepting a homogeneous-type comparison
+    // through the field accesses below).
+    assert(p1.first + p2.first, 4);
+    assert((p1.second + p2.second) as i32, 6);
+}
+
+// G4 type alias: `const Name = Generic(arg);` registers Name as a
+// synonym for the instantiated type. Subsequent uses of Name resolve
+// to the same struct.
+const BoxI32 = Box(i32);
+
+tfn typeAliasResolvesToInstantiation() {
+    var b: BoxI32 = { value: 17 };
+    assert(b.value, 17);
+}
+
+// G6: methods on instantiated types. Each instantiation gets its own
+// clone of the method with substituted parameter and return types
+// and a unique LLVM symbol.
+fn Holder(T: type) type {
+    return struct {
+        value: T,
+        fn unwrap(self: move Self) T {
+            return self.value;
+        }
+        fn fortyTwo() i32 {
+            return 42;
+        }
+    };
+}
+
+const HolderI32 = Holder(i32);
+
+tfn methodOnInstantiatedTypeRunsAtCallSite() {
+    var h: HolderI32 = { value: 7 };
+    assert(HolderI32.unwrap(h), 7);
+}
+
+tfn staticMethodOnInstantiatedTypeRuns() {
+    assert(HolderI32.fortyTwo(), 42);
+}
+
+// Generic with a drop method. The drop method is cloned per-instantiation
+// AND registered in the drop-registry equivalent so codegen of var decls
+// of this type fires the drop at scope exit. This was a real bug — the
+// pre-built drop registry didn't see lazily-instantiated methods.
+fn Counter(T: type) type {
+    return struct {
+        sink: *mut u32,
+        fn drop(self: mut Self) {
+            var p: *mut u32 = self.sink;
+            p.* = p.* + 1;
+        }
+    };
+}
+
+const CounterI32 = Counter(i32);
+
+fn dropFires(sink: *mut u32) {
+    var c: CounterI32 = { sink: sink };
+    // c drops at function exit, bumping *sink to 1.
+}
+
+tfn dropOnInstantiatedTypeFires() {
+    var hits: u32 = 0;
+    dropFires(&hits);
+    assert(hits, 1);
+}
+
+// Audit follow-up: `Self` referenced in a FIELD type (recursive struct
+// via pointer). The field substitution must include the Self mapping,
+// not just the type-parameter mapping.
+fn Node(T: type) type {
+    return struct {
+        value: T,
+        next: *mut Self,
+    };
+}
+
+const NodeI32 = Node(i32);
+
+tfn selfInFieldTypeSubstitutes() {
+    var head: NodeI32 = { value: 7, next: &head };
+    assert(head.value, 7);
+}
+
+// Audit follow-up: pointer-typed field substitution — the engine
+// recurses into PtrSingle/PtrMany element types.
+fn PtrTo(T: type) type {
+    return struct {
+        ptr: *mut T,
+    };
+}
+
+const PtrToI32 = PtrTo(i32);
+
+tfn pointerFieldSubstitutes() {
+    var v: i32 = 42;
+    var p: PtrToI32 = { ptr: &v };
+    var x: *mut i32 = p.ptr;
+    assert(x.*, 42);
+}
+
+// Audit follow-up: array field substitution.
+fn ThreeOf(T: type) type {
+    return struct {
+        items: [3]T,
+    };
+}
+
+const ThreeI32 = ThreeOf(i32);
+
+tfn arrayFieldSubstitutes() {
+    var t: ThreeI32 = { items: [7, 35, 0] };
+    assert(t.items[0] + t.items[1], 42);
+}
+
+// Audit follow-up: nested generic instantiation — Box(Box(T)).
+fn BoxOuter(T: type) type {
+    return struct {
+        value: T,
+    };
+}
+
+const NestedBox = BoxOuter(BoxOuter(i32));
+
+tfn nestedGenericInstantiates() {
+    var inner: BoxOuter(i32) = { value: 7 };
+    var outer: NestedBox = { value: inner };
+    assert(outer.value.value, 7);
+}
+
+// Audit follow-up: a method that calls another method on Self via
+// `Self.method(...)`. The codegen has to resolve `Self` through the
+// substitution context to the canonical instantiated struct name.
+fn Builder(T: type) type {
+    return struct {
+        value: T,
+        fn make(v: T) Self {
+            var s: Self = { value: v };
+            return s;
+        }
+        fn doubled(v: T) Self {
+            return Self.make(v + v);
+        }
+    };
+}
+
+const BuilderI32 = Builder(i32);
+
+tfn methodChainViaSelf() {
+    var b: BuilderI32 = BuilderI32.doubled(21);
+    assert(b.value, 42);
+}
+
+// Audit follow-up: type parameter T appearing inside a method body
+// (not just in the signature). typeSize / typeAlign / getLLVMType all
+// have to consult the substitution context for Named TypeIdxes that
+// resolve to primitive types via the parameter map.
+fn Cloner(T: type) type {
+    return struct {
+        value: T,
+        fn cloned(self: Self) Self {
+            var v: T = self.value;
+            var s: Self = { value: v };
+            return s;
+        }
+    };
+}
+
+const ClonerI32 = Cloner(i32);
+
+tfn typeParamInMethodBody() {
+    var orig: ClonerI32 = { value: 42 };
+    var c: ClonerI32 = ClonerI32.cloned(orig);
+    assert(c.value, 42);
+}
+
+// Audit follow-up: nested generic with methods on both layers.
+// Exercises recursive instantiation when one method signature
+// references another generic's instantiation.
+fn Wrap(T: type) type {
+    return struct {
+        value: T,
+        fn make(v: T) Self {
+            var s: Self = { value: v };
+            return s;
+        }
+        fn unwrap(self: move Self) T {
+            return self.value;
+        }
+    };
+}
+
+const InnerWrap = Wrap(i32);
+const OuterWrap = Wrap(Wrap(i32));
+
+tfn nestedGenericMethodsBothLayers() {
+    var inner: InnerWrap = InnerWrap.make(42);
+    var outer: OuterWrap = OuterWrap.make(inner);
+    var got: InnerWrap = OuterWrap.unwrap(outer);
+    assert(InnerWrap.unwrap(got), 42);
+}
+
+// Audit follow-up: nested generic with drops on both layers. Each
+// drop fires once per binding at scope exit (Jam doesn't recurse
+// into fields). For two bindings (inner + outer), we see hits = 2.
+fn Bumper(T: type) type {
+    return struct {
+        sink: *mut u32,
+        value: T,
+        fn drop(self: mut Self) {
+            var p: *mut u32 = self.sink;
+            p.* = p.* + 1;
+        }
+    };
+}
+
+const BumperI32 = Bumper(i32);
+const NestedBumper = Bumper(BumperI32);
+
+fn doubleDropper(sink: *mut u32) {
+    var inner: BumperI32 = { sink: sink, value: 7 };
+    var outer: NestedBumper = { sink: sink, value: inner };
+}
+
+tfn nestedDropFiresOnEachLayer() {
+    var hits: u32 = 0;
+    doubleDropper(&hits);
+    assert(hits, 2);
+}
+
+// `default()` method system: types opt in by defining `fn default() Self`
+// (no parameters, returns Self). On top-level structs, only `drop` and
+// `default` methods are accepted. Generic struct expressions can also
+// declare `default` as a static method.
+
+const Counter = struct {
+    n: i32,
+    fn default() Self {
+        return { n: 0 };
+    }
+};
+
+tfn topLevelDefault() {
+    var c: Counter = Counter.default();
+    assert(c.n, 0);
+}
+
+// Generic with default(): T must itself have default(). Maybe(T) calls
+// `T.default()` in its body, so instantiation requires T to be
+// default-constructible. The `methodChainViaSelf`-style substitution
+// resolves T.default() to the concrete type's default at codegen.
+fn Pair2(T: type) type {
+    return struct {
+        a: T,
+        b: T,
+        fn default() Self {
+            return { a: T.default(), b: T.default() };
+        }
+    };
+}
+
+const PairOfCounter = Pair2(Counter);
+
+tfn genericDefaultRequiresT() {
+    var p: PairOfCounter = PairOfCounter.default();
+    assert(p.a.n + p.b.n, 0);
+}

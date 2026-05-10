@@ -1,0 +1,67 @@
+const { assert } = import("test");
+
+// Drop functions can be declared inside the struct body. The form is a
+// pure synonym of the free-function `fn drop(self: mut T)`: the drop
+// registry picks it up the same way, codegen synthesizes the same
+// `__drop_T` call at scope exit, the side-effect order is identical.
+
+const Counter = struct {
+    value: u32,
+    sink: *mut u32,
+    fn drop(self: mut Counter) {
+        var p: *mut u32 = self.sink;
+        p.* = p.* + 1;
+    }
+};
+
+// Auto-drop on a binding of a type whose drop is defined inline.
+fn singleScopeWithInlineDrop() u32 {
+    var hits: u32 = 0;
+    var c: Counter = { value: 17, sink: &hits };
+    // c drops at function end → hits becomes 1.
+    return c.value + hits;
+}
+
+tfn inlineDropFiresAtScopeExit() {
+    // singleScope returns c.value (17) + the value of hits BEFORE the drop
+    // (0), so we expect 17. The drop runs after the return value is
+    // computed but before the function exits — observable from the
+    // caller via the sink pointer if we kept a reference, but here we
+    // just verify the math.
+    assert(singleScopeWithInlineDrop(), 17);
+}
+
+// Caller observes the drop via the sink. Same shape as
+// callerObservingDrop in test_drops.jam, just with the in-struct form.
+fn wrapsCounterInline(sink: *mut u32) u32 {
+    var c: Counter = { value: 5, sink: sink };
+    return c.value;
+}
+
+tfn callerObservesInlineDrop() {
+    var hits: u32 = 0;
+    var v: u32 = wrapsCounterInline(&hits);
+    // wrapsCounterInline's local c dropped → hits == 1.
+    assert(v, 5);
+    assert(hits, 1);
+}
+
+// Manual `Counter.drop(&c)` call while c is still in scope. The auto-drop
+// at function exit also fires, so the sink gets bumped twice. This is a
+// known footgun (manual + auto = double drop) — flagged in
+// docs/STRUCT_METHODS.md as a v1.1 polish item. The test pins down
+// today's behavior so a future fix is intentional, not accidental.
+fn callsDropManually(sink: *mut u32) u32 {
+    var c: Counter = { value: 9, sink: sink };
+    Counter.drop(&c);
+    // sink == 1 here (manual drop ran)
+    return c.value;
+}
+
+tfn manualQualifiedDropCallWorks() {
+    var hits: u32 = 0;
+    var v: u32 = callsDropManually(&hits);
+    assert(v, 9);
+    // Manual drop + auto drop on function exit → 2.
+    assert(hits, 2);
+}

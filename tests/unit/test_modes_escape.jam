@@ -1,14 +1,13 @@
 const { assert } = import("test");
 
-// MVS P5.5: scope-escape check. A `mut` or `undefined` parameter is a
-// second-class borrow into the caller's storage; returning a reference
-// (`&`) rooted at it would extend the borrow's lifetime past the call
-// frame and dangle. The check rejects only `return &param-or-subpath`
-// — returning the parameter as a value is a copy and is legal.
+// MVS P5.5: scope-escape check. A `mut` parameter is a second-class
+// borrow into the caller's storage; returning a reference (`&`) rooted
+// at it would extend the borrow's lifetime past the call frame and
+// dangle. The check rejects only `return &param-or-subpath` — returning
+// the parameter as a value is a copy and is legal.
 //
-// Must-fail cases (return &p, return &p.field, return &out for
-// undefined param) are verified manually until the must-fail runner
-// lands in P7.
+// Must-fail cases (return &p, return &p.field) are verified manually
+// until the must-fail runner lands in P7.
 
 // --- Returning a mut param's *value* is fine (it's a copy) ---
 fn doubleByValue(x: mut u32) u32 {
@@ -38,12 +37,6 @@ fn computeFromMut(x: mut u32) u32 {
     return x + 1;
 }
 
-// --- Returning an undefined param's value (after init) is fine ---
-fn fillThenReturnValue(out: undefined u32) u32 {
-    out = 42;
-    return out;
-}
-
 // --- Tests ---
 
 tfn doubleByValueOK() {
@@ -52,18 +45,11 @@ tfn doubleByValueOK() {
 }
 
 tfn pickFieldAOK() {
-    var p: Pair = undefined;
-    p.a = 9;
-    p.b = 0;
+    var p: Pair = { a: 9, b: 0 };
     assert(pickFieldA(&p), 10);
 }
 
 tfn computeFromMutOK() {
     var n: u32 = 7;
     assert(computeFromMut(&n), 108);
-}
-
-tfn fillThenReturnValueOK() {
-    var x: u32 = undefined;
-    assert(fillThenReturnValue(&x), 42);
 }

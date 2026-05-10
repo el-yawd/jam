@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class FunctionAST;
@@ -27,8 +28,7 @@ namespace init_analysis {
 //
 //   Unknown     binding has not been touched on this path
 //   Init        binding holds a valid value; reads OK
-//   Uninit      binding has been declared `= undefined` or has been moved
-//               out of; reads must produce an error
+//   Uninit      binding has been moved out of; reads must produce an error
 //   MaybeInit   merge of Init + Uninit at a control-flow join; reads must
 //               produce an error
 //
@@ -69,12 +69,10 @@ using FunctionRegistry = std::unordered_map<std::string, const FunctionAST *>;
 // Scope (cumulative through P4):
 //   - Tracks per-binding init state for locals declared with
 //     `var name: T = ...`.
-//   - Parameter entry state: Undefined-mode → Uninit, all other modes → Init.
-//   - At every return and at function fall-through, every Undefined-mode
-//     parameter must have reached Init.
+//   - Parameter entry state: every parameter starts Init (the caller is
+//     required to pass an initialized binding).
 //   - Each call propagates caller-side state per the callee's parameter
-//     modes: `move` arg ⇒ caller's base binding becomes Uninit;
-//     `undefined` arg ⇒ caller's base binding becomes Init.
+//     modes: `move` arg ⇒ caller's base binding becomes Uninit.
 //
 // Control-flow handling:
 //   - Straight-line statement sequence: states thread through.
@@ -85,12 +83,11 @@ using FunctionRegistry = std::unordered_map<std::string, const FunctionAST *>;
 //     the pre-loop state, and the post state merges body output with
 //     pre-loop. For-loops over a range additionally assume the body runs
 //     at least once. May replace with fixed-point iteration later.
-std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
-                                const StringPool &strings,
-                                const std::vector<Token> &tokens,
-                                const FunctionRegistry *registry = nullptr,
-                                const drops::DropRegistry *drops = nullptr,
-                                const TypePool *types = nullptr);
+std::vector<Diagnostic> analyze(
+    const FunctionAST &fn, const NodeStore &nodes, const StringPool &strings,
+    const std::vector<Token> &tokens, const FunctionRegistry *registry = nullptr,
+    const drops::DropRegistry *drops = nullptr,
+    const TypePool *types = nullptr);
 
 }  // namespace init_analysis
 }  // namespace jam

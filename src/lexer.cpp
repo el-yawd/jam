@@ -132,14 +132,17 @@ void Lexer::identifier() {
 		addToken(TOK_ENUM, text);
 	} else if (text == "as") {
 		addToken(TOK_AS, text);
-	} else if (text == "undefined") {
-		addToken(TOK_UNDEFINED, text);
 	} else if (text == "move") {
 		addToken(TOK_MOVE, text);
 	} else if (text == "u1" || text == "u8" || text == "u16" || text == "u32" ||
 	           text == "u64" || text == "i8" || text == "i16" ||
 	           text == "i32" || text == "i64" || text == "f32" ||
-	           text == "f64" || text == "bool" || text == "str") {
+	           text == "f64" || text == "bool" || text == "str" ||
+	           text == "type") {
+		// Generics G1: `type` is the meta-type — values of this type are
+		// themselves types, used at compile time only. Lexed as TOK_TYPE
+		// alongside the scalar built-ins so the parser sees it in a type
+		// position uniformly.
 		addToken(TOK_TYPE, text);
 	} else {
 		addToken(TOK_IDENTIFIER, text);

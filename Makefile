@@ -140,10 +140,32 @@ test-abi: build
 	clang++ -o ./abi_tests ./test_abi.o ./jam_llvm.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./number_literal.o ./init_analysis.o ./drop_registry.o ./abi.o `$(LLVM_CONFIG) --ldflags --libs --libfiles --system-libs`
 	./abi_tests
 
-# Run all tests: Jam must-pass + analyzer C++ tests + ABI C++ tests + existing C++ tests
-test: test-unit test-init test-abi
+# Codegen-time must-fail tests. Each test invokes ./jam.out as a
+# subprocess on a small Jam source string and asserts on stderr/exit
+# (the kind of error that surfaces during instantiation, not during
+# semantic analysis — generic methods missing, default() with the
+# wrong shape, etc.). Subprocess approach because driving the full
+# codegen in-process would require replicating main.cpp's LLVM init
+# scaffolding.
+test-codegen-errors: build
 	@echo ""
-	@echo "Running C++ unit tests..."
+	@echo "Building and running codegen-error C++ tests..."
+	clang++ -c ./tests/cpp/test_codegen_errors.cpp -o ./test_codegen_errors.o `$(LLVM_CONFIG) --cxxflags` -fexceptions $(OPTFLAGS)
+	clang++ -o ./codegen_error_tests ./test_codegen_errors.o
+	./codegen_error_tests
+
+# Run all tests: Jam must-pass + analyzer C++ tests + ABI C++ tests +
+# codegen-error C++ tests. The legacy `tests/cpp/build_and_run.sh`
+# CMake suite was retired (drifted out of sync with `--emit-ir`'s
+# linking behavior; see test-legacy-cpp below for archaeology).
+test: test-unit test-init test-abi test-codegen-errors
+
+# Legacy CMake-driven C++ test suite. Pre-dates the in-process analyzer
+# and ABI tests; kept only for archaeology. Not run by `make test`
+# because it captures the link path (no `main` in test sources → all
+# 32 tests fail at link, not at the assertion they actually want to
+# check).
+test-legacy-cpp:
 	cd tests/cpp && ./build_and_run.sh
 
 # Format all C++ sources in-place

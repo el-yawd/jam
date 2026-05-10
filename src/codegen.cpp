@@ -6,6 +6,9 @@
  */
 
 #include "codegen.h"
+
+#include "ast.h"
+
 #include <stdexcept>
 
 JamCodegenContext::JamCodegenContext(const char *moduleName) {
@@ -142,9 +145,16 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		break;
 	}
 	case TypeKind::Named: {
-		// Parser-deferred user type — resolve against the three
-		// declaration registries in order: struct, union, enum.
+		// Parser-deferred user type. Resolution order:
+		//   1. Generics G6 substitution context (T, Self, __anon_struct_N)
+		//   2. struct/union/enum registries
+		//   3. type alias map (Generics G4)
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
+		TypeIdx substTarget = lookupCurrentSubst(name);
+		if (substTarget != kNoType) {
+			result = getLLVMType(substTarget);
+			break;
+		}
 		if (const auto *sinfo = getStruct(name)) {
 			result = sinfo->type;
 		} else if (const auto *uinfo = getUnion(name)) {
@@ -155,6 +165,11 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 			// declaration.
 			result = einfo->hasPayloadVariant ? einfo->type : getInt8Type();
 		} else {
+			TypeIdx aliasTarget = lookupTypeAlias(name);
+			if (aliasTarget != kNoType) {
+				result = getLLVMType(aliasTarget);
+				break;
+			}
 			throw std::runtime_error(
 			    "Unknown user-defined type: " + name);
 		}
@@ -172,6 +187,22 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 	case TypeKind::Enum: {
 		// E1 enums lower to u8 — one byte per discriminant.
 		result = getInt8Type();
+		break;
+	}
+	case TypeKind::Type:
+		// Generics G1: the meta-type has no runtime representation.
+		// Reaching this path means a generic function leaked to LLVM
+		// codegen without being instantiated first.
+		throw std::runtime_error(
+		    "internal: cannot lower `type` to LLVM (generic was not "
+		    "instantiated before codegen)");
+	case TypeKind::GenericCall: {
+		// Generics G4: lazily resolve the call to a concrete TypeIdx
+		// via the substitution engine, then recurse on the result.
+		// The resolution is memoized in genericResolutions so each
+		// distinct call site only does the work once.
+		TypeIdx resolved = resolveGenericCall(ty);
+		result = getLLVMType(resolved);
 		break;
 	}
 	}
@@ -217,7 +248,7 @@ TypeIdx JamCodegenContext::getVariableType(const std::string &name) const {
 
 void JamCodegenContext::registerStruct(
     const std::string &name, JamTypeRef type,
-    std::vector<std::pair<std::string, TypeIdx>> fields) {
+    std::vector<std::pair<std::string, TypeIdx>> fields) const {
 	StructInfo info;
 	info.name = name;
 	info.type = type;
@@ -229,13 +260,35 @@ const JamCodegenContext::StructInfo *
 JamCodegenContext::lookupStruct(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
+	// Generics G4: a `GenericCall` TypeIdx resolves to a concrete type
+	// (typically a Named struct produced by instantiation). Recurse on
+	// the resolved TypeIdx so downstream lookups behave as if the user
+	// had written the instantiated name directly.
+	if (k.kind == TypeKind::GenericCall) {
+		return lookupStruct(resolveGenericCall(ty));
+	}
 	// Accept TypeKind::Struct (explicit) or TypeKind::Named (parser-
 	// deferred user type that resolves to a struct).
 	if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named) {
 		return nullptr;
 	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
-	return getStruct(name);
+	// Generics G6: substitution context wins (T, Self, __anon_struct_N
+	// resolved per-instantiation during method body codegen).
+	TypeIdx substTarget = lookupCurrentSubst(name);
+	if (substTarget != kNoType) {
+		return lookupStruct(substTarget);
+	}
+	if (const StructInfo *direct = getStruct(name)) {
+		return direct;
+	}
+	// Generics G4: try the type alias table — `const BoxI32 = Box(i32);`
+	// maps `BoxI32` to the instantiated struct's TypeIdx.
+	TypeIdx aliasTarget = lookupTypeAlias(name);
+	if (aliasTarget != kNoType) {
+		return lookupStruct(aliasTarget);
+	}
+	return nullptr;
 }
 
 const JamCodegenContext::StructInfo *
@@ -444,6 +497,17 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		       typeSize(static_cast<TypeIdx>(k.a));
 	case TypeKind::Struct:
 	case TypeKind::Named: {
+		// Generics G6: a Named type may be a substitution-context
+		// reference to a parameter (T → i32) or to Self. Resolve
+		// through the substitution map first; if found and the
+		// target is a primitive (Int/Float/etc.), the recursive
+		// typeSize handles it. Same shape as getLLVMType.
+		const std::string &substName =
+		    stringPool.get(static_cast<StringIdx>(k.a));
+		if (TypeIdx subTarget = lookupCurrentSubst(substName);
+		    subTarget != kNoType) {
+			return typeSize(subTarget);
+		}
 		// User-named types resolve through any of the three registries.
 		if (const StructInfo *info = lookupStruct(ty)) {
 			uint64_t total = 0;
@@ -485,6 +549,12 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 	}
 	case TypeKind::Enum:
 		return 1;  // M2 E1 enums lower to u8
+	case TypeKind::Type:
+		// Meta-type has no runtime size.
+		return 0;
+	case TypeKind::GenericCall:
+		// G4: resolve and recurse.
+		return typeSize(resolveGenericCall(ty));
 	}
 	throw std::runtime_error("typeSize: unhandled type kind");
 }
@@ -511,6 +581,15 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		return typeAlign(static_cast<TypeIdx>(k.a));
 	case TypeKind::Struct:
 	case TypeKind::Named: {
+		// Generics G6: substitution context wins. A Named type may
+		// be a parameter reference (T → i32) or Self that resolves
+		// to a non-aggregate; the recursive call handles primitives.
+		const std::string &substName =
+		    stringPool.get(static_cast<StringIdx>(k.a));
+		if (TypeIdx subTarget = lookupCurrentSubst(substName);
+		    subTarget != kNoType) {
+			return typeAlign(subTarget);
+		}
 		if (const StructInfo *info = lookupStruct(ty)) {
 			uint64_t maxAlign = 1;
 			for (const auto &f : info->fields) {
@@ -548,6 +627,356 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 	}
 	case TypeKind::Enum:
 		return 1;
+	case TypeKind::Type:
+		return 1;
+	case TypeKind::GenericCall:
+		return typeAlign(resolveGenericCall(ty));
 	}
 	throw std::runtime_error("typeAlign: unhandled type kind");
+}
+
+// --------------------------------------------------------------------------
+// Generics G4: substitution engine for `Identifier(arg, ...)` types.
+// --------------------------------------------------------------------------
+
+namespace {
+
+// Recursively rewrite a TypeIdx, replacing parameter Named-types with their
+// bound concrete TypeIdx. Other compound types (pointers, slices, arrays,
+// nested generic calls) are reconstructed with substituted children.
+TypeIdx substituteType(
+    TypeIdx ty, const std::unordered_map<std::string, TypeIdx> &subst,
+    TypePool &types, const StringPool &strings) {
+	const TypeKey &k = types.get(ty);
+	switch (k.kind) {
+	case TypeKind::Named: {
+		const std::string &name =
+		    strings.get(static_cast<StringIdx>(k.a));
+		auto it = subst.find(name);
+		if (it != subst.end()) return it->second;
+		return ty;
+	}
+	case TypeKind::PtrSingle:
+		return types.internPtrSingle(substituteType(
+		    static_cast<TypeIdx>(k.a), subst, types, strings));
+	case TypeKind::PtrMany:
+		return types.internPtrMany(substituteType(
+		    static_cast<TypeIdx>(k.a), subst, types, strings));
+	case TypeKind::Slice:
+		return types.internSlice(substituteType(
+		    static_cast<TypeIdx>(k.a), subst, types, strings));
+	case TypeKind::Array:
+		return types.internArray(
+		    substituteType(static_cast<TypeIdx>(k.a), subst, types,
+		                   strings),
+		    k.b);
+	case TypeKind::GenericCall: {
+		// Recurse into args: a generic call inside a generic body
+		// (e.g. `Box(Maybe(T))`) substitutes T in the inner call.
+		const auto &args = types.genericArgsAt(k.b);
+		std::vector<TypeIdx> newArgs;
+		newArgs.reserve(args.size());
+		for (TypeIdx a : args) {
+			newArgs.push_back(
+			    substituteType(a, subst, types, strings));
+		}
+		return types.internGenericCall(static_cast<StringIdx>(k.a),
+		                               std::move(newArgs));
+	}
+	default:
+		return ty;
+	}
+}
+
+}  // namespace
+
+TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
+	auto cached = genericResolutions_.find(callTy);
+	if (cached != genericResolutions_.end()) return cached->second;
+
+	const TypeKey &k = typePool.get(callTy);
+	const std::string &calleeName =
+	    stringPool.get(static_cast<StringIdx>(k.a));
+	const auto &args = typePool.genericArgsAt(k.b);
+
+	const FunctionAST *generic = getFunctionAST(calleeName);
+	if (!generic) {
+		throw std::runtime_error("Unknown generic: " + calleeName);
+	}
+	if (!generic->isGeneric()) {
+		throw std::runtime_error(
+		    "Identifier `" + calleeName +
+		    "` is a non-generic function used in a type position");
+	}
+	if (args.size() != generic->Args.size()) {
+		throw std::runtime_error(
+		    "Generic `" + calleeName + "` expects " +
+		    std::to_string(generic->Args.size()) +
+		    " type argument(s), got " + std::to_string(args.size()));
+	}
+
+	// v1 only supports `T: type` parameters (no comptime values yet).
+	for (size_t i = 0; i < generic->Args.size(); i++) {
+		if (generic->Args[i].Type != BuiltinType::Type) {
+			throw std::runtime_error(
+			    "Generic `" + calleeName +
+			    "` has a non-type parameter (comptime values are v2)");
+		}
+	}
+
+	// Build the substitution map from parameter names to concrete args.
+	std::unordered_map<std::string, TypeIdx> subst;
+	for (size_t i = 0; i < generic->Args.size(); i++) {
+		subst[generic->Args[i].Name] = args[i];
+	}
+
+	// Walk the function body looking for the return statement. v1
+	// supports two return shapes: (1) `return T;` where T is a type
+	// parameter or a named type, and (2) `return struct {...};` where
+	// the body declares the instantiated struct's fields.
+	TypeIdx result = kNoType;
+	for (NodeIdx stmt : generic->Body) {
+		const AstNode &n = nodeStore.get(stmt);
+		if (n.tag != AstTag::Return) continue;
+		NodeIdx valueIdx = static_cast<NodeIdx>(n.lhs);
+		const AstNode &value = nodeStore.get(valueIdx);
+		if (value.tag == AstTag::Variable) {
+			const std::string &name =
+			    stringPool.get(static_cast<StringIdx>(value.lhs));
+			auto it = subst.find(name);
+			if (it != subst.end()) {
+				result = it->second;
+				break;
+			}
+			// Not a parameter — treat as a named type reference and
+			// substitute through (handles forwarding generics that
+			// return a non-parameter named type).
+			TypeIdx asNamed =
+			    typePool.internNamed(stringPool.intern(name));
+			result = substituteType(asNamed, subst, typePool,
+			                        stringPool);
+			break;
+		}
+		if (value.tag == AstTag::StructExpr) {
+			result = instantiateStructExpr(
+			    value, calleeName, args, subst);
+			break;
+		}
+		throw std::runtime_error(
+		    "Generic body's return value shape not supported in v1 "
+		    "(only `return T;` or `return struct {...};` are "
+		    "implemented)");
+	}
+
+	if (result == kNoType) {
+		throw std::runtime_error(
+		    "Generic `" + calleeName +
+		    "` has no return statement to evaluate");
+	}
+
+	genericResolutions_[callTy] = result;
+	return result;
+}
+
+// Instantiate a `struct {...}` expression appearing in a generic body's
+// return statement. Substitutes each field's TypeIdx with the concrete
+// generic args, creates a fresh LLVM struct type with a unique name, and
+// returns a Named TypeIdx pointing at the new struct. Methods are not
+// instantiated in v1 (G6 territory).
+TypeIdx JamCodegenContext::instantiateStructExpr(
+    const AstNode &exprNode, const std::string &calleeName,
+    const std::vector<TypeIdx> &args,
+    const std::unordered_map<std::string, TypeIdx> &subst) const {
+	if (!anonStructs_) {
+		throw std::runtime_error(
+		    "internal: anonymous struct table not registered on "
+		    "codegen context");
+	}
+	uint32_t anonIdx = exprNode.lhs;
+	if (anonIdx >= anonStructs_->size()) {
+		throw std::runtime_error(
+		    "internal: StructExpr references missing AnonStructs[" +
+		    std::to_string(anonIdx) + "]");
+	}
+	const StructDeclAST *anon = (*anonStructs_)[anonIdx].get();
+
+	// Build the instantiated struct's name from the callee + arg names.
+	// `Maybe(File)` → `Maybe__File`. Pointer/array types lower through
+	// substituteType; we only need a stable spelling for the canonical
+	// non-compound cases here. v1's stdlib won't pass non-named types
+	// as generic args, so this is enough to get the demo running.
+	std::string instName = calleeName;
+	for (TypeIdx a : args) {
+		instName += "__";
+		const TypeKey &ak = typePool.get(a);
+		switch (ak.kind) {
+		case TypeKind::Int: {
+			char buf[16];
+			std::snprintf(buf, sizeof(buf), "%c%u",
+			              ak.b ? 'i' : 'u', ak.a);
+			instName += buf;
+			break;
+		}
+		case TypeKind::Bool:
+			instName += "bool";
+			break;
+		case TypeKind::Struct:
+		case TypeKind::Named:
+			instName +=
+			    stringPool.get(static_cast<StringIdx>(ak.a));
+			break;
+		default:
+			instName += "T";  // catch-all; v2 spec needed
+			break;
+		}
+	}
+
+	// Memoize on the instantiated name. If we've already produced this
+	// struct, return its TypeIdx without re-creating the LLVM type.
+	if (const StructInfo *existing = getStruct(instName)) {
+		(void)existing;
+		return typePool.internNamed(stringPool.intern(instName));
+	}
+
+	// Build the full substitution map: parameter names → concrete args,
+	// plus the anon-struct's synthetic name (which is what `Self`
+	// resolved to in *type* positions at parse time) → the new
+	// instantiated struct's Named TypeIdx. We also alias the literal
+	// string "Self" to the same target so codegen sites that see
+	// the parser's stringified `Self.method(...)` (an expression-
+	// position member access on the Self identifier) can resolve
+	// it via the same map. Used for field types, method signatures,
+	// and method body codegen.
+	std::unordered_map<std::string, TypeIdx> bodySubst = subst;
+	TypeIdx instNamed =
+	    typePool.internNamed(stringPool.intern(instName));
+	bodySubst[anon->Name] = instNamed;
+	bodySubst["Self"] = instNamed;
+
+	// Substitute each field's type, then declare + fill the LLVM struct.
+	std::vector<std::pair<std::string, TypeIdx>> instFields;
+	instFields.reserve(anon->Fields.size());
+	for (const auto &f : anon->Fields) {
+		instFields.emplace_back(
+		    f.first,
+		    substituteType(f.second, bodySubst, typePool, stringPool));
+	}
+
+	JamTypeRef llvmStruct = JamLLVMStructCreateNamed(
+	    getContext(), instName.c_str());
+	registerStruct(instName, llvmStruct, instFields);
+
+	std::vector<JamTypeRef> fieldLLVM;
+	fieldLLVM.reserve(instFields.size());
+	for (const auto &f : instFields) {
+		fieldLLVM.push_back(getLLVMType(f.second));
+	}
+	JamLLVMStructSetBody(llvmStruct, fieldLLVM.data(),
+	                     static_cast<unsigned>(fieldLLVM.size()), false);
+
+	// Generics G6: instantiate methods. For each method on the
+	// AnonStruct, clone the FunctionAST with substituted parameter and
+	// return types and a unique source-level name. Register under the
+	// qualified name `<InstanceName>.<methodName>` so callers can
+	// dispatch via the existing struct-method machinery. Body codegen
+	// uses the substitution context so inner Named-type references
+	// (e.g. `var s: Self`) resolve correctly per-instantiation.
+	if (!anon->Methods.empty()) {
+		// `bodySubst` was built above (used by field substitution); we
+		// reuse it for method signatures and body codegen.
+		for (const auto &origMethod : anon->Methods) {
+			std::vector<Param> instArgs;
+			instArgs.reserve(origMethod->Args.size());
+			for (const auto &p : origMethod->Args) {
+				Param sp = p;
+				sp.Type = substituteType(p.Type, bodySubst, typePool,
+				                         stringPool);
+				instArgs.push_back(std::move(sp));
+			}
+			TypeIdx instReturn = origMethod->ReturnType;
+			if (instReturn != kNoType) {
+				instReturn = substituteType(instReturn, bodySubst,
+				                            typePool, stringPool);
+			}
+
+			std::string instMethodName = instName + "." + origMethod->Name;
+			auto cloned = std::make_unique<FunctionAST>(
+			    instMethodName, std::move(instArgs), instReturn,
+			    origMethod->Body, origMethod->isExtern,
+			    origMethod->isExport, origMethod->isPub,
+			    origMethod->isTest, origMethod->isVarArgs);
+			FunctionAST *clonePtr = cloned.get();
+			instantiatedMethods_.push_back(std::move(cloned));
+
+			// Generics G6: a method whose original (pre-clone) name is
+			// `drop` and whose first param matches the instantiated
+			// struct in `mut` mode is the type's drop method. Register
+			// it under the instantiated struct's name so the var-decl
+			// codegen finds it when the user binds a value of this
+			// type.
+			if (origMethod->Name == "drop" &&
+			    origMethod->Args.size() == 1 &&
+			    origMethod->Args[0].Name == "self" &&
+			    origMethod->Args[0].Mode == ParamMode::Mut) {
+				instantiatedDrops_[instName] = clonePtr;
+			}
+
+			// The const_cast is honest about what's happening: lazy
+			// instantiation runs during otherwise-const type lookups,
+			// and registerFunctionAST + declarePrototype + defineBody
+			// genuinely mutate the codegen state. Most of the mutated
+			// fields are already `mutable`; this is the gap we accept
+			// rather than propagating non-const through every type
+			// lookup.
+			JamCodegenContext &mutCtx =
+			    const_cast<JamCodegenContext &>(*this);
+			mutCtx.registerFunctionAST(instMethodName, clonePtr);
+
+			// Save the outer codegen state. defineBody calls
+			// clearVariables / clearDrops to set up its own
+			// function-local scope; without saving, the caller that
+			// triggered lazy instantiation would lose its bindings,
+			// drop scopes, and sret slot the moment we return.
+			//
+			// Builder insert-block has to be saved separately because
+			// the snapshot doesn't include LLVM-side state.
+			StateSnapshot savedState = snapshotState();
+			JamBasicBlockRef savedBB =
+			    JamLLVMGetInsertBlock(getBuilder());
+
+			// Activate the substitution context so the body codegen
+			// resolves Named-type references through the map (Self
+			// → instantiated struct, T → concrete arg, etc.).
+			//
+			// Implicit contract: declarePrototype is safe to invoke
+			// here even though the *outer* struct (this Self) is
+			// already registered above (line 882-892). If the method's
+			// signature contains a nested generic call like
+			// `fn create() Pair(T, T)`, declarePrototype's
+			// getLLVMType-on-return-type will recursively trigger
+			// instantiateStructExpr for the nested generic. That
+			// recursion is bounded by memoization
+			// (genericResolutions_) and doesn't loop because each
+			// nested instantiation produces and registers its own
+			// concrete struct before returning.
+			setCurrentSubst(bodySubst);
+			clonePtr->declarePrototype(mutCtx);
+			// TODO v2: errors thrown from defineBody during lazy
+			// instantiation surface with the generic body's source
+			// location, not the *call site* that triggered the
+			// instantiation. Zig annotates errors with both
+			// (failed_decls + dependency_failure trail). Track for
+			// follow-up so messages like "T doesn't have field foo"
+			// point at the user's `Box(SomeType).foo` call.
+			clonePtr->defineBody(mutCtx);
+			clearCurrentSubst();
+
+			restoreState(std::move(savedState));
+			if (savedBB) {
+				JamLLVMPositionBuilderAtEnd(getBuilder(), savedBB);
+			}
+		}
+	}
+
+	return typePool.internNamed(stringPool.intern(instName));
 }

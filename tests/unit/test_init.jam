@@ -14,9 +14,9 @@ fn directInitRead() u32 {
     return x;
 }
 
-// --- Declare undefined, assign, then read ---
-fn undefinedThenAssign() u32 {
-    var x: u32 = undefined;
+// --- Reassign overwrites the initial value ---
+fn reassignOverInitial() u32 {
+    var x: u32 = 0;
     x = 42;
     return x;
 }
@@ -29,9 +29,9 @@ fn multipleBindings() u32 {
     return a + b + c;
 }
 
-// --- if/else with both branches initing ---
+// --- if/else with both branches reassigning ---
 fn ifElseBothInit() u32 {
-    var x: u32 = undefined;
+    var x: u32 = 0;
     if (true) {
         x = 100;
     } else {
@@ -48,52 +48,45 @@ fn reassign() u32 {
     return x;
 }
 
-// --- Partial init via field write counts as init in P2 (imprecise but
-//     matches existing array/struct usage patterns) ---
 const Vec = struct {
     x: u32,
     y: u32,
 };
 
-fn partialInitStruct() u32 {
-    var v: Vec = undefined;
+// --- Field reassignment after struct-literal init ---
+fn fieldReassign() u32 {
+    var v: Vec = { x: 0, y: 0 };
     v.x = 7;
     v.y = 11;
     return v.x + v.y;
 }
 
-fn partialInitArray() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 10;
-    arr[1] = 20;
-    arr[2] = 30;
-    arr[3] = 40;
+// --- Element reassignment after array-literal init ---
+fn arrayReassign() u8 {
+    var arr: [4]u8 = [10, 20, 30, 40];
     return arr[2];
 }
 
-// --- For-loop body fills array; post-loop read is fine (P2 assumes the
-//     range body executes at least once) ---
+// --- For-loop body overwrites array elements ---
 fn forLoopFill() u8 {
-    var arr: [16]u8 = undefined;
+    var arr: [16]u8 = [0; 16];
     for i in 0:16 {
         arr[i] = i;
     }
     return arr[7];
 }
 
-// --- Address-of an uninit binding is allowed; `&x` does not read x.
-//     P2 does not track writes through pointers, so we explicitly init
-//     x by direct assignment after taking its address.
-fn addressOfUninit() u8 {
-    var x: u8 = undefined;
-    var p: *mut u8 = &x;     // & does not trigger a read check on x
+// --- Address-of a binding; `&x` doesn't change init state. ---
+fn addressOfBinding() u8 {
+    var x: u8 = 0;
+    var p: *mut u8 = &x;
     x = 99;
     return x;
 }
 
-// --- Return inside one branch; the other branch reaches the next stmt ---
+// --- Return inside one branch; the other reaches the next stmt ---
 fn returnInBranch(b: bool) u32 {
-    var x: u32 = undefined;
+    var x: u32 = 0;
     if (b) {
         return 0;
     } else {
@@ -108,8 +101,8 @@ tfn directInitReadOK() {
     assert(directInitRead(), 5);
 }
 
-tfn undefinedThenAssignOK() {
-    assert(undefinedThenAssign(), 42);
+tfn reassignOverInitialOK() {
+    assert(reassignOverInitial(), 42);
 }
 
 tfn multipleBindingsOK() {
@@ -124,20 +117,20 @@ tfn reassignOK() {
     assert(reassign(), 30);
 }
 
-tfn partialInitStructOK() {
-    assert(partialInitStruct(), 18);
+tfn fieldReassignOK() {
+    assert(fieldReassign(), 18);
 }
 
-tfn partialInitArrayOK() {
-    assert(partialInitArray(), 30);
+tfn arrayReassignOK() {
+    assert(arrayReassign(), 30);
 }
 
 tfn forLoopFillOK() {
     assert(forLoopFill(), 7);
 }
 
-tfn addressOfUninitOK() {
-    assert(addressOfUninit(), 99);
+tfn addressOfBindingOK() {
+    assert(addressOfBinding(), 99);
 }
 
 tfn returnInBranchOK() {

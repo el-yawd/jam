@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -50,7 +51,6 @@ enum class AstTag : uint8_t {
 	NumberLit,     // d.lhs = lo32(val), d.rhs = hi32(val); flags bit 0 = isNeg
 	BoolLit,       // d.lhs = 0|1
 	StringLit,     // d.lhs = StringIdx
-	UndefinedLit,
 
 	// Lvalues / refs
 	Variable,      // d.lhs = StringIdx (name)
@@ -90,6 +90,23 @@ enum class AstTag : uint8_t {
 	// d.lhs = TypeIdx (struct type, kNoType if inferred from var-decl context)
 	// d.rhs = ExtraIdx → [fieldCount, fieldName0, fieldExpr0, fieldName1, ...]
 	StructLit,
+	// `[a, b, c, ...]` array literal in expression position. Element type
+	// inferred from var-decl target type (kNoType if unknown — codegen
+	// rejects).
+	// d.lhs = TypeIdx (target element type, kNoType if unbound)
+	// d.rhs = ExtraIdx → [count, elem0, elem1, ...]
+	ArrayLit,
+	// `[expr; N]` array repeat literal. N is a constant integer expression.
+	// d.lhs = TypeIdx (target array type, kNoType if unbound)
+	// d.rhs = ExtraIdx → [valueNode, countNode]
+	ArrayRepeat,
+	// Generics G2: a `struct { fields, methods }` expression, evaluated at
+	// compile time to a value of type `type`. The expression's body lives
+	// in ModuleAST::AnonStructs as a regular StructDeclAST with a
+	// synthetic name; this node carries the index so the substitution
+	// engine in G4 can find it.
+	// d.lhs = u32 (index into ModuleAST::AnonStructs)
+	StructExpr,
 
 	// Pattern match (M1: integer literals, ranges, or-patterns, wildcard).
 	// d.lhs = NodeIdx (scrutinee expression)
@@ -276,6 +293,18 @@ enum class TypeKind : uint8_t {
 	// or enum. The codegen resolves Named values by consulting the
 	// three registries, in that order.
 	Named,       // namedT.name (StringIdx)
+	// Generics G1: the type of types — a value of this kind is itself
+	// a TypeIdx, used at compile time only. A function parameter
+	// declared `T: type` accepts a type argument when called. Has no
+	// runtime ABI; the codegen never lowers it to an LLVM type.
+	Type,
+	// Generics G4: deferred generic instantiation, parsed from
+	// `Identifier(arg, ...)` in a type position. The TypeKey carries
+	// the callee name in `a` (StringIdx) and an index into
+	// TypePool::genericArgs in `b`. The codegen resolves this lazily
+	// via the substitution engine when an LLVM type is requested or
+	// when a binding's static TypeIdx is needed.
+	GenericCall,
 };
 
 struct TypeKey {
@@ -317,6 +346,14 @@ inline bool operator==(const TypeKey &x, const TypeKey &y) {
 	case TypeKind::Union:
 	case TypeKind::Named:
 		return x.a == y.a;
+	case TypeKind::Type:
+		// Singleton meta-type: every TypeKey of kind Type is equal.
+		return true;
+	case TypeKind::GenericCall:
+		// G4: equal iff callee name AND args-list index match. The
+		// args index is canonical because the side table interns
+		// args lists.
+		return x.a == y.a && x.b == y.b;
 	}
 	return false;
 }
@@ -347,12 +384,20 @@ constexpr TypeIdx U64 = 9;
 constexpr TypeIdx I64 = 10;
 constexpr TypeIdx F32 = 11;
 constexpr TypeIdx F64 = 12;
+constexpr TypeIdx Type = 13;  // generics G1: the meta-type
 constexpr TypeIdx U1 = Bool;  // alias
 }  // namespace BuiltinType
 
 class TypePool {
 	std::vector<TypeKey> keys_;
 	std::unordered_map<TypeKey, TypeIdx, TypeKeyHash> idx_;
+	// Generics G4: side table for generic-call argument lists. A
+	// `TypeKind::GenericCall` TypeKey stores the index into this vector
+	// in `b`. Two `Maybe(File)` references at distinct sites resolve to
+	// the same TypeIdx because the args list `[File]` is interned here
+	// once.
+	std::vector<std::vector<TypeIdx>> genericArgs_;
+	std::map<std::vector<TypeIdx>, uint32_t> genericArgsIdx_;
 
 	TypeIdx pushKey(TypeKey k) {
 		TypeIdx id = static_cast<TypeIdx>(keys_.size());
@@ -379,6 +424,7 @@ class TypePool {
 		pushKey(TypeKey{TypeKind::Int, 0, 0, 64, 1});  // i64
 		pushKey(TypeKey{TypeKind::Float, 0, 0, 32, 0});
 		pushKey(TypeKey{TypeKind::Float, 0, 0, 64, 0});
+		pushKey(TypeKey{TypeKind::Type, 0, 0, 0, 0});
 	}
 
 	TypeIdx intern(TypeKey k) {
@@ -411,6 +457,28 @@ class TypePool {
 	}
 	TypeIdx internStruct(StringIdx nameId) {
 		return intern(TypeKey{TypeKind::Struct, 0, 0, nameId, 0});
+	}
+
+	// Generics G4: intern a `Identifier(arg, ...)` generic call as a
+	// TypeIdx. The args list itself is interned in the side table so two
+	// identical calls share an args index and consequently the same
+	// TypeIdx.
+	TypeIdx internGenericCall(StringIdx nameId, std::vector<TypeIdx> args) {
+		uint32_t argsIdx;
+		auto it = genericArgsIdx_.find(args);
+		if (it != genericArgsIdx_.end()) {
+			argsIdx = it->second;
+		} else {
+			argsIdx = static_cast<uint32_t>(genericArgs_.size());
+			genericArgs_.push_back(args);
+			genericArgsIdx_.emplace(std::move(args), argsIdx);
+		}
+		return intern(
+		    TypeKey{TypeKind::GenericCall, 0, 0, nameId, argsIdx});
+	}
+
+	const std::vector<TypeIdx> &genericArgsAt(uint32_t idx) const {
+		return genericArgs_[idx];
 	}
 	TypeIdx internEnum(StringIdx nameId) {
 		return intern(TypeKey{TypeKind::Enum, 0, 0, nameId, 0});

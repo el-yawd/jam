@@ -20,8 +20,7 @@ fn fillFromExtern(buf: mut [16]u8) i32 {
 }
 
 tfn fillFromExternOK() {
-    var buf: [16]u8 = undefined;
-    buf[0] = 0;
+    var buf: [16]u8 = [0; 16];
     var n: i32 = fillFromExtern(&buf);
     // snprintf wrote "n=42" (4 chars) into the buffer.
     assert(n, 4);
@@ -42,10 +41,8 @@ const Stats = struct {
 };
 
 fn statsOf(s: *const[] u8) Stats {
-    var out: Stats = undefined;
-    out.a = strlen(s);
-    out.b = out.a * 2;
-    out.c = out.a * 3;
+    var len: u64 = strlen(s);
+    var out: Stats = { a: len, b: len * 2, c: len * 3 };
     return out;
 }
 
@@ -73,11 +70,7 @@ fn fillField(b: mut Bag) i32 {
 }
 
 tfn fillFieldOK() {
-    var b: Bag = undefined;
-    b.one = 0;
-    b.two = 0;
-    b.three = 0;
-    b.four = 0;
+    var b: Bag = { one: 0, two: 0, three: 0, four: 0 };
     var n: i32 = fillField(&b);
     assert(n, 2);
     assert(b.one, 104);  // 'h'
@@ -87,10 +80,10 @@ tfn fillFieldOK() {
     assert(b.four, 0);
 }
 
-// Multi-mode function: one let, one mut, one undefined; calls two
-// extern fns in its body. Confirms the ABI machinery doesn't get
-// confused when several mode kinds and FFI calls coexist in one fn.
-fn multimode(prefix: u32, target: mut [8]u8, out: undefined u32) i32 {
+// Multi-mode function: one let, one mut, one mut-out; calls two extern
+// fns in its body. Confirms the ABI machinery doesn't get confused when
+// several mode kinds and FFI calls coexist in one fn.
+fn multimode(prefix: u32, target: mut [8]u8, out: mut u32) i32 {
     var written: i32 = snprintf(&target[0], 8, "p=%d", prefix);
     var len: u64 = strlen(&target[0]);
     out = len as u32;
@@ -98,9 +91,8 @@ fn multimode(prefix: u32, target: mut [8]u8, out: undefined u32) i32 {
 }
 
 tfn multimodeOK() {
-    var buf: [8]u8 = undefined;
-    buf[0] = 0;
-    var written: u32 = undefined;
+    var buf: [8]u8 = [0; 8];
+    var written: u32 = 0;
     var n: i32 = multimode(7, &buf, &written);
     assert(n, 3);                // "p=7" is 3 chars
     assert(written as u32, 3);   // strlen of "p=7" is 3

@@ -14,21 +14,13 @@ fn writeThroughPointer() u8 {
 }
 
 fn pointerToArrayElement() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 11;
-    arr[1] = 22;
-    arr[2] = 33;
-    arr[3] = 44;
+    var arr: [4]u8 = [11, 22, 33, 44];
     var p: *const u8 = &arr[2];
     return p.*;
 }
 
 fn writeThroughArrayElementPointer() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 1;
-    arr[1] = 2;
-    arr[2] = 3;
-    arr[3] = 4;
+    var arr: [4]u8 = [1, 2, 3, 4];
     var p: *mut u8 = &arr[1];
     p.* = 99;
     return arr[1];
@@ -49,30 +41,20 @@ const Point = struct {
 };
 
 fn addressOfStructField() u8 {
-    var pt: Point = undefined;
-    pt.x = 10;
-    pt.y = 20;
+    var pt: Point = { x: 10, y: 20 };
     var px: *mut u8 = &pt.x;
     px.* = 200;
     return pt.x;
 }
 
 fn manyItemPointerIndex() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 5;
-    arr[1] = 6;
-    arr[2] = 7;
-    arr[3] = 8;
+    var arr: [4]u8 = [5, 6, 7, 8];
     var p: *mut[] u8 = &arr[1];
     return p[2];
 }
 
 fn manyItemPointerWrite() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 1;
-    arr[1] = 2;
-    arr[2] = 3;
-    arr[3] = 4;
+    var arr: [4]u8 = [1, 2, 3, 4];
     var p: *mut[] u8 = &arr[0];
     p[3] = 88;
     return arr[3];

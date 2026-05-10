@@ -6,7 +6,7 @@ const Game = struct {
 };
 
 fn writeThenReadU8() u8 {
-    var arr: [10]u8 = undefined;
+    var arr: [10]u8 = [0; 10];
     arr[0] = 42;
     arr[1] = 7;
     arr[9] = 200;
@@ -14,7 +14,7 @@ fn writeThenReadU8() u8 {
 }
 
 fn secondElement() u8 {
-    var arr: [10]u8 = undefined;
+    var arr: [10]u8 = [0; 10];
     arr[0] = 42;
     arr[1] = 7;
     arr[9] = 200;
@@ -22,7 +22,7 @@ fn secondElement() u8 {
 }
 
 fn lastElement() u8 {
-    var arr: [10]u8 = undefined;
+    var arr: [10]u8 = [0; 10];
     arr[0] = 42;
     arr[1] = 7;
     arr[9] = 200;
@@ -30,7 +30,7 @@ fn lastElement() u8 {
 }
 
 fn sumFirstFour() u32 {
-    var arr: [10]u32 = undefined;
+    var arr: [10]u32 = [0; 10];
     arr[0] = 100;
     arr[1] = 200;
     arr[2] = 300;
@@ -39,17 +39,13 @@ fn sumFirstFour() u32 {
 }
 
 fn dynamicIndexRead() u8 {
-    var arr: [4]u8 = undefined;
-    arr[0] = 10;
-    arr[1] = 20;
-    arr[2] = 30;
-    arr[3] = 40;
+    var arr: [4]u8 = [10, 20, 30, 40];
     var i: u8 = 2;
     return arr[i];
 }
 
 fn loopFillThenRead() u8 {
-    var arr: [16]u8 = undefined;
+    var arr: [16]u8 = [0; 16];
     for i in 0:16 {
         arr[i] = i;
     }
@@ -57,7 +53,7 @@ fn loopFillThenRead() u8 {
 }
 
 fn loopFillThenReadLast() u8 {
-    var arr: [16]u8 = undefined;
+    var arr: [16]u8 = [0; 16];
     for i in 0:16 {
         arr[i] = i;
     }
@@ -65,13 +61,13 @@ fn loopFillThenReadLast() u8 {
 }
 
 fn structFieldArrayWrite() u8 {
-    var g: Game = undefined;
+    var g: Game = { score: 0, board: [0; 10] };
     g.board[3] = 42;
     return g.board[3];
 }
 
 fn structFieldArrayLoopFill() u8 {
-    var g: Game = undefined;
+    var g: Game = { score: 0, board: [0; 10] };
     for i in 0:10 {
         g.board[i] = i;
     }
@@ -79,8 +75,7 @@ fn structFieldArrayLoopFill() u8 {
 }
 
 fn structFieldArrayMixed() u8 {
-    var g: Game = undefined;
-    g.score = 99;
+    var g: Game = { score: 99, board: [0; 10] };
     g.board[0] = g.score;
     g.board[1] = 50;
     return g.board[0];

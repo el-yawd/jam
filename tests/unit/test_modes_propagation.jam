@@ -3,7 +3,6 @@ const { assert } = import("test");
 // MVS P4: callsite mode propagation. The analyzer looks up each callee's
 // parameter modes and updates the caller's binding states accordingly:
 //   - move arg     → caller's base binding becomes Uninit
-//   - undefined arg → caller's base binding becomes Init
 //   - let / mut    → caller's binding state unchanged
 //
 // These tests cover *runtime-correct* must-pass cases. The runtime ABI

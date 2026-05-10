@@ -35,7 +35,6 @@ enum class ParamMode : uint8_t {
 	Let = 0,
 	Mut,
 	Move,
-	Undefined,
 };
 
 // One function parameter. Mode defaults to Let when not annotated at the
@@ -78,6 +77,19 @@ class FunctionAST {
 	// Convenience: declare + define in one shot. Kept so single-pass
 	// callers (extern, repl-style code) still work.
 	JamFunctionRef codegen(JamCodegenContext &ctx);
+
+	// Generics G1: a function is generic iff any of its parameters has
+	// type `type` (the meta-type) or its return type is `type`. Generic
+	// functions are not lowered to LLVM at decl time — instead they are
+	// registered for compile-time instantiation at each call site that
+	// supplies concrete type arguments.
+	bool isGeneric() const {
+		if (ReturnType == BuiltinType::Type) return true;
+		for (const Param &p : Args) {
+			if (p.Type == BuiltinType::Type) return true;
+		}
+		return false;
+	}
 };
 
 // Top-level struct declaration: const Vec3 = struct { x: f32, y: f32 };
@@ -167,6 +179,12 @@ class ConstDeclAST {
 	std::string Name;
 	TypeIdx DeclaredType;  // kNoType when omitted; init drives the type
 	NodeIdx InitExpr;
+	// Generics G4: if non-kNoType, this const is a type alias (RHS is a
+	// generic-instantiation expression like `Box(i32)`). InitExpr is
+	// kNoNode in that case. main.cpp processes type-alias consts
+	// before regular consts and registers the alias in the codegen
+	// context's type-alias table.
+	TypeIdx AliasedType = kNoType;
 
 	ConstDeclAST(std::string Name, TypeIdx DeclaredType, NodeIdx InitExpr)
 	    : Name(std::move(Name)), DeclaredType(DeclaredType),
@@ -203,6 +221,13 @@ class ModuleAST {
 	std::vector<std::unique_ptr<EnumDeclAST>> Enums;
 	std::vector<std::unique_ptr<ConstDeclAST>> Consts;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
+	// Generics G2: bodies of `struct { ... }` expressions. Each entry is
+	// a regular StructDeclAST with a synthetic name (`__anon_struct_<N>`).
+	// Index N comes from the AnonStructs vector at parse time and is
+	// stored in the StructExpr AST node's d.lhs slot. The substitution
+	// engine in G4 reads from here to instantiate the struct with
+	// concrete type arguments.
+	std::vector<std::unique_ptr<StructDeclAST>> AnonStructs;
 
 	ModuleAST() = default;
 };

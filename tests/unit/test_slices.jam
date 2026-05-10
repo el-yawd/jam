@@ -23,24 +23,24 @@ fn test_u8_slice_const() []u8 {
     return buffer;
 }
 
-// Test other slice types
+// Test other slice types: empty literal `[]` builds {ptr=null, len=0}.
 fn test_u16_slice() []u16 {
-    var data: []u16 = undefined;
+    var data: []u16 = [];
     return data;
 }
 
 fn test_u32_slice() []u32 {
-    var data: []u32 = undefined;
+    var data: []u32 = [];
     return data;
 }
 
 fn test_bool_slice() []bool {
-    var data: []bool = undefined;
+    var data: []bool = [];
     return data;
 }
 
 // Test nested slice types: outer-only mutability covers the inner.
 fn test_slice_of_slices() [][]u8 {
-    var data: [][]u8 = undefined;
+    var data: [][]u8 = [];
     return data;
 }

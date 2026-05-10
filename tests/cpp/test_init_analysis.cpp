@@ -1,4 +1,4 @@
-// In-process tests for the MVS init analyzer (P2 through P5.5).
+// In-process tests for the MVS init analyzer (P4 through P8.2).
 //
 // Each test compiles a Jam source string through lexer + parser, runs
 // init_analysis::analyze on every function in the parsed module, and
@@ -82,102 +82,6 @@ bool diagsAbout(const std::vector<jam::init_analysis::Diagnostic> &diags,
 }
 
 // =========================================================================
-// P2 — definite initialization
-// =========================================================================
-
-void testUninitRead() {
-	auto r = analyzeSource(R"(
-fn f() u32 {
-    var x: u32 = undefined;
-    return x;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message, "uninitialized");
-	ASSERT_EQ(std::string("x"), r.diagnostics[0].varName);
-}
-
-void testPartialBranchInit() {
-	auto r = analyzeSource(R"(
-fn f(b: bool) u32 {
-    var x: u32 = undefined;
-    if (b) {
-        x = 100;
-    }
-    return x;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message,
-	                "may not be initialized on every path");
-	ASSERT_EQ(std::string("x"), r.diagnostics[0].varName);
-}
-
-void testStraightLineOK() {
-	auto r = analyzeSource(R"(
-fn f() u32 {
-    var x: u32 = undefined;
-    x = 5;
-    return x;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
-}
-
-void testIfElseBothInitOK() {
-	auto r = analyzeSource(R"(
-fn f(b: bool) u32 {
-    var x: u32 = undefined;
-    if (b) {
-        x = 1;
-    } else {
-        x = 2;
-    }
-    return x;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
-}
-
-// =========================================================================
-// P3 — undefined-mode parameter rules
-// =========================================================================
-
-void testUndefinedParamUnset() {
-	auto r = analyzeSource(R"(
-fn f(out: undefined u32) u32 {
-    return 42;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message,
-	                "`undefined`-mode parameter `out` was not initialized");
-}
-
-void testUndefinedParamReadBeforeWrite() {
-	auto r = analyzeSource(R"(
-fn f(out: undefined u32) u32 {
-    return out;
-}
-)");
-	// Two diagnostics expected: read-of-uninit AND undefined-param-not-init.
-	// The second is redundant but informative; both are produced.
-	ASSERT_TRUE(diagsContain(r.diagnostics, "use of uninitialized binding"));
-	ASSERT_TRUE(diagsContain(r.diagnostics, "`undefined`-mode parameter"));
-	ASSERT_TRUE(diagsAbout(r.diagnostics, "out"));
-}
-
-void testUndefinedParamInitOK() {
-	auto r = analyzeSource(R"(
-fn f(out: undefined u32) u32 {
-    out = 42;
-    return out;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
-}
-
-// =========================================================================
 // P4 — callsite mode propagation
 // =========================================================================
 
@@ -209,19 +113,6 @@ fn caller() u32 {
 	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
 	ASSERT_CONTAINS(r.diagnostics[0].message, "uninitialized");
 	ASSERT_EQ(std::string("x"), r.diagnostics[0].varName);
-}
-
-void testUninitLetArg() {
-	auto r = analyzeSource(R"(
-fn read(x: u32) u32 { return x; }
-
-fn caller() u32 {
-    var x: u32 = undefined;
-    return read(x);
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message, "uninitialized");
 }
 
 void testMoveThenSeparateBindingOK() {
@@ -278,9 +169,7 @@ const Pair = struct { a: u32, b: u32 };
 fn modifyAndRead(whole: mut Pair, part: u32) u32 { return part; }
 
 fn caller() u32 {
-    var p: Pair = undefined;
-    p.a = 1;
-    p.b = 2;
+    var p: Pair = { a: 1, b: 2 };
     return modifyAndRead(p, p.a);
 }
 )");
@@ -295,9 +184,7 @@ const Pair = struct { a: u32, b: u32 };
 fn add(a: u32, b: u32) u32 { return a + b; }
 
 fn caller() u32 {
-    var p: Pair = undefined;
-    p.a = 10;
-    p.b = 20;
+    var p: Pair = { a: 10, b: 20 };
     return add(p.a, p.b);
 }
 )");
@@ -329,18 +216,6 @@ fn dangleField(p: mut Pair) *mut u32 {
 )");
 	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
 	ASSERT_CONTAINS(r.diagnostics[0].message, "cannot return `&` of `mut`-mode");
-}
-
-void testEscapeUndefinedParam() {
-	auto r = analyzeSource(R"(
-fn dangleUndef(out: undefined u32) *mut u32 {
-    out = 5;
-    return &out;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message,
-	                "cannot return `&` of `undefined`-mode");
 }
 
 void testReturnMutParamByValueOK() {
@@ -378,8 +253,7 @@ fn consume(f: move File) i32 {
 }
 
 fn caller() i32 {
-    var f: File = undefined;
-    f.fd = 7;
+    var f: File = { fd: 7 };
     return consume(f);
 }
 )");
@@ -404,8 +278,7 @@ fn read(f: File) i32 {
 }
 
 fn caller() i32 {
-    var f: File = undefined;
-    f.fd = 7;
+    var f: File = { fd: 7 };
     return read(f);
 }
 )");
@@ -427,81 +300,9 @@ fn close(f: mut File) {
 }
 
 fn caller() i32 {
-    var f: File = undefined;
-    f.fd = 7;
+    var f: File = { fd: 7 };
     close(&f);
     return f.fd;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
-}
-
-// =========================================================================
-// P8.2b — drop-bearing locals must be Init at every exit
-// =========================================================================
-
-void testDropBearingUninitAtReturnRejected() {
-	auto r = analyzeSource(R"(
-const File = struct { fd: i32 };
-fn drop(self: mut File) { self.fd = 0; }
-
-fn forgotInit() i32 {
-    var f: File = undefined;
-    return 42;
-}
-)");
-	ASSERT_TRUE(diagsContain(r.diagnostics, "drop-bearing binding"));
-	ASSERT_TRUE(diagsAbout(r.diagnostics, "f"));
-}
-
-void testDropBearingPartialBranchInitRejected() {
-	auto r = analyzeSource(R"(
-const File = struct { fd: i32 };
-fn drop(self: mut File) { self.fd = 0; }
-
-fn maybe(b: bool) i32 {
-    var f: File = undefined;
-    if (b) {
-        f.fd = 7;
-    }
-    return 0;
-}
-)");
-	ASSERT_TRUE(diagsContain(r.diagnostics, "drop-bearing binding"));
-	ASSERT_TRUE(diagsContain(r.diagnostics,
-	                         "may not be initialized on every path"));
-	ASSERT_TRUE(diagsAbout(r.diagnostics, "f"));
-}
-
-void testDropBearingFullyInitOK() {
-	// Initialized via partial-write rule (every path touches f) → Init at
-	// exit, no rejection.
-	auto r = analyzeSource(R"(
-const File = struct { fd: i32 };
-fn drop(self: mut File) { self.fd = 0; }
-
-fn ok() i32 {
-    var f: File = undefined;
-    f.fd = 9;
-    return 0;
-}
-)");
-	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
-}
-
-void testDropBearingInitOnAllBranchesOK() {
-	auto r = analyzeSource(R"(
-const File = struct { fd: i32 };
-fn drop(self: mut File) { self.fd = 0; }
-
-fn ok(b: bool) i32 {
-    var f: File = undefined;
-    if (b) {
-        f.fd = 1;
-    } else {
-        f.fd = 2;
-    }
-    return 0;
 }
 )");
 	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
@@ -521,9 +322,7 @@ fn consume(p: move Plain) u32 {
 }
 
 fn caller() u32 {
-    var p: Plain = undefined;
-    p.a = 1;
-    p.b = 2;
+    var p: Plain = { a: 1, b: 2 };
     return consume(p);
 }
 )");
@@ -535,29 +334,10 @@ fn caller() u32 {
 class InitAnalysisTests {
   public:
 	static void registerAllTests(TestFramework &framework) {
-		// P2 — definite-init
-		framework.addTest("InitAnalysis P2 - uninit read", testUninitRead);
-		framework.addTest("InitAnalysis P2 - partial branch init",
-		                  testPartialBranchInit);
-		framework.addTest("InitAnalysis P2 - straight line OK",
-		                  testStraightLineOK);
-		framework.addTest("InitAnalysis P2 - if/else both init OK",
-		                  testIfElseBothInitOK);
-
-		// P3 — undefined-mode parameter
-		framework.addTest("InitAnalysis P3 - undefined param unset",
-		                  testUndefinedParamUnset);
-		framework.addTest("InitAnalysis P3 - undefined param read before write",
-		                  testUndefinedParamReadBeforeWrite);
-		framework.addTest("InitAnalysis P3 - undefined param init OK",
-		                  testUndefinedParamInitOK);
-
 		// P4 — callsite mode propagation
 		framework.addTest("InitAnalysis P4 - read after move",
 		                  testReadAfterMove);
 		framework.addTest("InitAnalysis P4 - double move", testDoubleMove);
-		framework.addTest("InitAnalysis P4 - uninit let arg",
-		                  testUninitLetArg);
 		framework.addTest("InitAnalysis P4 - move then separate binding OK",
 		                  testMoveThenSeparateBindingOK);
 
@@ -576,8 +356,6 @@ class InitAnalysisTests {
 		                  testEscapeMutParam);
 		framework.addTest("InitAnalysis P5.5 - escape &mut field",
 		                  testEscapeMutField);
-		framework.addTest("InitAnalysis P5.5 - escape &undefined param",
-		                  testEscapeUndefinedParam);
 		framework.addTest("InitAnalysis P5.5 - mut param by-value return OK",
 		                  testReturnMutParamByValueOK);
 
@@ -590,16 +368,6 @@ class InitAnalysisTests {
 		                  testMutOnDropBearingOK);
 		framework.addTest("InitAnalysis P8 - move on non-drop OK",
 		                  testNonDropBearingMoveOK);
-
-		// P8.2 — drop-bearing locals must be Init at every exit
-		framework.addTest("InitAnalysis P8.2 - uninit at return rejected",
-		                  testDropBearingUninitAtReturnRejected);
-		framework.addTest("InitAnalysis P8.2 - partial branch init rejected",
-		                  testDropBearingPartialBranchInitRejected);
-		framework.addTest("InitAnalysis P8.2 - fully init OK",
-		                  testDropBearingFullyInitOK);
-		framework.addTest("InitAnalysis P8.2 - init on all branches OK",
-		                  testDropBearingInitOnAllBranchesOK);
 	}
 };
 

@@ -165,6 +165,12 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
+	// Generics G4: hand off the parsed module's anonymous-struct table
+	// (bodies of `struct {...}` expressions) to the codegen context so
+	// the substitution engine can look them up by index when resolving
+	// generic instantiations.
+	codegenCtx.setAnonStructs(&module->AnonStructs);
+
 	// Register struct types from imported modules and main module first so
 	// that codegen has the struct registry available. Two phases so structs
 	// can reference each other regardless of declaration order.
@@ -378,8 +384,18 @@ static int compileAndRun(const std::string &filename,
 	// are inlined at use sites (see AstTag::Variable in ast.cpp), so we
 	// only need to teach the codegen context about them — no LLVM
 	// globals get emitted.
+	//
+	// Generics G4: a const whose RHS is a generic-instantiation type
+	// expression (e.g. `const BoxI32 = Box(i32);`) is a *type alias*
+	// instead. The parser flagged these by setting AliasedType; we
+	// register them in the type-alias table so subsequent type lookups
+	// (`var b: BoxI32`) resolve to the instantiated struct.
 	auto registerConsts = [&](ModuleAST *m) {
 		for (auto &c : m->Consts) {
+			if (c->AliasedType != kNoType) {
+				codegenCtx.registerTypeAlias(c->Name, c->AliasedType);
+				continue;
+			}
 			codegenCtx.registerModuleConst(c->Name, c->InitExpr,
 			                               c->DeclaredType);
 		}
@@ -401,7 +417,15 @@ static int compileAndRun(const std::string &filename,
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		for (auto &func : importedModule->Functions) {
-			if (func->isPub) { func->declarePrototype(codegenCtx); }
+			if (func->isPub && !func->isGeneric()) {
+				func->declarePrototype(codegenCtx);
+			}
+			// Generic functions are still registered so call sites can
+			// look them up for instantiation, but no LLVM is emitted
+			// until each instantiation is processed in G5.
+			if (func->isPub) {
+				codegenCtx.registerFunctionAST(func->Name, func.get());
+			}
 		}
 	}
 
@@ -417,10 +441,18 @@ static int compileAndRun(const std::string &filename,
 		if (function->isTest) {
 			testFunctionNames.push_back("__test_" + function->Name);
 		}
-		function->declarePrototype(codegenCtx);
-		mainModuleEmits.push_back(function.get());
+		// Generics G1: skip prototype + body emission for generic
+		// functions. They get registered (so call sites can find them)
+		// but no LLVM is emitted until an instantiation in G5 supplies
+		// concrete type arguments.
+		if (!function->isGeneric()) {
+			function->declarePrototype(codegenCtx);
+			mainModuleEmits.push_back(function.get());
+		}
 		// P9: register by source-level name so call codegen can recover
-		// parameter modes for callsite ABI decisions.
+		// parameter modes for callsite ABI decisions. Generic functions
+		// also need to be in the registry — call sites consult it to
+		// drive instantiation.
 		codegenCtx.registerFunctionAST(function->Name, function.get());
 	}
 
@@ -439,25 +471,59 @@ static int compileAndRun(const std::string &filename,
 	};
 	for (auto &s : module->Structs) {
 		for (auto &m : s->Methods) {
-			if (m->Args.empty() || m->Args[0].Name != "self") {
-				std::cerr << filename << ": error: method `" << m->Name
-				          << "` on struct `" << s->Name
-				          << "` must take `self` as its first parameter\n";
-				return 1;
-			}
-			std::string selfStruct =
-			    resolveStructName(m->Args[0].Type);
-			if (selfStruct != s->Name) {
-				std::cerr << filename << ": error: method `" << m->Name
-				          << "` on struct `" << s->Name
-				          << "` has self type `" << selfStruct
-				          << "`; expected `" << s->Name << "`\n";
-				return 1;
-			}
-			if (m->Name != "drop") {
+			// Two privileged method names on top-level structs:
+			//   `drop`    — no-arg-cleanup; must take `self: mut Self`.
+			//   `default` — opt-in default constructor; takes no
+			//               parameters, returns `Self`. Used by anything
+			//               that expects a default value (struct-literal
+			//               omitted fields, generic type parameters that
+			//               require a default, future `var x: T;`).
+			// Anything else is rejected — there is no general user-
+			// defined static-method or instance-method support on top-
+			// level structs in v1.
+			if (m->Name == "default") {
+				if (!m->Args.empty()) {
+					std::cerr
+					    << filename
+					    << ": error: method `default` on struct `"
+					    << s->Name
+					    << "` must take no parameters\n";
+					return 1;
+				}
+				std::string retStruct =
+				    resolveStructName(m->ReturnType);
+				if (retStruct != s->Name) {
+					std::cerr
+					    << filename
+					    << ": error: method `default` on struct `"
+					    << s->Name
+					    << "` must return `Self` (got `"
+					    << retStruct << "`)\n";
+					return 1;
+				}
+			} else if (m->Name == "drop") {
+				if (m->Args.empty() || m->Args[0].Name != "self") {
+					std::cerr
+					    << filename << ": error: method `" << m->Name
+					    << "` on struct `" << s->Name
+					    << "` must take `self` as its first parameter\n";
+					return 1;
+				}
+				std::string selfStruct =
+				    resolveStructName(m->Args[0].Type);
+				if (selfStruct != s->Name) {
+					std::cerr
+					    << filename << ": error: method `" << m->Name
+					    << "` on struct `" << s->Name
+					    << "` has self type `" << selfStruct
+					    << "`; expected `" << s->Name << "`\n";
+					return 1;
+				}
+			} else {
 				std::cerr << filename
-				          << ": error: non-drop methods inside struct "
-				             "bodies are not yet supported (saw `"
+				          << ": error: only `drop` and `default` "
+				             "methods are allowed on top-level "
+				             "structs (saw `"
 				          << s->Name << "." << m->Name << "`)\n";
 				return 1;
 			}
@@ -468,11 +534,14 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
-	// Pass 2a: bodies for pub functions in imported modules.
+	// Pass 2a: bodies for pub functions in imported modules. Generics
+	// are skipped here too (their bodies are walked at instantiation).
 	for (const auto &[path, importedModule] : resolver.getLoadedModules()) {
 		if (path == "std") continue;
 		for (auto &func : importedModule->Functions) {
-			if (func->isPub) { func->defineBody(codegenCtx); }
+			if (func->isPub && !func->isGeneric()) {
+				func->defineBody(codegenCtx);
+			}
 		}
 	}
 
@@ -516,11 +585,11 @@ static int compileAndRun(const std::string &filename,
 			                std::make_move_iterator(diags.end()));
 		}
 		if (!allDiags.empty()) { return 1; }
-	}
 
-	// Pass 2b: bodies for the main module's functions.
-	for (FunctionAST *function : mainModuleEmits) {
-		function->defineBody(codegenCtx);
+		// Pass 2b: bodies for the main module's functions.
+		for (FunctionAST *function : mainModuleEmits) {
+			function->defineBody(codegenCtx);
+		}
 	}
 
 	// In test mode, generate a main() that calls all test functions
@@ -920,6 +989,15 @@ int main(int argc, char *argv[]) {
 		return failed == 0 ? 0 : 1;
 	}
 
-	return compileAndRun(filename, outputName, runFlag, emitIR, testMode,
-	                     releaseMode, linkLibs);
+	// Catch compile-time exceptions cleanly so the user sees a single-line
+	// error instead of a stack trace + abort. Exceptions reach here from
+	// codegen paths that detect impossible inputs (e.g. a generic
+	// instantiation referencing a method the concrete type doesn't have).
+	try {
+		return compileAndRun(filename, outputName, runFlag, emitIR,
+		                     testMode, releaseMode, linkLibs);
+	} catch (const std::exception &e) {
+		std::cerr << filename << ": error: " << e.what() << std::endl;
+		return 1;
+	}
 }

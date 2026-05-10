@@ -35,9 +35,9 @@ bool isScalar(TypeKind k) {
 
 ParamABI classifyParam(ParamMode mode, TypeIdx ty,
                        const JamCodegenContext &ctx) {
-	// `mut` and `undefined` always carry a pointer to caller-owned (or
-	// uninit-caller) storage. Size is irrelevant.
-	if (mode == ParamMode::Mut || mode == ParamMode::Undefined) {
+	// `mut` always carries a pointer to caller-owned storage; size
+	// irrelevant.
+	if (mode == ParamMode::Mut) {
 		return ParamABI{ParamABI::Kind::ByPointer, nullptr,
 		                static_cast<uint32_t>(ctx.typeAlign(ty))};
 	}

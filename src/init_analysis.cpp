@@ -83,7 +83,6 @@ class Analyzer {
 	Result analyzeStructLit(NodeIdx idx, NameMap state);
 
 	void checkVariableRead(NodeIdx idx, const NameMap &state);
-	void checkUndefinedParamsInit(const NameMap &state, NodeIdx anchor);
 	void checkDropBearingLocalsInit(const NameMap &state, NodeIdx anchor);
 	void checkScopeEscape(NodeIdx exprIdx);
 	void emitError(std::string message, NodeIdx anchor, std::string varName);
@@ -125,11 +124,8 @@ class Analyzer {
 	std::vector<Diagnostic> diagnostics_;
 
 	// Pointer to the current function's parameter list. Set in run(),
-	// cleared on exit. Used by checkUndefinedParamsInit to find every
-	// `undefined`-mode parameter without allocating a separate vector
-	// of names. Lifetime is bounded by the run() activation that set it.
+	// Cleared on exit. Lifetime bounded by the run() activation that set it.
 	const std::vector<Param> *args_ = nullptr;
-	bool hasUndefinedParam_ = false;
 
 	// Static type per binding name. Populated as parameter list and
 	// VarDecls are walked. Used by P8's drop-bearing check on `move` args.
@@ -149,23 +145,16 @@ class Analyzer {
 
 std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	args_ = &fn.Args;
-	hasUndefinedParam_ = false;
 	varTypes_.clear();
 
 	NameMap state;
 	// P3: parameter entry state depends on the declared mode.
-	//   Undefined → Uninit (caller hands an uninitialized destination)
 	//   Let / Mut / Move → Init (caller's binding is valid)
 	// `move` does not change anything for the callee's view of its own
 	// parameter — the moved-from-ness applies to the *caller's* binding
 	// after the call (P4 work).
 	for (const Param &p : fn.Args) {
-		if (p.Mode == ParamMode::Undefined) {
-			state[p.Name] = InitState::Uninit;
-			hasUndefinedParam_ = true;
-		} else {
-			state[p.Name] = InitState::Init;
-		}
+		state[p.Name] = InitState::Init;
 		varTypes_[p.Name] = p.Type;
 	}
 
@@ -181,12 +170,11 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	}
 
 	// P3 + P8.2: if control reaches the end of the body without an
-	// explicit return, every `undefined`-mode parameter and every
-	// drop-bearing local must have been initialized. (Functions that
-	// always return on every path produce r.terminated == true and skip
-	// this check; the per-return checks in analyzeReturn cover them.)
+	// explicit return, every drop-bearing local must have been
+	// initialized. (Functions that always return on every path produce
+	// r.terminated == true and skip this check; the per-return checks
+	// in analyzeReturn cover them.)
 	if (!r.terminated) {
-		checkUndefinedParamsInit(r.state, kNoNode);
 		checkDropBearingLocalsInit(r.state, kNoNode);
 	}
 
@@ -260,13 +248,42 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		return analyze(n.lhs, std::move(state));
 	case AstTag::StructLit:
 		return analyzeStructLit(idx, std::move(state));
+	case AstTag::ArrayLit: {
+		// Walk every element expression so any variable reads inside the
+		// array literal are checked against the init state.
+		ExtraIdx extra = n.rhs;
+		uint32_t count = nodes_.getExtra(extra);
+		Result r{std::move(state), false};
+		for (uint32_t i = 0; i < count; i++) {
+			NodeIdx elemIdx = static_cast<NodeIdx>(
+			    nodes_.getExtra(extra + 1 + i));
+			r = analyze(elemIdx, std::move(r.state));
+			if (r.terminated) return r;
+		}
+		return r;
+	}
+	case AstTag::ArrayRepeat: {
+		// Walk the value expression. The count is a constant-only NumberLit
+		// (enforced at codegen) — analyzing it is a no-op on init state.
+		ExtraIdx extra = n.rhs;
+		NodeIdx valueIdx = static_cast<NodeIdx>(nodes_.getExtra(extra));
+		NodeIdx countIdx = static_cast<NodeIdx>(nodes_.getExtra(extra + 1));
+		auto r = analyze(valueIdx, std::move(state));
+		if (r.terminated) return r;
+		return analyze(countIdx, std::move(r.state));
+	}
 
 	// Literals — no init effect on bindings.
 	case AstTag::NumberLit:
 	case AstTag::BoolLit:
 	case AstTag::StringLit:
-	case AstTag::UndefinedLit:
 	case AstTag::ImportLit:
+	// Generics G2: `struct {...}` expression evaluates to a value of
+	// type `type` at compile time. The body lives in ModuleAST and is
+	// processed by the substitution engine — the analyzer doesn't see
+	// it because generic functions skip analysis (they're not in
+	// mainModuleEmits). If we ever do reach this case it's a no-op.
+	case AstTag::StructExpr:
 		return Result{std::move(state), false};
 
 	// Pattern atoms appear only inside MatchNode arms; they don't read
@@ -302,14 +319,8 @@ Result Analyzer::analyzeVarDecl(NodeIdx idx, NameMap state) {
 
 	if (initIdx == kNoNode) {
 		// Should not happen — Jam syntactically requires an initializer
-		// for `var` declarations. Treat as Uninit defensively.
-		state[name] = InitState::Uninit;
-		return Result{std::move(state), false};
-	}
-
-	const AstNode &initNode = nodes_.get(initIdx);
-	if (initNode.tag == AstTag::UndefinedLit) {
-		state[name] = InitState::Uninit;
+		// for `var` declarations.
+		state[name] = InitState::Init;
 		return Result{std::move(state), false};
 	}
 
@@ -534,10 +545,9 @@ Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 
 	Result r{std::move(state), false};
 	if (n.lhs != kNoNode) { r = analyze(n.lhs, std::move(r.state)); }
-	// P3: every `undefined`-mode parameter must be Init on every return path.
-	checkUndefinedParamsInit(r.state, idx);
-	// P8.2: every drop-bearing local must be Init too — codegen will emit
-	// drop on it at this exit, and dropping uninit memory is UB.
+	// P8.2: every drop-bearing local must be Init at every return path —
+	// codegen will emit drop on it at this exit, and dropping uninit
+	// memory is UB.
 	checkDropBearingLocalsInit(r.state, idx);
 	r.terminated = true;
 	return r;
@@ -606,18 +616,14 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 		if (r.terminated) return r;
 		// Walk the arg expression. For `let`/`mut`/`move` modes the walk
 		// includes a read-check on the base binding (it must already be
-		// Init). For `undefined` mode the caller is supposed to pass an
-		// AddressOf of an Uninit slot — and `&x` skips the read-check on
-		// `x` thanks to the AddressOf bypass in analyze().
+		// Init).
 		r = analyze(info.argIdx, std::move(r.state));
 		if (r.terminated) return r;
 
 		// Post-call mode effect on the caller's binding.
 		//   move      — caller's binding moves into the callee; becomes Uninit.
-		//   undefined — callee writes through the address; becomes Init.
 		//   let / mut — no caller-side state change.
-		if (info.mode == ParamMode::Move ||
-		    info.mode == ParamMode::Undefined) {
+		if (info.mode == ParamMode::Move) {
 			if (info.path.base != kNoString) {
 				const std::string &name = strings_.get(info.path.base);
 
@@ -625,8 +631,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 				// until move-aware drop tracking lands in P8.1. Without
 				// it, codegen would emit drop on the moved-out slot at
 				// scope exit — a double-free.
-				if (info.mode == ParamMode::Move &&
-				    lookupDropFor(name) != nullptr) {
+				if (lookupDropFor(name) != nullptr) {
 					emitError("cannot `move` binding `" + name +
 					              "` of drop-bearing type — drop+move "
 					              "tracking is not yet implemented (P8.1); "
@@ -635,9 +640,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 					          info.argIdx, name);
 				}
 
-				r.state[name] =
-				    (info.mode == ParamMode::Move) ? InitState::Uninit
-				                                   : InitState::Init;
+				r.state[name] = InitState::Uninit;
 			}
 		}
 	}
@@ -863,11 +866,11 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 		std::string msg = "drop-bearing binding `" + name + "` of type `" +
 		                  structName + "` ";
 		if (s == InitState::Uninit) {
-			msg += "must be initialized before this exit — drop runs on it "
+			msg += "must be initialized before this exit; drop runs on it "
 			       "and would otherwise read uninit memory";
 		} else {
 			msg += "may not be initialized on every path that reaches this "
-			       "exit — drop runs on it on every path";
+			       "exit; drop runs on it on every path";
 		}
 		emitError(std::move(msg), anchor, name);
 	}
@@ -894,16 +897,12 @@ void Analyzer::checkScopeEscape(NodeIdx exprIdx) {
 			const std::string &name = strings_.get(nameId);
 			for (const Param &p : *args_) {
 				if (p.Name != name) continue;
-				if (p.Mode != ParamMode::Mut &&
-				    p.Mode != ParamMode::Undefined)
-					return;
-				const char *modeStr =
-				    (p.Mode == ParamMode::Mut) ? "mut" : "undefined";
-				std::string msg = "cannot return `&` of `";
-				msg += modeStr;
-				msg += "`-mode parameter `" + name +
-				       "` — borrows are second-class and cannot escape "
-				       "the function";
+				if (p.Mode != ParamMode::Mut) return;
+				std::string msg = "cannot return `&` of `mut`-mode "
+				                  "parameter `" +
+				                  name +
+				                  "` — borrows are second-class and "
+				                  "cannot escape the function";
 				emitError(std::move(msg), exprIdx, name);
 				return;
 			}
@@ -917,27 +916,6 @@ void Analyzer::checkScopeEscape(NodeIdx exprIdx) {
 			// Deref or anything else: not a borrow path on the parameter.
 			return;
 		}
-	}
-}
-
-void Analyzer::checkUndefinedParamsInit(const NameMap &state, NodeIdx anchor) {
-	// Fast path: most functions have no `undefined`-mode parameters at all.
-	// Skip the iteration over fn.Args entirely in that case.
-	if (!hasUndefinedParam_ || args_ == nullptr) return;
-	for (const Param &p : *args_) {
-		if (p.Mode != ParamMode::Undefined) continue;
-		auto it = state.find(p.Name);
-		InitState s = (it == state.end()) ? InitState::Uninit : it->second;
-		if (s == InitState::Init) continue;
-		std::string msg;
-		if (s == InitState::Uninit) {
-			msg = "`undefined`-mode parameter `" + p.Name +
-			      "` was not initialized before this return";
-		} else {
-			msg = "`undefined`-mode parameter `" + p.Name +
-			      "` may not be initialized on every path that reaches this return";
-		}
-		emitError(std::move(msg), anchor, p.Name);
 	}
 }
 

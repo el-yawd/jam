@@ -17,19 +17,19 @@ fn test_string_functions(input: str) str {
     return input;
 }
 
-// Test complex slice types
+// Test complex slice types — empty literal yields {ptr=null, len=0}.
 fn test_i8_slice() []i8 {
-    var data: []i8 = undefined;
+    var data: []i8 = [];
     return data;
 }
 
 fn test_i16_slice() []i16 {
-    var data: []i16 = undefined;
+    var data: []i16 = [];
     return data;
 }
 
 fn test_i32_slice() []i32 {
-    var data: []i32 = undefined;
+    var data: []i32 = [];
     return data;
 }
 
