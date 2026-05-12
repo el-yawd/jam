@@ -13,7 +13,7 @@ fn unwrapOrDefault(o: OneArg, def: u8) u8 {
     match (o) {
         OneArg.Nothing { return def; }
         OneArg.Just(x) { return x; }
-        else           { return 99; }
+        _           { return 99; }
     }
     return 0;
 }
@@ -37,7 +37,7 @@ fn srcReg(op: Op) u8 {
         Op.LdRR(d, s)   { return s; }
         Op.Imm(v)       { return v; }
         Op.Wide(w)      { return 0xEE; }
-        else            { return 0xCC; }
+        _            { return 0xCC; }
     }
     return 0;
 }
@@ -45,7 +45,7 @@ fn srcReg(op: Op) u8 {
 fn dstReg(op: Op) u8 {
     match (op) {
         Op.LdRR(d, s)   { return d; }
-        else            { return 0xFF; }
+        _            { return 0xFF; }
     }
     return 0;
 }
@@ -68,7 +68,7 @@ fn jumpAddr(o: WideOp) u16 {
         WideOp.Jp(addr)   { return addr; }
         WideOp.Call(addr) { return addr; }
         WideOp.Mov(r, a)  { return a; }
-        else              { return 0; }
+        _              { return 0; }
     }
     return 0;
 }
@@ -76,7 +76,7 @@ fn jumpAddr(o: WideOp) u16 {
 fn movRegister(o: WideOp) u8 {
     match (o) {
         WideOp.Mov(r, a) { return r; }
-        else             { return 0; }
+        _             { return 0; }
     }
     return 0;
 }
@@ -107,7 +107,7 @@ fn classifyMany(m: Many) u32 {
         Many.E(a, b, c)  { return a + b + c; }
         Many.F           { return 1000; }
         Many.G(big)      { return big; }
-        else             { return 0; }
+        _             { return 0; }
     }
     return 0;
 }
@@ -130,7 +130,7 @@ fn passThroughGetValue() u8 {
     const o: Op = passThrough(Op.Imm(55));
     match (o) {
         Op.Imm(v) { return v; }
-        else      { return 99; }
+        _      { return 99; }
     }
     return 0;
 }
@@ -148,7 +148,7 @@ fn isOk(r: Result) u8 {
     match (r) {
         Result.Ok(v) { return 1; }
         Result.Err   { return 0; }
-        else         { return 99; }
+        _         { return 99; }
     }
     return 0;
 }
@@ -156,7 +156,7 @@ fn isOk(r: Result) u8 {
 fn unwrapOk(r: Result) u32 {
     match (r) {
         Result.Ok(v) { return v; }
-        else         { return 0; }
+        _         { return 0; }
     }
     return 0;
 }

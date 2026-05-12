@@ -5,7 +5,7 @@ fn smallRange(x: u8) u8 {
     var r: u8 = 0;
     match (x) {
         10..=20 { r = 1; }
-        else    { r = 0; }
+        _    { r = 0; }
     }
     return r;
 }
@@ -15,7 +15,7 @@ fn boundsCheck(x: u8) u8 {
     var r: u8 = 0;
     match (x) {
         5..=7 { r = 1; }
-        else  { r = 0; }
+        _  { r = 0; }
     }
     return r;
 }
@@ -26,7 +26,7 @@ fn multipleRanges(x: u8) u8 {
         0x40..=0x47 { r = 1; }
         0x48..=0x4F { r = 2; }
         0x50..=0x57 { r = 3; }
-        else        { r = 0; }
+        _        { r = 0; }
     }
     return r;
 }
@@ -38,7 +38,7 @@ fn rangeMixedWithLiteral(x: u8) u8 {
         1..=9       { r = 20; }
         10          { r = 30; }
         11..=99     { r = 40; }
-        else        { r = 0; }
+        _        { r = 0; }
     }
     return r;
 }
@@ -47,7 +47,7 @@ fn rangeOrLiteral(x: u8) u8 {
     var r: u8 = 0;
     match (x) {
         0 | 5..=9 | 100 { r = 1; }
-        else            { r = 0; }
+        _            { r = 0; }
     }
     return r;
 }

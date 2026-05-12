@@ -12,7 +12,7 @@ fn classifyColor(c: Color) u8 {
         Color.Red   { return 100; }
         Color.Green { return 200; }
         Color.Blue  { return 50; }
-        else        { return 0; }
+        _        { return 0; }
     }
     return 99;
 }
@@ -28,7 +28,7 @@ fn colorAsByte(c: Color) u8 {
         Color.Red   { return 0; }
         Color.Green { return 1; }
         Color.Blue  { return 2; }
-        else        { return 255; }
+        _        { return 255; }
     }
     return 99;
 }
@@ -47,7 +47,7 @@ fn opposite(d: Direction) Direction {
         Direction.South { return Direction.North; }
         Direction.East  { return Direction.West; }
         Direction.West  { return Direction.East; }
-        else            { return Direction.North; }
+        _            { return Direction.North; }
     }
     return Direction.North;
 }
@@ -59,7 +59,7 @@ fn isOppositePair(d: Direction) u8 {
         Direction.South { return 2; }
         Direction.East  { return 3; }
         Direction.West  { return 4; }
-        else            { return 99; }
+        _            { return 99; }
     }
     return 0;
 }
@@ -74,7 +74,7 @@ tfn oppositeOfWest()  { assert(isOppositePair(Direction.West), 3); }  // East
 fn isHorizontal(d: Direction) u8 {
     match (d) {
         Direction.East | Direction.West { return 1; }
-        else                            { return 0; }
+        _                            { return 0; }
     }
     return 0;
 }
@@ -94,7 +94,7 @@ fn colorEqualsRed() u8 {
     const c: Color = defaultColor();
     match (c) {
         Color.Red { return 1; }
-        else      { return 0; }
+        _      { return 0; }
     }
     return 0;
 }
@@ -111,7 +111,7 @@ fn step(s: State) State {
         State.Running { return State.Paused; }
         State.Paused  { return State.Running; }
         State.Stopped { return State.Stopped; }
-        else          { return State.Stopped; }
+        _          { return State.Stopped; }
     }
     return State.Stopped;
 }
@@ -132,7 +132,7 @@ fn stateAsByte(s: State) u8 {
         State.Running { return 1; }
         State.Paused  { return 2; }
         State.Stopped { return 3; }
-        else          { return 99; }
+        _          { return 99; }
     }
     return 0;
 }
@@ -154,7 +154,7 @@ fn cellsForShape(t: Tetromino) u8 {
         Tetromino.I | Tetromino.O | Tetromino.T |
         Tetromino.S | Tetromino.Z | Tetromino.J |
         Tetromino.L  { return 4; }
-        else         { return 0; }
+        _         { return 0; }
     }
     return 0;
 }
@@ -163,7 +163,7 @@ fn tetrominoIsBalanced(t: Tetromino) u8 {
     // I and O are symmetric; the others are not.
     match (t) {
         Tetromino.I | Tetromino.O  { return 1; }
-        else                        { return 0; }
+        _                        { return 0; }
     }
     return 0;
 }

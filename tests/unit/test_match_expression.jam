@@ -92,7 +92,7 @@ fn evalWithElse(op: Op) u8 {
     return match (op) {
         Op.Nop      { 0 }
         Op.Add(x)   { x }
-        else        { 99 }
+        _        { 99 }
     };
 }
 

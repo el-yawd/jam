@@ -17,7 +17,7 @@ fn wildcardInOr(x: u8) u8 {
     var r: u8 = 0;
     match (x) {
         1 | _ { r = 5; }
-        else  { r = 0; }
+        _  { r = 0; }
     }
     return r;
 }
@@ -29,7 +29,7 @@ fn wildcardThenElse(x: u8) u8 {
     match (x) {
         0 { r = 1; }
         _ { r = 7; }
-        else { r = 99; }
+        _ { r = 99; }
     }
     return r;
 }

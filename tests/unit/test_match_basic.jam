@@ -5,7 +5,7 @@ fn singleArmExact() u8 {
     var r: u8 = 0;
     match (1) {
         1 { r = 99; }
-        else { r = 0; }
+        _ { r = 0; }
     }
     return r;
 }
@@ -14,7 +14,7 @@ fn singleArmMisses() u8 {
     var r: u8 = 7;
     match (5) {
         1 { r = 99; }
-        else { r = 0; }
+        _ { r = 0; }
     }
     return r;
 }
@@ -26,7 +26,7 @@ fn dispatchSmall(x: u8) u8 {
         1 { r = 20; }
         2 { r = 30; }
         3 { r = 40; }
-        else { r = 255; }
+        _ { r = 255; }
     }
     return r;
 }
@@ -37,7 +37,7 @@ fn matchHexLiteral(x: u8) u8 {
         0xCB { r = 1; }
         0xFF { r = 2; }
         0x00 { r = 3; }
-        else { r = 0; }
+        _ { r = 0; }
     }
     return r;
 }

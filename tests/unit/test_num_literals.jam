@@ -90,7 +90,7 @@ fn classifyMixed(x: u8) u8 {
         0xDE | 0xAD    { r = 2; }
         0o17           { r = 3; }
         0..=9          { r = 4; }
-        else           { r = 0; }
+        _           { r = 0; }
     }
     return r;
 }
@@ -110,7 +110,7 @@ fn rangeBases(x: u8) u8 {
         0x10..=0x1F        { r = 1; }
         0b0010_0000..=0b0010_1111 { r = 2; }
         0o100..=0o107      { r = 3; }
-        else               { r = 0; }
+        _               { r = 0; }
     }
     return r;
 }

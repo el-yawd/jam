@@ -6,7 +6,7 @@ fn matchWithReturn(x: u8) u8 {
     match (x) {
         0          { return 100; }
         1..=9      { return 200; }
-        else       { return 255; }
+        _       { return 255; }
     }
     return 99; // unreachable; every arm returns
 }
@@ -16,7 +16,7 @@ fn matchSetsThenContinues(x: u8) u8 {
     match (x) {
         1 { r = 10; }
         2 { r = 20; }
-        else { r = 99; }
+        _ { r = 99; }
     }
     return r * 2;
 }
@@ -28,16 +28,16 @@ fn nestedMatch(a: u8, b: u8) u8 {
             match (b) {
                 0 { r = 1; }
                 1 { r = 2; }
-                else { r = 3; }
+                _ { r = 3; }
             }
         }
         1 {
             match (b) {
                 0 { r = 4; }
-                else { r = 5; }
+                _ { r = 5; }
             }
         }
-        else { r = 99; }
+        _ { r = 99; }
     }
     return r;
 }
@@ -48,7 +48,7 @@ fn matchInsideWhile(start: u8) u8 {
     while (i < 5) {
         match (i) {
             0 | 2 | 4 { sum = sum + 1; }   // even: count
-            else      { sum = sum + 10; }  // odd: bigger contribution
+            _      { sum = sum + 10; }  // odd: bigger contribution
         }
         i = i + 1;
     }
@@ -60,7 +60,7 @@ fn matchInsideFor() u8 {
     for i in 0:10 {
         match (i) {
             0..=4 { sum = sum + 1; }
-            else  { sum = sum + 2; }
+            _  { sum = sum + 2; }
         }
     }
     return sum;
@@ -71,7 +71,7 @@ fn matchBreak(start: u8) u8 {
     while (i < 100) {
         match (i) {
             42 { break; }
-            else { i = i + 1; }
+            _ { i = i + 1; }
         }
     }
     return i;

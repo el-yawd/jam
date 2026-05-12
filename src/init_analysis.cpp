@@ -481,31 +481,23 @@ Result Analyzer::analyzeFor(NodeIdx idx, NameMap state) {
 
 Result Analyzer::analyzeMatch(NodeIdx idx, NameMap state) {
 	// MatchNode: d.lhs = NodeIdx (scrutinee), d.rhs = ExtraIdx →
-	//   [armCount, elseBodyCount, elseBody...,
+	//   [armCount,
 	//    arm0_patIdx, arm0_bodyCount, arm0_body...,
 	//    arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
+	// Catch-all is the wildcard pattern `_`; there is no `else` arm.
 	const AstNode &n = nodes_.get(idx);
 	auto r = analyze(n.lhs, std::move(state));
 	if (r.terminated) return r;
 
 	ExtraIdx extra = n.rhs;
 	uint32_t armCount = nodes_.getExtra(extra + 0);
-	uint32_t elseBodyCount = nodes_.getExtra(extra + 1);
 
 	NameMap stateBefore = r.state;
 
-	// Else-arm body (catch-all).
-	Result mergedR{NameMap{}, true};  // start as "no arm taken yet"
-	if (elseBodyCount > 0) {
-		mergedR = Result{stateBefore, false};
-		for (uint32_t i = 0; i < elseBodyCount; i++) {
-			if (mergedR.terminated) break;
-			NodeIdx s = nodes_.getExtra(extra + 2 + i);
-			mergedR = analyze(s, std::move(mergedR.state));
-		}
-	}
+	// Start as "no arm taken yet"; merge each arm's outcome below.
+	Result mergedR{NameMap{}, true};
 
-	uint32_t cursor = 2 + elseBodyCount;
+	uint32_t cursor = 1;
 	for (uint32_t a = 0; a < armCount; a++) {
 		// Arm pattern (index ignored for init analysis — patterns don't
 		// touch existing-binding state in M1).
