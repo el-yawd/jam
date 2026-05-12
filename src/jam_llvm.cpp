@@ -453,8 +453,41 @@ JamValueRef JamLLVMGetBasicBlockTerminator(JamBasicBlockRef block) {
 
 JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder, JamTypeRef type,
                                uint64_t alignBytes, const char *name) {
-	auto *inst = UNWRAP_BUILDER(builder)->CreateAlloca(UNWRAP_TYPE(type),
-	                                                   nullptr, name);
+	// Every alloca lives in the function's entry block, not at the
+	// builder's current insertion point. Without this, an alloca emitted
+	// inside a loop body (e.g. an sret slot for a struct-returning call,
+	// an `argtmp` for a by-pointer rvalue, a per-arm match-binding slot)
+	// gets a fresh stack allocation every iteration. Because LLVM
+	// allocas only release at function return, that quietly grows the
+	// stack until SP crosses the guard page and the process dies with
+	// EXC_BAD_ACCESS.
+	auto *b = UNWRAP_BUILDER(builder);
+	auto *curBlock = b->GetInsertBlock();
+	llvm::AllocaInst *inst;
+	if (curBlock == nullptr) {
+		// No active block (shouldn't happen during normal codegen) —
+		// emit at the builder's current point and let LLVM verify.
+		inst = b->CreateAlloca(UNWRAP_TYPE(type), nullptr, name);
+	} else {
+		llvm::BasicBlock &entry = curBlock->getParent()->getEntryBlock();
+		if (&entry == curBlock) {
+			// Already in the entry block — emit at current point. This
+			// is the common case at the top of defineBody when laying
+			// out parameter and locals; no save/restore needed.
+			inst = b->CreateAlloca(UNWRAP_TYPE(type), nullptr, name);
+		} else {
+			llvm::IRBuilderBase::InsertPoint savedIP = b->saveIP();
+			if (entry.empty()) {
+				b->SetInsertPoint(&entry);
+			} else {
+				// Position before the entry block's first instruction
+				// so subsequent allocas naturally cluster at the top.
+				b->SetInsertPoint(&entry, entry.begin());
+			}
+			inst = b->CreateAlloca(UNWRAP_TYPE(type), nullptr, name);
+			b->restoreIP(savedIP);
+		}
+	}
 	if (alignBytes != 0) {
 		inst->setAlignment(llvm::Align(alignBytes));
 	}
