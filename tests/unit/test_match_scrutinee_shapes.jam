@@ -1,0 +1,67 @@
+// Exercises `Enum.Variant` patterns when the match scrutinee is more
+// than a bare variable:
+//   match (g.field)      — struct field access
+//   match (fn())         — function call result
+//   match (x as Color)   — `as` cast target
+const { assert } = import("test");
+
+const Color = enum { Red, Green, Blue };
+
+const Game = struct {
+    color: Color,
+    score: u32,
+};
+
+fn scoreOfFieldMatch(g: Game) u32 {
+    return match (g.color) {
+        Color.Red    { 1 }
+        Color.Green  { 2 }
+        Color.Blue   { 3 }
+    };
+}
+
+tfn matchOnStructField() {
+    var g: Game = { color: Color.Red, score: 0 };
+    assert(scoreOfFieldMatch(g), 1);
+
+    g.color = Color.Green;
+    assert(scoreOfFieldMatch(g), 2);
+
+    g.color = Color.Blue;
+    assert(scoreOfFieldMatch(g), 3);
+}
+
+fn pickColor(seed: u8) Color {
+    if (seed == 0) { return Color.Red; }
+    if (seed == 1) { return Color.Green; }
+    return Color.Blue;
+}
+
+fn scoreOfCallMatch(seed: u8) u32 {
+    return match (pickColor(seed)) {
+        Color.Red    { 10 }
+        Color.Green  { 20 }
+        Color.Blue   { 30 }
+    };
+}
+
+tfn matchOnCallResult() {
+    assert(scoreOfCallMatch(0), 10);
+    assert(scoreOfCallMatch(1), 20);
+    assert(scoreOfCallMatch(2), 30);
+}
+
+fn scoreOfCastMatch(byte: u8) u32 {
+    // Re-interpret a u8 as a Color via `as` and match on it.
+    return match (byte as Color) {
+        Color.Red    { 100 }
+        Color.Green  { 200 }
+        Color.Blue   { 50 }
+    };
+}
+
+tfn matchOnAsCast() {
+    assert(scoreOfCastMatch(0), 100);
+    assert(scoreOfCastMatch(1), 200);
+    assert(scoreOfCastMatch(2), 50);
+}

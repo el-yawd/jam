@@ -273,11 +273,14 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		return analyze(countIdx, std::move(r.state));
 	}
 
-	// Literals — no init effect on bindings.
+	// Literals + comptime intrinsics — no init effect on bindings.
+	// `@sizeOf(T)` / `@alignOf(T)` etc. are evaluated at codegen
+	// time; they cannot read or write any runtime binding state.
 	case AstTag::NumberLit:
 	case AstTag::BoolLit:
 	case AstTag::StringLit:
 	case AstTag::ImportLit:
+	case AstTag::AtCall:
 	// Generics G2: `struct {...}` expression evaluates to a value of
 	// type `type` at compile time. The body lives in ModuleAST and is
 	// processed by the substitution engine — the analyzer doesn't see

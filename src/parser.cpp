@@ -112,6 +112,24 @@ NodeIdx Parser::parsePrimary() {
 	// produce a value (M3). The same call works for both statement and
 	// expression forms; the codegen builds a phi over arm values.
 	if (check(TOK_MATCH)) { return parseMatch(); }
+
+	// `@name(arg)` — comptime intrinsic invocation. Resolved to a
+	// constant at codegen time; LLVM never sees a call. Stage 1 only
+	// supports compiler-supplied intrinsics that take a single TYPE
+	// argument (sizeOf, alignOf); the type is parsed via parseType()
+	// and stored as a TypeIdx in the rhs slot. User-defined cfn bodies
+	// + arbitrary value args arrive in Stage 2 with CTFE.
+	if (match(TOK_AT)) {
+		consume(TOK_IDENTIFIER, "Expected intrinsic name after '@'");
+		StringIdx nameId = stringPool->intern(previous().lexeme);
+		consume(TOK_OPEN_PAREN, "Expected '(' after '@name'");
+		TypeIdx tyArg = parseType();
+		consume(TOK_CLOSE_PAREN,
+		        "Expected ')' after '@' intrinsic argument");
+		return emit(AstNode{AstTag::AtCall, 0, 0, 0, nameId,
+		                    static_cast<uint32_t>(tyArg)});
+	}
+
 	if (match(TOK_NUMBER)) {
 		// `parseNumLexeme` returns the magnitude; the sign is recorded in
 		// the node's flags bit 0 and the codegen applies negation. This

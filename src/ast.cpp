@@ -571,6 +571,29 @@ static JamValueRef codegenUnaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	}
 }
 
+// Comptime intrinsic dispatch (`@name(T)`). Stage 1 supports two
+// intrinsics — `sizeOf` returns the byte size of a type as u64;
+// `alignOf` returns the alignment as u8. Both consult the codegen
+// context's typeSize/typeAlign which already compute these for
+// struct layout and ABI purposes. The emitted IR is a literal
+// constant; LLVM never sees a call. Stage 2 will extend this
+// dispatch to user-defined cfn bodies once CTFE lands.
+static JamValueRef codegenAtCall(JamCodegenContext &ctx, const AstNode &n) {
+	const std::string &name =
+	    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
+	TypeIdx tyArg = static_cast<TypeIdx>(n.rhs);
+
+	if (name == "sizeOf") {
+		uint64_t bytes = ctx.typeSize(tyArg);
+		return JamLLVMConstInt(ctx.getInt64Type(), bytes, false);
+	}
+	if (name == "alignOf") {
+		uint64_t a = ctx.typeAlign(tyArg);
+		return JamLLVMConstInt(ctx.getInt8Type(), a, false);
+	}
+	throw std::runtime_error("Unknown comptime intrinsic: @" + name);
+}
+
 static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	const std::string &callee =
 	    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
@@ -2459,6 +2482,8 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return codegenBinaryOp(ctx, n);
 	case AstTag::Call:
 		return codegenCall(ctx, n);
+	case AstTag::AtCall:
+		return codegenAtCall(ctx, n);
 	case AstTag::Return:
 		return codegenReturn(ctx, n);
 	case AstTag::Assign:

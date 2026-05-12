@@ -1,0 +1,63 @@
+// `@sizeOf(T)` and `@alignOf(T)` — comptime intrinsics resolved by
+// the compiler at codegen time. The `@` prefix marks compile-time
+// invocation; the result is substituted as a constant before LLVM
+// sees the code. Matches Rust's `mem::size_of::<T>()` semantics
+// (the function never exists at runtime).
+const { assert } = import("test");
+
+// -------------------- Primitive sizes --------------------
+
+tfn sizeOfPrimitives() {
+    assert(@sizeOf(u8)  as i32, 1);
+    assert(@sizeOf(u16) as i32, 2);
+    assert(@sizeOf(u32) as i32, 4);
+    assert(@sizeOf(u64) as i32, 8);
+    assert(@sizeOf(i8)  as i32, 1);
+    assert(@sizeOf(i16) as i32, 2);
+    assert(@sizeOf(i32) as i32, 4);
+    assert(@sizeOf(i64) as i32, 8);
+    assert(@sizeOf(f32) as i32, 4);
+    assert(@sizeOf(f64) as i32, 8);
+    assert(@sizeOf(bool) as i32, 1);
+}
+
+// -------------------- Primitive alignments --------------------
+
+tfn alignOfPrimitives() {
+    assert(@alignOf(u8)  as i32, 1);
+    assert(@alignOf(u16) as i32, 2);
+    assert(@alignOf(u32) as i32, 4);
+    assert(@alignOf(u64) as i32, 8);
+    assert(@alignOf(f64) as i32, 8);
+}
+
+// -------------------- Composite types --------------------
+
+const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+tfn sizeOfStruct() {
+    // Two i32 fields, no padding needed.
+    assert(@sizeOf(Point) as i32, 8);
+    assert(@alignOf(Point) as i32, 4);
+}
+
+// -------------------- Use in expressions --------------------
+
+tfn intrinsicInArithmetic() {
+    // Comptime constant composes with runtime arithmetic.
+    var n: u64 = 10;
+    var total: u64 = n * @sizeOf(u32);
+    assert(total as i32, 40);
+}
+
+// -------------------- Pointer/slice sizes --------------------
+
+tfn sizeOfPointerAndSlice() {
+    // On a 64-bit target a pointer is 8 bytes; a slice is { ptr, len }
+    // which is 16 bytes (two 64-bit words).
+    assert(@sizeOf(*const u8) as i32, 8);
+    assert(@sizeOf([]u8) as i32, 16);
+}

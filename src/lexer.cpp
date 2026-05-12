@@ -504,6 +504,13 @@ std::vector<Token> Lexer::scanTokens() {
 			}
 			break;
 
+		// `@` is the prefix for comptime-function invocations. The
+		// identifier and arg list are lexed normally; the parser
+		// recognizes the `@`+IDENTIFIER sequence as an AtCall.
+		case '@':
+			addToken(TOK_AT, "@");
+			break;
+
 		case '<':
 			if (match('=')) {
 				addToken(TOK_LESS_EQUAL, "<=");

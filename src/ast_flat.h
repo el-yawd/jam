@@ -122,6 +122,14 @@ enum class AstTag : uint8_t {
 	// tag extraction.
 	AsCast,
 
+	// Comptime intrinsic call: `@name(T)`. Resolved to a constant at
+	// codegen time; LLVM never sees a call instruction. Stage 1 only
+	// supports single-TYPE-arg intrinsics (sizeOf, alignOf); generalize
+	// to multi-arg shapes when user-defined cfn + CTFE lands.
+	// d.lhs = StringIdx (intrinsic name, e.g. "sizeOf")
+	// d.rhs = TypeIdx (the type argument)
+	AtCall,
+
 	// Pattern atoms — internal nodes used inside MatchNode arms. Never
 	// reachable from regular expression / statement positions.
 

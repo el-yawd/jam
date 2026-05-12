@@ -75,6 +75,8 @@ enum TokenType {
 	TOK_MATCH,      // match keyword
 	TOK_DOTDOT_EQ,  // ..= (inclusive range in match patterns)
 	TOK_AS,         // as keyword (explicit type cast)
+	TOK_AT,         // @ — prefix for comptime-function invocations:
+	                //   `@sizeOf(T)`, `@alignOf(T)`, user-defined cfns
 };
 
 // Token structure.
