@@ -354,7 +354,7 @@ JamCodegenContext::getUnionFieldType(const std::string &unionName,
 // ---- Enum registry --------------------------------------------------------
 
 void JamCodegenContext::registerEnum(
-    const std::string &name, std::vector<EnumVariantInfo> variants) {
+    const std::string &name, std::vector<EnumVariantInfo> variants) const {
 	EnumInfo info;
 	info.name = name;
 	info.variants = std::move(variants);
@@ -371,7 +371,7 @@ void JamCodegenContext::setEnumLLVMType(const std::string &name,
                                         JamTypeRef llvmType,
                                         uint64_t maxPayloadSize,
                                         uint64_t maxPayloadAlign,
-                                        bool hasPayloadVariant) {
+                                        bool hasPayloadVariant) const {
 	auto it = enums.find(name);
 	if (it == enums.end()) {
 		throw std::runtime_error("setEnumLLVMType: unknown enum " + name);
@@ -393,13 +393,26 @@ const JamCodegenContext::EnumInfo *
 JamCodegenContext::lookupEnum(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
+	// Generics G4: a GenericCall TypeIdx resolves to a concrete type;
+	// recurse on the resolved TypeIdx so generic enum instantiations
+	// (e.g. `Option(i32)` → `Option__i32`) resolve uniformly.
+	if (k.kind == TypeKind::GenericCall) {
+		return lookupEnum(resolveGenericCall(ty));
+	}
 	// Accept TypeKind::Enum (explicit) or TypeKind::Named (parser-
 	// deferred user type that resolves to an enum).
 	if (k.kind != TypeKind::Enum && k.kind != TypeKind::Named) {
 		return nullptr;
 	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
-	return getEnum(name);
+	if (const EnumInfo *direct = getEnum(name)) return direct;
+	// Generics G4: try the type alias table — `const OptI32 =
+	// Option(i32);` maps `OptI32` to the instantiated enum's TypeIdx.
+	TypeIdx aliasTarget = lookupTypeAlias(name);
+	if (aliasTarget != kNoType) {
+		return lookupEnum(aliasTarget);
+	}
+	return nullptr;
 }
 
 int JamCodegenContext::getEnumVariantIndex(
@@ -531,6 +544,11 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 			        : 0;
 			return 1 + padToAlign + info->maxPayloadSize;
 		}
+		// Generics G4: alias lookup fallback, same as typeAlign.
+		if (TypeIdx aliasTarget = lookupTypeAlias(substName);
+		    aliasTarget != kNoType) {
+			return typeSize(aliasTarget);
+		}
 		throw std::runtime_error(
 		    "typeSize on unregistered user type");
 	}
@@ -608,6 +626,13 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		}
 		if (const EnumInfo *info = lookupEnum(ty)) {
 			return info->hasPayloadVariant ? info->maxPayloadAlign : 1;
+		}
+		// Generics G4: a Named TypeIdx may be a type alias produced by
+		// `const Foo = Bar(args);`. Resolve through the alias table
+		// and recurse — matches lookupStruct's behavior.
+		if (TypeIdx aliasTarget = lookupTypeAlias(substName);
+		    aliasTarget != kNoType) {
+			return typeAlign(aliasTarget);
 		}
 		throw std::runtime_error(
 		    "typeAlign on unregistered user type");
@@ -762,6 +787,11 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 			    value, calleeName, args, subst);
 			break;
 		}
+		if (value.tag == AstTag::EnumExpr) {
+			result = instantiateEnumExpr(
+			    value, calleeName, args, subst);
+			break;
+		}
 		throw std::runtime_error(
 		    "Generic body's return value shape not supported in v1 "
 		    "(only `return T;` or `return struct {...};` are "
@@ -874,16 +904,26 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 	JamLLVMStructSetBody(llvmStruct, fieldLLVM.data(),
 	                     static_cast<unsigned>(fieldLLVM.size()), false);
 
-	// Generics G6: instantiate methods. For each method on the
-	// AnonStruct, clone the FunctionAST with substituted parameter and
-	// return types and a unique source-level name. Register under the
-	// qualified name `<InstanceName>.<methodName>` so callers can
-	// dispatch via the existing struct-method machinery. Body codegen
-	// uses the substitution context so inner Named-type references
-	// (e.g. `var s: Self`) resolve correctly per-instantiation.
+	// Generics G6: instantiate methods. Two passes so methods on the
+	// same struct can call each other regardless of declaration order
+	// — the first pass clones + registers + declares LLVM prototypes
+	// for every method (so any later self.method() lookup succeeds);
+	// the second pass defines bodies (which may emit calls to
+	// other-method prototypes registered in pass 1). Without the
+	// split, a method body that calls another method declared later
+	// in the struct body emits "Unknown function referenced: ..."
+	// because the callee's prototype isn't yet in the LLVM module.
 	if (!anon->Methods.empty()) {
-		// `bodySubst` was built above (used by field substitution); we
-		// reuse it for method signatures and body codegen.
+		struct InstMethod {
+			FunctionAST *clonePtr;
+		};
+		std::vector<InstMethod> insts;
+		insts.reserve(anon->Methods.size());
+
+		JamCodegenContext &mutCtx =
+		    const_cast<JamCodegenContext &>(*this);
+
+		// Pass 1: clone + register + declarePrototype for every method.
 		for (const auto &origMethod : anon->Methods) {
 			std::vector<Param> instArgs;
 			instArgs.reserve(origMethod->Args.size());
@@ -908,12 +948,6 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 			FunctionAST *clonePtr = cloned.get();
 			instantiatedMethods_.push_back(std::move(cloned));
 
-			// Generics G6: a method whose original (pre-clone) name is
-			// `drop` and whose first param matches the instantiated
-			// struct in `mut` mode is the type's drop method. Register
-			// it under the instantiated struct's name so the var-decl
-			// codegen finds it when the user binds a value of this
-			// type.
 			if (origMethod->Name == "drop" &&
 			    origMethod->Args.size() == 1 &&
 			    origMethod->Args[0].Name == "self" &&
@@ -921,62 +955,179 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 				instantiatedDrops_[instName] = clonePtr;
 			}
 
-			// The const_cast is honest about what's happening: lazy
-			// instantiation runs during otherwise-const type lookups,
-			// and registerFunctionAST + declarePrototype + defineBody
-			// genuinely mutate the codegen state. Most of the mutated
-			// fields are already `mutable`; this is the gap we accept
-			// rather than propagating non-const through every type
-			// lookup.
-			JamCodegenContext &mutCtx =
-			    const_cast<JamCodegenContext &>(*this);
 			mutCtx.registerFunctionAST(instMethodName, clonePtr);
-
-			// Save the outer codegen state. defineBody calls
-			// clearVariables / clearDrops to set up its own
-			// function-local scope; without saving, the caller that
-			// triggered lazy instantiation would lose its bindings,
-			// drop scopes, and sret slot the moment we return.
-			//
-			// Builder insert-block has to be saved separately because
-			// the snapshot doesn't include LLVM-side state.
-			StateSnapshot savedState = snapshotState();
-			JamBasicBlockRef savedBB =
-			    JamLLVMGetInsertBlock(getBuilder());
-
-			// Activate the substitution context so the body codegen
-			// resolves Named-type references through the map (Self
-			// → instantiated struct, T → concrete arg, etc.).
-			//
-			// Implicit contract: declarePrototype is safe to invoke
-			// here even though the *outer* struct (this Self) is
-			// already registered above (line 882-892). If the method's
-			// signature contains a nested generic call like
-			// `fn create() Pair(T, T)`, declarePrototype's
-			// getLLVMType-on-return-type will recursively trigger
-			// instantiateStructExpr for the nested generic. That
-			// recursion is bounded by memoization
-			// (genericResolutions_) and doesn't loop because each
-			// nested instantiation produces and registers its own
-			// concrete struct before returning.
+			// Declarations need the substitution context for any
+			// nested type expressions in the signature.
 			setCurrentSubst(bodySubst);
 			clonePtr->declarePrototype(mutCtx);
-			// TODO v2: errors thrown from defineBody during lazy
-			// instantiation surface with the generic body's source
-			// location, not the *call site* that triggered the
-			// instantiation. Zig annotates errors with both
-			// (failed_decls + dependency_failure trail). Track for
-			// follow-up so messages like "T doesn't have field foo"
-			// point at the user's `Box(SomeType).foo` call.
-			clonePtr->defineBody(mutCtx);
 			clearCurrentSubst();
+			insts.push_back({clonePtr});
+		}
 
-			restoreState(std::move(savedState));
-			if (savedBB) {
-				JamLLVMPositionBuilderAtEnd(getBuilder(), savedBB);
-			}
+		// Pass 2: define bodies. All methods are now declared, so
+		// `self.method()` calls between them resolve cleanly.
+		StateSnapshot savedState = snapshotState();
+		JamBasicBlockRef savedBB =
+		    JamLLVMGetInsertBlock(getBuilder());
+		for (const auto &im : insts) {
+			setCurrentSubst(bodySubst);
+			// TODO v2: errors thrown here surface with the generic
+			// body's source location, not the call site that triggered
+			// instantiation. Track callers in a dependency trail so
+			// messages point at the right spot.
+			im.clonePtr->defineBody(mutCtx);
+			clearCurrentSubst();
+		}
+		restoreState(std::move(savedState));
+		if (savedBB) {
+			JamLLVMPositionBuilderAtEnd(getBuilder(), savedBB);
 		}
 	}
 
 	return typePool.internNamed(stringPool.intern(instName));
+}
+
+// Instantiate an `enum { ... }` expression appearing in a generic
+// body's return statement. Substitutes each variant's payload TypeIdx
+// list, registers a fresh enum, computes the tagged-union LLVM
+// layout, and returns an Enum TypeIdx pointing at it. Memoizes on the
+// instantiated name (`Option__i32`, etc).
+TypeIdx JamCodegenContext::instantiateEnumExpr(
+    const AstNode &exprNode, const std::string &calleeName,
+    const std::vector<TypeIdx> &args,
+    const std::unordered_map<std::string, TypeIdx> &subst) const {
+	if (!anonEnums_) {
+		throw std::runtime_error(
+		    "internal: anonymous enum table not registered on "
+		    "codegen context");
+	}
+	uint32_t anonIdx = exprNode.lhs;
+	if (anonIdx >= anonEnums_->size()) {
+		throw std::runtime_error(
+		    "internal: EnumExpr references missing AnonEnums[" +
+		    std::to_string(anonIdx) + "]");
+	}
+	const EnumDeclAST *anon = (*anonEnums_)[anonIdx].get();
+
+	// Build instantiated name `Option__i32` etc — same shape as struct.
+	std::string instName = calleeName;
+	for (TypeIdx a : args) {
+		instName += "__";
+		const TypeKey &ak = typePool.get(a);
+		switch (ak.kind) {
+		case TypeKind::Int: {
+			char buf[16];
+			std::snprintf(buf, sizeof(buf), "%c%u",
+			              ak.b ? 'i' : 'u', ak.a);
+			instName += buf;
+			break;
+		}
+		case TypeKind::Bool:
+			instName += "bool";
+			break;
+		case TypeKind::Struct:
+		case TypeKind::Enum:
+		case TypeKind::Named:
+			instName +=
+			    stringPool.get(static_cast<StringIdx>(ak.a));
+			break;
+		default:
+			instName += "T";
+			break;
+		}
+	}
+
+	// Memoize. Return as a Named TypeIdx so the rest of codegen resolves
+	// through the existing Named → EnumInfo path (handles size/align,
+	// match dispatch, etc., uniformly with non-generic enum references).
+	if (const EnumInfo *existing = getEnum(instName)) {
+		(void)existing;
+		return typePool.internNamed(stringPool.intern(instName));
+	}
+
+	// Substitute variant payload types.
+	std::unordered_map<std::string, TypeIdx> bodySubst = subst;
+	TypeIdx instEnumTy = typePool.internNamed(stringPool.intern(instName));
+	bodySubst[anon->Name] = instEnumTy;
+	bodySubst["Self"] = instEnumTy;
+
+	std::vector<EnumVariantInfo> variants;
+	variants.reserve(anon->Variants.size());
+	bool hasPayload = false;
+	for (const auto &v : anon->Variants) {
+		EnumVariantInfo vi;
+		vi.name = v.Name;
+		vi.discriminant = v.Discriminant;
+		for (TypeIdx ty : v.PayloadTypes) {
+			vi.payloadTypes.push_back(
+			    substituteType(ty, bodySubst, typePool, stringPool));
+		}
+		if (!vi.payloadTypes.empty()) hasPayload = true;
+		variants.push_back(std::move(vi));
+	}
+
+	registerEnum(instName, std::move(variants));
+
+	// For unit-only enums the LLVM type is plain i8 — no body to set.
+	// Done.
+	if (!hasPayload) {
+		return instEnumTy;
+	}
+
+	// Payloaded enum: layout mirrors main.cpp's fillEnumBodies path —
+	// create a named struct {i8 tag, alignDriver, [extraBytes x i8]},
+	// then set on the EnumInfo via setEnumLLVMType.
+	JamTypeRef llvmStruct =
+	    JamLLVMStructCreateNamed(getContext(), instName.c_str());
+	setEnumLLVMType(instName, llvmStruct, 0, 1, true);
+
+	const EnumInfo *info = getEnum(instName);
+	uint64_t maxSize = 0, maxAlign = 1;
+	for (const auto &v : info->variants) {
+		uint64_t off = 0, varAlign = 1;
+		for (TypeIdx t : v.payloadTypes) {
+			uint64_t s = typeSize(t);
+			uint64_t a = typeAlign(t);
+			off = (off + a - 1) / a * a;
+			off += s;
+			if (a > varAlign) varAlign = a;
+		}
+		if (varAlign > 1) {
+			off = (off + varAlign - 1) / varAlign * varAlign;
+		}
+		if (off > maxSize) maxSize = off;
+		if (varAlign > maxAlign) maxAlign = varAlign;
+	}
+
+	JamTypeRef alignDriver;
+	uint64_t alignDriverSize;
+	switch (maxAlign) {
+	case 1: alignDriver = getInt8Type();  alignDriverSize = 1; break;
+	case 2: alignDriver = getInt16Type(); alignDriverSize = 2; break;
+	case 4: alignDriver = getInt32Type(); alignDriverSize = 4; break;
+	case 8: alignDriver = getInt64Type(); alignDriverSize = 8; break;
+	default:
+		throw std::runtime_error(
+		    "Enum `" + instName +
+		    "` requires alignment > 8, which is not yet supported");
+	}
+
+	uint64_t paddedSize =
+	    (maxSize + maxAlign - 1) / maxAlign * maxAlign;
+	uint64_t extraBytes = (paddedSize > alignDriverSize)
+	                          ? paddedSize - alignDriverSize
+	                          : 0;
+
+	std::vector<JamTypeRef> bodyTypes;
+	bodyTypes.push_back(getInt8Type());
+	bodyTypes.push_back(alignDriver);
+	if (extraBytes > 0) {
+		bodyTypes.push_back(JamLLVMArrayType(
+		    getInt8Type(), static_cast<unsigned>(extraBytes)));
+	}
+	JamLLVMStructSetBody(llvmStruct, bodyTypes.data(),
+	                     static_cast<unsigned>(bodyTypes.size()), false);
+	setEnumLLVMType(instName, llvmStruct, maxSize, maxAlign, true);
+
+	return instEnumTy;
 }

@@ -101,11 +101,24 @@ static int compileAndRun(const std::string &filename,
 	Lexer lexer(source);
 	std::vector<Token> tokens = lexer.scanTokens();
 
+	// Shared anonymous-struct / anon-enum registries. Both the main
+	// parser and the resolver's imported-module parsers append to
+	// these, so EnumExpr / StructExpr nodes from any module index
+	// into the same vectors at codegen time. Required for generic
+	// definitions that live in an imported module (e.g. Vec(T) in
+	// std/collections.jam) — their `struct {...}` / `enum {...}`
+	// bodies need to be reachable when codegen instantiates the
+	// generic from the main module's call site.
+	std::vector<std::unique_ptr<StructDeclAST>> sharedAnonStructs;
+	std::vector<std::unique_ptr<EnumDeclAST>> sharedAnonEnums;
+
 	// Parse the tokens into an AST. The parser shares the codegen
 	// context's TypePool / StringPool so types are interned at parse time
 	// instead of being repeatedly re-parsed from strings during codegen.
 	Parser parser(tokens, codegenCtx.getTypePool(),
 	              codegenCtx.getStringPool(), codegenCtx.getNodeStore());
+	parser.sharedAnonStructs = &sharedAnonStructs;
+	parser.sharedAnonEnums = &sharedAnonEnums;
 	std::unique_ptr<ModuleAST> module = parser.parse();
 
 	// Get base directory for module resolution
@@ -118,6 +131,7 @@ static int compileAndRun(const std::string &filename,
 	ModuleResolver resolver(baseDir, codegenCtx.getTypePool(),
 	                        codegenCtx.getStringPool(),
 	                        codegenCtx.getNodeStore());
+	resolver.setSharedAnonRegistries(&sharedAnonStructs, &sharedAnonEnums);
 	SymbolTable symbolTable;
 
 	// Register builtin test module symbols
@@ -169,7 +183,8 @@ static int compileAndRun(const std::string &filename,
 	// (bodies of `struct {...}` expressions) to the codegen context so
 	// the substitution engine can look them up by index when resolving
 	// generic instantiations.
-	codegenCtx.setAnonStructs(&module->AnonStructs);
+	codegenCtx.setAnonStructs(&sharedAnonStructs);
+	codegenCtx.setAnonEnums(&sharedAnonEnums);
 
 	// Register struct types from imported modules and main module first so
 	// that codegen has the struct registry available. Two phases so structs

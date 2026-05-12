@@ -108,6 +108,16 @@ enum class AstTag : uint8_t {
 	// d.lhs = u32 (index into ModuleAST::AnonStructs)
 	StructExpr,
 
+	// Generic enum expression: `enum { Variant1, Variant2(T), ... }` in
+	// expression position. Mirror of StructExpr for tagged unions. The
+	// expression's body lives in ModuleAST::AnonEnums as a regular
+	// EnumDeclAST with a synthetic name; this node carries the index
+	// so the substitution engine can instantiate variant payload types
+	// against the generic args. Enables `fn Option(T: type) type {
+	// return enum { Some(T), None }; }` and friends.
+	// d.lhs = u32 (index into ModuleAST::AnonEnums)
+	EnumExpr,
+
 	// Pattern match (M1: integer literals, ranges, or-patterns, wildcard).
 	// The catch-all is the wildcard pattern `_`; there is no `else` arm.
 	// d.lhs = NodeIdx (scrutinee expression)
@@ -129,6 +139,19 @@ enum class AstTag : uint8_t {
 	// d.lhs = StringIdx (intrinsic name, e.g. "sizeOf")
 	// d.rhs = TypeIdx (the type argument)
 	AtCall,
+
+	// Static method call on a generic-call type receiver:
+	//   Vec(i32).empty()          → struct static method
+	//   Option(i32).Some(42)      → enum variant constructor
+	//   Option(i32).None()        → unit-variant constructor
+	// The parser detects the `IDENT(args).IDENT(args)` shape via
+	// paren-balanced peek-ahead, parses the inner args as TYPES, and
+	// builds a GenericCall TypeIdx for the receiver. Codegen resolves
+	// the receiver type (instantiating if necessary) and dispatches
+	// to the appropriate static-method or variant-constructor path.
+	// d.lhs = TypeIdx (receiver type — typically GenericCall)
+	// d.rhs = ExtraIdx → [methodNameId, argCount, arg0, arg1, ...]
+	TypeMethodCall,
 
 	// Pattern atoms — internal nodes used inside MatchNode arms. Never
 	// reachable from regular expression / statement positions.

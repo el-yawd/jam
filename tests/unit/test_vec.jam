@@ -1,0 +1,131 @@
+// `Vec(T)` and `Option(T)` consumed from std.collections.
+const { assert } = import("test");
+const { Vec, Option } = import("collections");
+
+// -------------------- Tests --------------------
+
+const VecI32 = Vec(i32);
+const VecU8  = Vec(u8);
+
+// Small helper: unwrap Option(i32) or fall back. Real code pattern-
+// matches directly; the tests use this so they can compare to ints.
+fn unwrapI32(o: Option(i32), fallback: i32) i32 {
+    return match (o) {
+        Option(i32).Some(x) { x }
+        Option(i32).None    { fallback }
+    };
+}
+
+fn unwrapU8(o: Option(u8), fallback: u8) u8 {
+    return match (o) {
+        Option(u8).Some(x) { x }
+        Option(u8).None    { fallback }
+    };
+}
+
+tfn pushAndGetI32() {
+    var v: VecI32 = VecI32.empty();
+    v.push(42);
+    v.push(43);
+    v.push(44);
+    assert(v.len() as i32, 3);
+    assert(unwrapI32(v.get(0), 0), 42);
+    assert(unwrapI32(v.get(1), 0), 43);
+    assert(unwrapI32(v.get(2), 0), 44);
+}
+
+tfn pushBeyondInitialCapacity() {
+    // Initial cap is 8; push 20 items to exercise the grow path
+    // through at least two doublings (8 → 16 → 32).
+    var v: VecI32 = VecI32.empty();
+    var i: i32 = 0;
+    while (i < 20) {
+        v.push(i);
+        i = i + 1;
+    }
+    assert(v.len() as i32, 20);
+    assert(unwrapI32(v.get(0), -1), 0);
+    assert(unwrapI32(v.get(10), -1), 10);
+    assert(unwrapI32(v.get(19), -1), 19);
+}
+
+tfn popReducesLength() {
+    var v: VecI32 = VecI32.empty();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    assert(unwrapI32(v.pop(), 0), 3);
+    assert(unwrapI32(v.pop(), 0), 2);
+    assert(v.len() as i32, 1);
+    assert(unwrapI32(v.get(0), 0), 1);
+}
+
+tfn popEmptyReturnsNone() {
+    var v: VecI32 = VecI32.empty();
+    // Initial length is 0; pop returns None, not garbage.
+    var sentinel: i32 = -42;
+    assert(unwrapI32(v.pop(), sentinel), sentinel);
+}
+
+tfn getOutOfBoundsReturnsNone() {
+    var v: VecI32 = VecI32.empty();
+    v.push(7);
+    // len == 1; v.get(5) is out of bounds → None → sentinel.
+    var sentinel: i32 = -42;
+    assert(unwrapI32(v.get(5), sentinel), sentinel);
+}
+
+tfn vecOfU8() {
+    // Different element type — verifies generic instantiation flows
+    // through and @sizeOf(T) picks up the right size per
+    // instantiation.
+    var v: VecU8 = VecU8.empty();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    assert(unwrapU8(v.get(0), 0) as i32, 10);
+    assert(unwrapU8(v.get(1), 0) as i32, 20);
+    assert(unwrapU8(v.get(2), 0) as i32, 30);
+}
+
+// -------------------- size-aware initial capacity --------------------
+
+tfn initialCapacityForU8() {
+    // sizeOf(u8) == 1 ⇒ initial cap 8 (Rust's heuristic).
+    var v: VecU8 = VecU8.empty();
+    assert(v.capacity as i32, 8);
+}
+
+tfn initialCapacityForI32() {
+    // sizeOf(i32) == 4, ≤ 1024 ⇒ initial cap 4.
+    var v: VecI32 = VecI32.empty();
+    assert(v.capacity as i32, 4);
+}
+
+// -------------------- withCapacity --------------------
+
+tfn withCapacityPreallocates() {
+    var v: VecI32 = VecI32.withCapacity(100);
+    // No pushes yet; length is zero but capacity reflects the
+    // preallocation. push(...) up to 100 elements must not regrow.
+    assert(v.len() as i32, 0);
+    assert(v.capacity as i32, 100);
+    var i: i32 = 0;
+    while (i < 100) {
+        v.push(i);
+        i = i + 1;
+    }
+    // Capacity unchanged after 100 pushes (no regrow happened).
+    assert(v.capacity as i32, 100);
+    assert(v.len() as i32, 100);
+    assert(unwrapI32(v.get(99), -1), 99);
+}
+
+tfn withCapacityZeroClampsToOne() {
+    // Caller asked for 0 slots; we clamp to 1 to avoid the
+    // implementation-defined malloc(0) result.
+    var v: VecI32 = VecI32.withCapacity(0);
+    assert(v.capacity as i32, 1);
+    v.push(42);
+    assert(unwrapI32(v.get(0), 0), 42);
+}

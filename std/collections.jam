@@ -1,0 +1,108 @@
+// std.collections — dynamic data structures.
+//
+// `Option(T)` — tagged optional. `Some(T)` carries a value; `None`
+// signals absence. Used by fallible getters / poppers.
+//
+// `Vec(T)` — growable dynamic array. Uses libc malloc / free /
+// realloc as the backing allocator (a proper `Allocator` interface
+// lands in v2, see jamls/ALLOCATORS_PLAN.md). MVS auto-drops the
+// backing buffer at scope exit.
+
+pub extern fn malloc(size: u64) *mut[] u8;
+pub extern fn free(ptr: *mut[] u8);
+pub extern fn realloc(ptr: *mut[] u8, size: u64) *mut[] u8;
+
+pub fn Option(T: type) type {
+    return enum {
+        Some(T),
+        None,
+    };
+}
+
+pub fn Vec(T: type) type {
+    return struct {
+        ptr: *mut[] T,
+        length: u32,
+        capacity: u32,
+
+        // Construct an empty Vec. The initial capacity is *element-
+        // size-aware* (Rust's RawVec heuristic): 8 slots for u8-
+        // shaped types, 4 for medium types up to 1KB, 1 for larger
+        // structs. Amortizes push cost for small T without blowing
+        // memory on big T whose first push might be the only push.
+        fn empty() Self {
+            var s: u64 = @sizeOf(T);
+            var cap: u32 = 1;
+            if (s == 1) { cap = 8; }
+            else if (s <= 1024) { cap = 4; }
+            var bytes: u64 = (cap as u64) * s;
+            var raw: *mut[] u8 = malloc(bytes);
+            return { ptr: raw as *mut[] T, length: 0, capacity: cap };
+        }
+
+        // Pre-allocate `cap` slots up front. Useful when the caller
+        // knows the final size — eliminates the log(N) regrowths and
+        // the matching bulk-copy passes that `push` would otherwise
+        // do. cap=0 is clamped to 1 to avoid malloc(0)'s
+        // implementation-defined return.
+        fn withCapacity(cap: u32) Self {
+            var actualCap: u32 = cap;
+            if (actualCap == 0) { actualCap = 1; }
+            var bytes: u64 = (actualCap as u64) * @sizeOf(T);
+            var raw: *mut[] u8 = malloc(bytes);
+            return { ptr: raw as *mut[] T, length: 0, capacity: actualCap };
+        }
+
+        // Append a value. Doubles capacity when full.
+        fn push(self: mut Self, value: T) {
+            if (self.length == self.capacity) {
+                self.grow();
+            }
+            self.ptr[self.length] = value;
+            self.length = self.length + 1;
+        }
+
+        // Remove and return the last element. Returns None when
+        // empty so callers don't read past the end.
+        fn pop(self: mut Self) Option(T) {
+            if (self.length == 0) {
+                return Option(T).None();
+            }
+            self.length = self.length - 1;
+            return Option(T).Some(self.ptr[self.length]);
+        }
+
+        fn len(self: Self) u32 { return self.length; }
+
+        // Bounds-checked indexed read. Returns None for out-of-range
+        // indices, Some(value) otherwise.
+        fn get(self: Self, i: u32) Option(T) {
+            if (i >= self.length) {
+                return Option(T).None();
+            }
+            return Option(T).Some(self.ptr[i]);
+        }
+
+        // Internal grow: doubles capacity via `realloc`. realloc
+        // tries to grow in place against allocator metadata first
+        // (jemalloc / mimalloc / glibc all do this opportunistically
+        // against adjacent free pages); falls back to a fresh
+        // allocation + a single bulk memcpy of the live bytes + free
+        // of the old buffer. Net: replaces our previous explicit
+        // element-by-element copy loop with a single libc call that
+        // the allocator can short-circuit when adjacent space is
+        // free.
+        fn grow(self: mut Self) {
+            var newCap: u32 = self.capacity * 2;
+            var newBytes: u64 = (newCap as u64) * @sizeOf(T);
+            var newRaw: *mut[] u8 = realloc(self.ptr as *mut[] u8, newBytes);
+            self.ptr = newRaw as *mut[] T;
+            self.capacity = newCap;
+        }
+
+        // MVS auto-drop fires at scope exit.
+        fn drop(self: mut Self) {
+            free(self.ptr as *mut[] u8);
+        }
+    };
+}

@@ -22,6 +22,7 @@
 // here. Full definitions live in ast.h, included by ast.cpp / codegen.cpp.
 class FunctionAST;
 class StructDeclAST;
+class EnumDeclAST;
 
 class JamCodegenContext {
   public:
@@ -131,10 +132,10 @@ class JamCodegenContext {
 		uint64_t maxPayloadAlign = 1;
 	};
 	void registerEnum(const std::string &name,
-	                  std::vector<EnumVariantInfo> variants);
+	                  std::vector<EnumVariantInfo> variants) const;
 	void setEnumLLVMType(const std::string &name, JamTypeRef llvmType,
 	                     uint64_t maxPayloadSize, uint64_t maxPayloadAlign,
-	                     bool hasPayloadVariant);
+	                     bool hasPayloadVariant) const;
 	const EnumInfo *getEnum(const std::string &name) const;
 	const EnumInfo *lookupEnum(TypeIdx ty) const;
 	// Reverse-lookup: given an LLVM struct type, return the enum whose
@@ -221,7 +222,7 @@ class JamCodegenContext {
 	// otherwise-const `resolveGenericCall` / `getLLVMType` paths.
 	mutable std::map<std::string, StructInfo> structs;
 	std::map<std::string, UnionInfo> unions;
-	std::map<std::string, EnumInfo> enums;
+	mutable std::map<std::string, EnumInfo> enums;
 	std::map<std::string, ModuleConstInfo> moduleConsts;
 	mutable TypePool typePool;
 	mutable StringPool stringPool;
@@ -275,6 +276,11 @@ class JamCodegenContext {
 	// reads from here when resolving generic calls whose bodies contain
 	// `return struct {...};`.
 	const std::vector<std::unique_ptr<StructDeclAST>> *anonStructs_ =
+	    nullptr;
+
+	// Mirror of anonStructs_ for `enum { ... }` expressions. Read by
+	// instantiateEnumExpr to materialize generic sum types.
+	const std::vector<std::unique_ptr<EnumDeclAST>> *anonEnums_ =
 	    nullptr;
 
 	// Generics G4: type alias table. `const BoxI32 = Box(i32);` registers
@@ -348,6 +354,11 @@ class JamCodegenContext {
 		anonStructs_ = as;
 	}
 
+	void setAnonEnums(
+	    const std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
+		anonEnums_ = ae;
+	}
+
 	// Generics G4: register a type alias (`const Name = Box(i32);`).
 	// Consulted by lookupStruct when resolving a Named TypeIdx whose
 	// name matches an alias.
@@ -381,6 +392,17 @@ class JamCodegenContext {
 	// synthesized name, and returns a Named TypeIdx pointing at it.
 	// Memoizes by instantiated name.
 	TypeIdx instantiateStructExpr(
+	    const AstNode &exprNode, const std::string &calleeName,
+	    const std::vector<TypeIdx> &args,
+	    const std::unordered_map<std::string, TypeIdx> &subst) const;
+
+	// Mirror of instantiateStructExpr for `enum { ... }` expressions.
+	// Substitutes each variant's payload types with the concrete
+	// generic args, registers a fresh tagged-union LLVM layout, and
+	// returns an Enum TypeIdx pointing at it. Memoizes by instantiated
+	// name. Used to materialize `Option(i32)`, `Result(File, Errno)`,
+	// and other sum-type generics on demand.
+	TypeIdx instantiateEnumExpr(
 	    const AstNode &exprNode, const std::string &calleeName,
 	    const std::vector<TypeIdx> &args,
 	    const std::unordered_map<std::string, TypeIdx> &subst) const;

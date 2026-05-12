@@ -1,0 +1,79 @@
+// Single test: instance method call on generic struct.
+const { assert } = import("test");
+
+fn Holder(T: type) type {
+    return struct {
+        value: T,
+
+        fn get(self: Self) T {
+            return self.value;
+        }
+    };
+}
+
+const HolderI32 = Holder(i32);
+
+tfn instanceMethod() {
+    var h: HolderI32 = { value: 7 };
+    assert(h.get(), 7);
+}
+
+fn Holder2(T: type) type {
+    return struct {
+        value: T,
+
+        fn get(self: Self) T {
+            return self.value;
+        }
+
+        fn getTwice(self: Self) T {
+            // self.get() from inside another method body
+            return self.get();
+        }
+    };
+}
+
+const Holder2I32 = Holder2(i32);
+
+tfn selfMethodCallFromBody() {
+    var h: Holder2I32 = { value: 11 };
+    assert(h.getTwice(), 11);
+}
+
+fn Accumulator(T: type) type {
+    return struct {
+        sum: T,
+
+        fn add(self: mut Self, x: T) {
+            self.sum = self.sum + x;
+        }
+
+        fn addTwice(self: mut Self, x: T) {
+            // mut self method calls another mut self method via
+            // `self.add(x)`. Receiver is auto-addressed (since add
+            // takes `mut self`), so the synthesis wraps self in
+            // AddressOf.
+            self.add(x);
+            self.add(x);
+        }
+
+        fn total(self: Self) T {
+            return self.sum;
+        }
+    };
+}
+
+const AccumI32 = Accumulator(i32);
+
+tfn mutInstanceMethod() {
+    var a: AccumI32 = { sum: 0 };
+    a.add(3);
+    a.add(5);
+    assert(a.total(), 8);
+}
+
+tfn selfMutMethodFromMutBody() {
+    var a: AccumI32 = { sum: 0 };
+    a.addTwice(7);
+    assert(a.total(), 14);
+}

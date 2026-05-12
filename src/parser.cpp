@@ -205,6 +205,11 @@ NodeIdx Parser::parsePrimary() {
 	// of type `type` — the struct type being constructed. Used as the
 	// body of a generic type-returning function.
 	if (match(TOK_STRUCT)) { return parseStructExpression(); }
+	// Same shape for tagged sum types: `enum { Variant1, Variant2(T), ... }`
+	// in expression position. Enables generic enums like
+	// `Option(T)`/`Result(T, E)`; variant payload types may reference
+	// the generic params and get substituted at instantiation time.
+	if (match(TOK_ENUM)) { return parseEnumExpression(); }
 	if (match(TOK_IDENTIFIER)) {
 		std::string name = previous().lexeme;
 		StringIdx nameId = stringPool->intern(name);
@@ -225,6 +230,85 @@ NodeIdx Parser::parsePrimary() {
 
 		// Function call.
 		if (match(TOK_OPEN_PAREN)) {
+			// Detect `IDENT(args).IDENT(args)` — a chained generic-
+			// call method invocation. We need this because args of
+			// the inner call are TYPE expressions (e.g. `i32`, which
+			// lexes as TOK_TYPE and isn't valid in value-expression
+			// position), and the outer call's receiver is the
+			// instantiated type, not a runtime value.
+			//
+			// Peek-ahead: scan forward over paren-balanced tokens to
+			// find the matching `)`, then check the 2-3 tokens past
+			// it for `.IDENT(`. If we match, parse the inner args as
+			// types via parseType() and emit a TypeMethodCall.
+			//
+			// Only applies when the IDENT-rooted chain has no other
+			// member accesses (so `Vec(i32).empty()` works but
+			// `mod.Vec(i32).empty()` falls through to regular call —
+			// the latter shape isn't a real Jam construct anyway).
+			if (nodes->get(expr).tag != AstTag::MemberAccess) {
+				int peekIdx = current;  // sits on first arg token
+				int depth = 1;
+				while (peekIdx < (int)tokens.size() && depth > 0) {
+					TokenType tt = tokens[peekIdx].type;
+					if (tt == TOK_OPEN_PAREN) depth++;
+					else if (tt == TOK_CLOSE_PAREN) depth--;
+					if (depth == 0) break;
+					peekIdx++;
+				}
+				if (depth == 0 && peekIdx + 3 < (int)tokens.size() &&
+				    tokens[peekIdx].type == TOK_CLOSE_PAREN &&
+				    tokens[peekIdx + 1].type == TOK_DOT &&
+				    tokens[peekIdx + 2].type == TOK_IDENTIFIER &&
+				    tokens[peekIdx + 3].type == TOK_OPEN_PAREN) {
+					// Commit to TypeMethodCall path. The inner args
+					// are types; build a GenericCall TypeIdx.
+					std::vector<TypeIdx> typeArgs;
+					if (!check(TOK_CLOSE_PAREN)) {
+						do {
+							typeArgs.push_back(parseType());
+						} while (match(TOK_COMMA));
+					}
+					consume(TOK_CLOSE_PAREN,
+					        "Expected ')' after type arguments");
+					consume(TOK_DOT, "Expected '.' after generic call");
+					consume(TOK_IDENTIFIER,
+					        "Expected method name after '.'");
+					StringIdx methodName =
+					    stringPool->intern(previous().lexeme);
+					consume(TOK_OPEN_PAREN,
+					        "Expected '(' after method name");
+
+					std::vector<NodeIdx> methodArgs;
+					if (!check(TOK_CLOSE_PAREN)) {
+						do {
+							methodArgs.push_back(parseComparison());
+						} while (match(TOK_COMMA));
+					}
+					consume(TOK_CLOSE_PAREN,
+					        "Expected ')' after method arguments");
+
+					TypeIdx receiverTy = typePool->internGenericCall(
+					    stringPool->intern(name), std::move(typeArgs));
+
+					ExtraIdx extra = nodes->reserveExtra(
+					    2 + methodArgs.size());
+					nodes->setExtra(extra,
+					                static_cast<uint32_t>(methodName));
+					nodes->setExtra(extra + 1,
+					                static_cast<uint32_t>(
+					                    methodArgs.size()));
+					for (size_t i = 0; i < methodArgs.size(); i++) {
+						nodes->setExtra(extra + 2 + i,
+						                static_cast<uint32_t>(
+						                    methodArgs[i]));
+					}
+					return emit(AstNode{
+					    AstTag::TypeMethodCall, 0, 0, 0,
+					    static_cast<uint32_t>(receiverTy), extra});
+				}
+			}
+
 			std::vector<NodeIdx> args;
 			if (!check(TOK_CLOSE_PAREN)) {
 				do {
@@ -413,6 +497,82 @@ NodeIdx Parser::parseStructLiteral() {
 // enum-variant (`Color.Red`), or wildcard. Or-patterns are handled by
 // parsePattern.
 NodeIdx Parser::parsePatternAtom() {
+	// `Identifier(types) '.' Identifier(bindings)` — chained-generic
+	// enum-variant pattern. Detect via paren-balanced peek-ahead
+	// (same shape as the expression-side TypeMethodCall fix). The
+	// receiver is parsed as a generic type via parseType() and stored
+	// in the pattern as a TypeIdx (flag bit 1 marks this encoding).
+	// Codegen alias-resolves through lookupEnum at match time.
+	if (check(TOK_IDENTIFIER) && peek().lexeme != "_") {
+		int peekIdx = current + 1;
+		if (peekIdx < (int)tokens.size() &&
+		    tokens[peekIdx].type == TOK_OPEN_PAREN) {
+			int depth = 1;
+			int scan = peekIdx + 1;
+			while (scan < (int)tokens.size() && depth > 0) {
+				if (tokens[scan].type == TOK_OPEN_PAREN) depth++;
+				else if (tokens[scan].type == TOK_CLOSE_PAREN) depth--;
+				if (depth == 0) break;
+				scan++;
+			}
+			if (depth == 0 && scan + 2 < (int)tokens.size() &&
+			    tokens[scan].type == TOK_CLOSE_PAREN &&
+			    tokens[scan + 1].type == TOK_DOT &&
+			    tokens[scan + 2].type == TOK_IDENTIFIER) {
+				std::string typeName = peek().lexeme;
+				advance();  // IDENT
+				advance();  // `(`
+				std::vector<TypeIdx> typeArgs;
+				if (!check(TOK_CLOSE_PAREN)) {
+					do {
+						typeArgs.push_back(parseType());
+					} while (match(TOK_COMMA));
+				}
+				consume(TOK_CLOSE_PAREN,
+				        "Expected ')' after generic type arguments");
+				consume(TOK_DOT, "Expected '.' after generic type");
+				consume(TOK_IDENTIFIER,
+				        "Expected variant name after `.`");
+				StringIdx variantNameId =
+				    stringPool->intern(previous().lexeme);
+				TypeIdx receiverTy = typePool->internGenericCall(
+				    stringPool->intern(typeName), std::move(typeArgs));
+
+				if (match(TOK_OPEN_PAREN)) {
+					std::vector<StringIdx> bindings;
+					if (!check(TOK_CLOSE_PAREN)) {
+						do {
+							consume(TOK_IDENTIFIER,
+							        "Expected binding name in variant payload");
+							bindings.push_back(
+							    stringPool->intern(previous().lexeme));
+						} while (match(TOK_COMMA));
+					}
+					consume(TOK_CLOSE_PAREN,
+					        "Expected `)` to close payload bindings");
+					// flags = 3 (bit 0 = bindings, bit 1 = TypeIdx recv)
+					// extra: [typeIdx, variantNameId, count, b0, ...]
+					ExtraIdx extra =
+					    nodes->reserveExtra(3 + bindings.size());
+					nodes->setExtra(extra,
+					                static_cast<uint32_t>(receiverTy));
+					nodes->setExtra(extra + 1, variantNameId);
+					nodes->setExtra(extra + 2,
+					                static_cast<uint32_t>(bindings.size()));
+					for (size_t i = 0; i < bindings.size(); i++) {
+						nodes->setExtra(extra + 3 + i, bindings[i]);
+					}
+					return emit(AstNode{AstTag::PatEnumVariant, 0, 3u, 0,
+					                    extra, 0});
+				}
+				// No bindings: flags = 2 (TypeIdx recv, no bindings).
+				return emit(AstNode{AstTag::PatEnumVariant, 0, 2u, 0,
+				                    static_cast<uint32_t>(receiverTy),
+				                    variantNameId});
+			}
+		}
+	}
+
 	// `Identifier '.' Identifier` — enum-variant pattern, optionally
 	// followed by `(binding1, binding2, ...)` to destructure payload
 	// fields. Must come before the literal/wildcard branches.
@@ -879,10 +1039,15 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	bool isPub = false;
 	bool isTest = false;
 
-	if (match(TOK_EXTERN)) isExtern = true;
-	else if (match(TOK_EXPORT)) isExport = true;
-	else if (match(TOK_PUB)) isPub = true;
-	else if (match(TOK_TFN)) isTest = true;
+	// Modifiers can combine: `pub extern fn ...` exports an FFI
+	// symbol that other Jam modules can call. Loop so any order works.
+	while (true) {
+		if      (!isExtern && match(TOK_EXTERN)) isExtern = true;
+		else if (!isExport && match(TOK_EXPORT)) isExport = true;
+		else if (!isPub    && match(TOK_PUB))    isPub    = true;
+		else if (!isTest   && match(TOK_TFN))    isTest   = true;
+		else break;
+	}
 
 	if (!isTest) { consume(TOK_FN, "Expected 'fn' keyword"); }
 	consume(TOK_IDENTIFIER, "Expected function name");
@@ -938,7 +1103,7 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 		consume(TOK_SEMI, "Expected ';' after extern function declaration");
 		return std::make_unique<FunctionAST>(name, std::move(args), returnType,
 		                                     std::vector<NodeIdx>{}, true,
-		                                     false, false, false, isVarArgs);
+		                                     isExport, isPub, false, isVarArgs);
 	}
 
 	consume(TOK_OPEN_BRACE, "Expected '{' before function body");
@@ -999,12 +1164,52 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 	                                       std::move(methods));
 }
 
+// Parse `enum { Variant1, Variant2(T1, T2), ... }` in expression
+// position. Caller has already consumed the `enum` keyword. Variants
+// get sequential discriminants starting at 0; the body's payload types
+// may reference generic params and will be substituted at each
+// instantiation. Methods on enum expressions are not supported in v1.
+NodeIdx Parser::parseEnumExpression() {
+	consume(TOK_OPEN_BRACE, "Expected '{' after 'enum'");
+	auto &enumsRef = sharedAnonEnums ? *sharedAnonEnums : anonEnums;
+	uint32_t idx = static_cast<uint32_t>(enumsRef.size());
+	std::string name = "__anon_enum_" + std::to_string(idx);
+
+	std::vector<EnumVariantAST> variants;
+	uint32_t nextDiscrim = 0;
+	while (!check(TOK_CLOSE_BRACE) && !isAtEnd()) {
+		consume(TOK_IDENTIFIER, "Expected enum variant name");
+		EnumVariantAST v;
+		v.Name = previous().lexeme;
+		// Optional positional payload list.
+		if (match(TOK_OPEN_PAREN)) {
+			if (!check(TOK_CLOSE_PAREN)) {
+				do {
+					v.PayloadTypes.push_back(parseType());
+				} while (match(TOK_COMMA));
+			}
+			consume(TOK_CLOSE_PAREN,
+			        "Expected `)` to close variant payload list");
+		}
+		v.Discriminant = nextDiscrim++;
+		variants.push_back(std::move(v));
+		if (!match(TOK_COMMA)) break;
+	}
+	consume(TOK_CLOSE_BRACE, "Expected '}' to close enum body");
+
+	enumsRef.push_back(std::make_unique<EnumDeclAST>(std::move(name),
+	                                                 std::move(variants)));
+
+	return emit(AstNode{AstTag::EnumExpr, 0, 0, 0, idx, 0});
+}
+
 NodeIdx Parser::parseStructExpression() {
 	// Caller has matched the `struct` keyword. Anonymous struct: synthetic
 	// name keyed by index in anonStructs (the substitution engine in G4
 	// reads from there to instantiate the body with concrete type args).
 	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
-	uint32_t idx = static_cast<uint32_t>(anonStructs.size());
+	auto &structsRef = sharedAnonStructs ? *sharedAnonStructs : anonStructs;
+	uint32_t idx = static_cast<uint32_t>(structsRef.size());
 	std::string name = "__anon_struct_" + std::to_string(idx);
 
 	std::vector<std::pair<std::string, TypeIdx>> fields;
@@ -1016,7 +1221,7 @@ NodeIdx Parser::parseStructExpression() {
 	parseStructBody(fields, methods);
 	structContextStack.pop_back();
 
-	anonStructs.push_back(std::make_unique<StructDeclAST>(
+	structsRef.push_back(std::make_unique<StructDeclAST>(
 	    std::move(name), std::move(fields), std::move(methods)));
 
 	return emit(AstNode{AstTag::StructExpr, 0, 0, 0, idx, 0});
@@ -1268,7 +1473,15 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 	// Generics G2: hand off anonymous struct bodies (`struct {...}`
 	// expressions encountered during parse) to the ModuleAST so the
 	// instantiation engine can find them by index.
-	module->AnonStructs = std::move(anonStructs);
+	// Only transfer member-owned vectors when not sharing. With shared
+	// storage, the caller (main.cpp) owns the vectors and threads them
+	// to codegen directly.
+	if (!sharedAnonStructs) {
+		module->AnonStructs = std::move(anonStructs);
+	}
+	if (!sharedAnonEnums) {
+		module->AnonEnums = std::move(anonEnums);
+	}
 
 	return module;
 }

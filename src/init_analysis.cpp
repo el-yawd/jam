@@ -218,6 +218,22 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		return Result{std::move(state), false};
 	case AstTag::Call:
 		return analyzeCall(idx, std::move(state));
+	case AstTag::TypeMethodCall: {
+		// Receiver is a TypeIdx — no binding state involved. Walk the
+		// method's value-arg list (stored after [methodName, argCount]
+		// in the extra payload) so any variable reads inside the args
+		// are checked.
+		ExtraIdx extra = n.rhs;
+		uint32_t argCount = nodes_.getExtra(extra + 1);
+		Result r{std::move(state), false};
+		for (uint32_t i = 0; i < argCount; i++) {
+			NodeIdx argIdx = static_cast<NodeIdx>(
+			    nodes_.getExtra(extra + 2 + i));
+			r = analyze(argIdx, std::move(r.state));
+			if (r.terminated) return r;
+		}
+		return r;
+	}
 	case AstTag::BinaryOp: {
 		auto r = analyze(n.lhs, std::move(state));
 		if (r.terminated) return r;
@@ -281,12 +297,14 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 	case AstTag::StringLit:
 	case AstTag::ImportLit:
 	case AstTag::AtCall:
-	// Generics G2: `struct {...}` expression evaluates to a value of
-	// type `type` at compile time. The body lives in ModuleAST and is
-	// processed by the substitution engine — the analyzer doesn't see
-	// it because generic functions skip analysis (they're not in
-	// mainModuleEmits). If we ever do reach this case it's a no-op.
+	// Generics G2: `struct {...}` / `enum { ... }` expressions evaluate
+	// to a value of type `type` at compile time. The bodies live in
+	// ModuleAST and are processed by the substitution engine — the
+	// analyzer doesn't see them because generic functions skip analysis
+	// (they're not in mainModuleEmits). If we ever do reach these cases
+	// it's a no-op.
 	case AstTag::StructExpr:
+	case AstTag::EnumExpr:
 		return Result{std::move(state), false};
 
 	// Pattern atoms appear only inside MatchNode arms; they don't read

@@ -1,0 +1,107 @@
+// std.string — minimal byte-slice utilities.
+//
+// Jam strings are `[]u8` (a `{ptr, len}` slice). These helpers are
+// the smallest set a self-hosted lexer / parser needs: equality,
+// prefix / suffix match, substring search, and slicing. All
+// operations are bytewise; there's no Unicode normalization or
+// case folding in this layer.
+
+// Byte-equality. Strings of different lengths are unequal.
+pub fn eq(a: []u8, b: []u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    var i: u32 = 0;
+    while (i < a.len) {
+        if (a.ptr[i] != b.ptr[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// True iff `s` begins with `prefix`. Empty prefix always matches.
+pub fn startsWith(s: []u8, prefix: []u8) bool {
+    if (prefix.len > s.len) {
+        return false;
+    }
+    var i: u32 = 0;
+    while (i < prefix.len) {
+        if (s.ptr[i] != prefix.ptr[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// True iff `s` ends with `suffix`. Empty suffix always matches.
+pub fn endsWith(s: []u8, suffix: []u8) bool {
+    if (suffix.len > s.len) {
+        return false;
+    }
+    var offset: u32 = s.len - suffix.len;
+    var i: u32 = 0;
+    while (i < suffix.len) {
+        if (s.ptr[offset + i] != suffix.ptr[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// First index of `needle` in `s`, or -1 if absent. O(n*m) naive
+// scan — fine for short needles and the lexer's keyword table; a
+// faster algorithm (KMP / two-way) is a v2 problem.
+pub fn find(s: []u8, needle: []u8) i32 {
+    if (needle.len == 0) {
+        return 0;
+    }
+    if (needle.len > s.len) {
+        return -1;
+    }
+    var limit: u32 = s.len - needle.len;
+    var i: u32 = 0;
+    while (i <= limit) {
+        var matched: bool = true;
+        var j: u32 = 0;
+        while (j < needle.len) {
+            if (s.ptr[i + j] != needle.ptr[j]) {
+                matched = false;
+                j = needle.len;
+            } else {
+                j = j + 1;
+            }
+        }
+        if (matched) {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// True iff `s` contains `needle`. Sugar for `find(s, needle) >= 0`.
+pub fn contains(s: []u8, needle: []u8) bool {
+    return find(s, needle) >= 0;
+}
+
+// `slice(s, start, end)` for sub-slicing deferred — requires a
+// slice-literal codegen path (`{ ptr, len }` as a slice value)
+// that doesn't exist yet. Lexer / parser code paths that need
+// sub-slicing can fall back to byte-pointer + length pairs.
+
+// Single-byte search. Returns the first index of `byte` in `s`,
+// or -1 if absent. Useful for lexer scans (newlines, quote chars).
+pub fn indexOfByte(s: []u8, byte: u8) i32 {
+    var i: u32 = 0;
+    while (i < s.len) {
+        if (s.ptr[i] == byte) {
+            return i as i32;
+        }
+        i = i + 1;
+    }
+    return -1;
+}

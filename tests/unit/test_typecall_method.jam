@@ -1,0 +1,45 @@
+// `IDENT(args).IDENT(args)` — chained generic-call method
+// invocation. Now parses and dispatches directly, without needing
+// `const TypeAlias = Generic(args);` first.
+const { assert } = import("test");
+
+// Struct with a static factory method.
+fn Box(T: type) type {
+    return struct {
+        value: T,
+        fn make(v: T) Self {
+            return { value: v };
+        }
+    };
+}
+
+tfn directGenericStaticMethod() {
+    var b: Box(i32) = Box(i32).make(42);
+    assert(b.value, 42);
+}
+
+// Generic enum: variant construction via direct generic-call.
+fn Option(T: type) type {
+    return enum {
+        Some(T),
+        None,
+    };
+}
+
+tfn directGenericVariantSome() {
+    var o: Option(i32) = Option(i32).Some(7);
+    var v: i32 = match (o) {
+        Option(i32).Some(x) { 1 }
+        Option(i32).None    { 2 }
+    };
+    assert(v, 1);
+}
+
+tfn directGenericVariantNone() {
+    var o: Option(i32) = Option(i32).None();
+    var v: i32 = match (o) {
+        Option(i32).Some(x) { 1 }
+        Option(i32).None    { 2 }
+    };
+    assert(v, 2);
+}

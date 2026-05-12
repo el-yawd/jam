@@ -45,6 +45,7 @@ class Parser {
 	NodeIdx parseMultiplication();
 	NodeIdx parseStructLiteral();
 	NodeIdx parseStructExpression();
+	NodeIdx parseEnumExpression();
 	NodeIdx parseMatch();
 	NodeIdx parsePattern();          // OrPattern
 	NodeIdx parsePatternAtom();      // single-atom pattern
@@ -65,6 +66,11 @@ class Parser {
 	// `ModuleAST::AnonStructs` at the end of parse().
 	std::vector<std::unique_ptr<StructDeclAST>> anonStructs;
 
+	// Mirror of anonStructs for `enum { ... }` expressions. Enables
+	// generic enums (`Option(T)`, `Result(T, E)`, etc.). Transferred
+	// to `ModuleAST::AnonEnums` at the end of parse().
+	std::vector<std::unique_ptr<EnumDeclAST>> anonEnums;
+
 	// Generics G3: stack of struct names being parsed, used to resolve
 	// `Self` references inside method signatures. Top-level structs push
 	// their declared name; struct expressions push their synthetic
@@ -83,6 +89,17 @@ class Parser {
 	Parser(std::vector<Token> tokens, TypePool &typePool,
 	       StringPool &stringPool, NodeStore &nodes);
 	std::unique_ptr<ModuleAST> parse();
+
+	// Optional shared anon-storage. When set before `parse()` runs,
+	// `struct {...}` / `enum {...}` expression bodies append to these
+	// shared vectors (the same vectors every other Parser in the
+	// compilation shares). Codegen consults the shared vectors to
+	// resolve EnumExpr / StructExpr indices uniformly across the main
+	// module + every imported module. Set by main.cpp; left null for
+	// standalone unit tests.
+	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs =
+	    nullptr;
+	std::vector<std::unique_ptr<EnumDeclAST>> *sharedAnonEnums = nullptr;
 };
 
 #endif  // PARSER_H

@@ -76,6 +76,77 @@ static uint64_t numberLitValue(const AstNode &n) {
 	       (static_cast<uint64_t>(n.rhs) << 32);
 }
 
+// Resolve a PatEnumVariant AST node to its canonical enum name + variant
+// info. Handles all four encoding combinations:
+//   flags & 1 == 0: no bindings (lhs = StringIdx OR TypeIdx, rhs = variant)
+//   flags & 1 == 1: with bindings (lhs = ExtraIdx → [recv, variant, count, ...])
+//   flags & 2 == 0: receiver is StringIdx (source-level name, alias-resolve)
+//   flags & 2 == 1: receiver is TypeIdx (GenericCall — resolved via lookupEnum)
+//
+// Used by every codegen / exhaustiveness / payload-binding site that
+// consumes a PatEnumVariant. Centralizes the alias / generic-call
+// resolution so future encodings only touch this function.
+struct DecodedPatEnumVariant {
+	std::string enumName;         // canonical (`Option__i32`, not alias)
+	std::string variantName;
+	const JamCodegenContext::EnumInfo *einfo = nullptr;
+	int variantIndex = -1;        // -1 if variant missing
+	bool hasBindings = false;
+	ExtraIdx bindingsStart = 0;   // start of [count, b0, b1, ...] when hasBindings
+	uint32_t bindingCount = 0;
+};
+
+static DecodedPatEnumVariant decodePatEnumVariant(JamCodegenContext &ctx,
+                                                   const AstNode &pn) {
+	const NodeStore &ns = ctx.getNodeStore();
+	const StringPool &sp = ctx.getStringPool();
+	DecodedPatEnumVariant d;
+	bool hasBindings = (pn.flags & 1) != 0;
+	bool typeIdxReceiver = (pn.flags & 2) != 0;
+
+	uint32_t recvSlot;
+	StringIdx variantNameId;
+	if (hasBindings) {
+		ExtraIdx ex = static_cast<ExtraIdx>(pn.lhs);
+		recvSlot = ns.getExtra(ex);
+		variantNameId = static_cast<StringIdx>(ns.getExtra(ex + 1));
+		d.bindingCount = ns.getExtra(ex + 2);
+		d.bindingsStart = ex + 3;
+		d.hasBindings = true;
+	} else {
+		recvSlot = pn.lhs;
+		variantNameId = static_cast<StringIdx>(pn.rhs);
+	}
+	d.variantName = sp.get(variantNameId);
+
+	if (typeIdxReceiver) {
+		TypeIdx ty = static_cast<TypeIdx>(recvSlot);
+		if (const auto *info = ctx.lookupEnum(ty)) {
+			d.enumName = info->name;
+			d.einfo = info;
+		}
+	} else {
+		std::string recvName = sp.get(static_cast<StringIdx>(recvSlot));
+		d.enumName = recvName;
+		d.einfo = ctx.getEnum(recvName);
+		if (!d.einfo) {
+			// Source-level alias (`const OptI32 = Option(i32);`).
+			TypeIdx aliasTarget = ctx.lookupTypeAlias(recvName);
+			if (aliasTarget != kNoType) {
+				if (const auto *info = ctx.lookupEnum(aliasTarget)) {
+					d.enumName = info->name;
+					d.einfo = info;
+				}
+			}
+		}
+	}
+	if (d.einfo) {
+		d.variantIndex =
+		    ctx.getEnumVariantIndex(d.enumName, d.variantName);
+	}
+	return d;
+}
+
 // Materialize a NumberLit node directly at a known integer type. Falls back
 // to natural smallest-fit width when expectedType is null or non-integer.
 static JamValueRef numberLitConst(JamCodegenContext &ctx, const AstNode &n,
@@ -198,12 +269,28 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 		JamTypeRef currentType = ctx.getLLVMType(typeAtLevel);
 
 		for (size_t i = 0; i < path.size(); i++) {
+			const std::string &fieldName = sp.get(path[i]);
+
+			// `slice.ptr[i]` — the LHS is a `[]T` slice value (lowered
+			// to `{ptr, len}`). Step into field 0 (the ptr), then
+			// load it so the next iteration / leaf can GEP through.
+			const TypeKey &lvlKey = ctx.getTypePool().get(typeAtLevel);
+			if (lvlKey.kind == TypeKind::Slice && fieldName == "ptr") {
+				currentPtr = JamLLVMBuildStructGEP(
+				    ctx.getBuilder(), currentType, currentPtr, 0,
+				    "slice.ptr");
+				TypeIdx elemTy = static_cast<TypeIdx>(lvlKey.a);
+				typeAtLevel =
+				    ctx.getTypePool().internPtrMany(elemTy);
+				currentType = ctx.getLLVMType(typeAtLevel);
+				continue;
+			}
+
 			const auto *info = ctx.lookupStruct(typeAtLevel);
 			if (!info) {
 				throw std::runtime_error("Cannot index through field '" +
-				                         sp.get(path[i]) + "' on non-struct");
+				                         fieldName + "' on non-struct");
 			}
-			const std::string &fieldName = sp.get(path[i]);
 			int idx = ctx.getFieldIndex(info->name, fieldName);
 			if (idx < 0) {
 				throw std::runtime_error("Unknown field '" + fieldName +
@@ -214,6 +301,22 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 			    static_cast<unsigned>(idx), fieldName.c_str());
 			typeAtLevel = info->fields[idx].second;
 			currentType = ctx.getLLVMType(typeAtLevel);
+		}
+
+		// When the leaf field is a many-pointer (`*mut[] T` / `*const[] T`),
+		// `currentPtr` points at the slot holding the pointer, not at the
+		// pointee's array. Load the pointer value, then GEP it by the
+		// runtime index. Without this load we'd compute the offset off the
+		// field's storage address and produce a wild pointer — segfault on
+		// write.
+		const TypeKey &leafKey = ctx.getTypePool().get(typeAtLevel);
+		if (leafKey.kind == TypeKind::PtrMany) {
+			TypeIdx elemTy = static_cast<TypeIdx>(leafKey.a);
+			outElemType = ctx.getLLVMType(elemTy);
+			JamValueRef loadedPtr = JamLLVMBuildLoad(
+			    ctx.getBuilder(), currentType, currentPtr, "fld.ptr");
+			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType,
+			                          loadedPtr, idxVal, "ptrgep");
 		}
 
 		outElemType = JamLLVMGetArrayElementType(currentType);
@@ -435,6 +538,77 @@ static JamValueRef codegenStringLit(JamCodegenContext &ctx,
 	return SliceStruct;
 }
 
+// Best-effort signedness inference for an integer-typed expression.
+// LLVM doesn't carry signed/unsigned in its types, so the compiler
+// has to recover it from the source-level Jam type. Used by relational
+// operators (< <= > >=) to pick between signed and unsigned ICMP
+// predicates — `i32(-1) >= 0` must use SGE, not UGE.
+//
+// Returns true iff the expression is known to produce a signed
+// integer value. Returns false for unsigned, non-integer, or
+// unknown types (the unsigned predicate is the safer default for
+// the cases we can't classify).
+static bool isSignedIntExpr(JamCodegenContext &ctx, NodeIdx idx) {
+	if (idx == kNoNode) return false;
+	const NodeStore &ns = ctx.getNodeStore();
+	const StringPool &sp = ctx.getStringPool();
+	const AstNode &n = ns.get(idx);
+	auto isSignedTy = [&](TypeIdx ty) -> bool {
+		if (ty == kNoType) return false;
+		const TypeKey &k = ctx.getTypePool().get(ty);
+		return k.kind == TypeKind::Int && k.b != 0;
+	};
+	switch (n.tag) {
+	case AstTag::NumberLit:
+		// A negative literal is inherently signed. A positive literal
+		// adopts its consumer's type — be conservative and say
+		// unsigned so non-negative literals don't force SGE; the
+		// other operand decides.
+		return (n.flags & 1) != 0;
+	case AstTag::Variable: {
+		const std::string &name = sp.get(static_cast<StringIdx>(n.lhs));
+		return isSignedTy(ctx.getVariableType(name));
+	}
+	case AstTag::Call: {
+		const std::string &callee =
+		    sp.get(static_cast<StringIdx>(n.lhs));
+		if (const FunctionAST *fn = ctx.getFunctionAST(callee)) {
+			return isSignedTy(fn->ReturnType);
+		}
+		return false;
+	}
+	case AstTag::AsCast:
+		return isSignedTy(static_cast<TypeIdx>(n.rhs));
+	case AstTag::BinaryOp:
+	case AstTag::UnaryOp:
+		// Recurse on the LHS (operand types match for arithmetic).
+		return isSignedIntExpr(ctx, static_cast<NodeIdx>(n.lhs));
+	case AstTag::MemberAccess: {
+		// `slice.len` is u32 (unsigned). Generic field access:
+		// resolve the struct + field type.
+		NodeIdx base = static_cast<NodeIdx>(n.lhs);
+		StringIdx member = static_cast<StringIdx>(n.rhs);
+		const AstNode &bn = ns.get(base);
+		if (bn.tag == AstTag::Variable) {
+			const std::string &varName =
+			    sp.get(static_cast<StringIdx>(bn.lhs));
+			TypeIdx baseTy = ctx.getVariableType(varName);
+			if (const auto *info = ctx.lookupStruct(baseTy)) {
+				const std::string &memName = sp.get(member);
+				for (const auto &f : info->fields) {
+					if (f.first == memName) {
+						return isSignedTy(f.second);
+					}
+				}
+			}
+		}
+		return false;
+	}
+	default:
+		return false;
+	}
+}
+
 static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	BinOp op = static_cast<BinOp>(n.op);
 	const NodeStore &ns = ctx.getNodeStore();
@@ -528,18 +702,34 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, L, R, "cmptmp");
 	case BinOp::Ne:
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_NE, L, R, "cmptmp");
-	case BinOp::Lt:
-		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_ULT, L, R,
-		                         "cmptmp");
-	case BinOp::Le:
-		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_ULE, L, R,
-		                         "cmptmp");
-	case BinOp::Gt:
-		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_UGT, L, R,
-		                         "cmptmp");
-	case BinOp::Ge:
-		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_UGE, L, R,
-		                         "cmptmp");
+	case BinOp::Lt: {
+		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
+		               isSignedIntExpr(ctx, rhsIdx);
+		return JamLLVMBuildICmp(ctx.getBuilder(),
+		                         signed_ ? JAM_ICMP_SLT : JAM_ICMP_ULT,
+		                         L, R, "cmptmp");
+	}
+	case BinOp::Le: {
+		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
+		               isSignedIntExpr(ctx, rhsIdx);
+		return JamLLVMBuildICmp(ctx.getBuilder(),
+		                         signed_ ? JAM_ICMP_SLE : JAM_ICMP_ULE,
+		                         L, R, "cmptmp");
+	}
+	case BinOp::Gt: {
+		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
+		               isSignedIntExpr(ctx, rhsIdx);
+		return JamLLVMBuildICmp(ctx.getBuilder(),
+		                         signed_ ? JAM_ICMP_SGT : JAM_ICMP_UGT,
+		                         L, R, "cmptmp");
+	}
+	case BinOp::Ge: {
+		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
+		               isSignedIntExpr(ctx, rhsIdx);
+		return JamLLVMBuildICmp(ctx.getBuilder(),
+		                         signed_ ? JAM_ICMP_SGE : JAM_ICMP_UGE,
+		                         L, R, "cmptmp");
+	}
 	default:
 		throw std::runtime_error("Invalid binary operator");
 	}
@@ -594,8 +784,61 @@ static JamValueRef codegenAtCall(JamCodegenContext &ctx, const AstNode &n) {
 	throw std::runtime_error("Unknown comptime intrinsic: @" + name);
 }
 
+// Static method / variant call on a generic-call type receiver
+// (`Vec(i32).empty()`, `Option(i32).Some(x)`, etc.). The receiver
+// TypeIdx is parser-built via internGenericCall. We resolve it to a
+// concrete struct or enum (instantiating the generic if needed),
+// then synthesize a regular Call AST node with the canonical
+// qualified name and delegate to codegenCall.
+static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n);
+static JamValueRef codegenTypeMethodCall(JamCodegenContext &ctx,
+                                         const AstNode &n) {
+	TypeIdx recvTy = static_cast<TypeIdx>(n.lhs);
+	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
+	StringIdx methodNameId =
+	    static_cast<StringIdx>(ctx.getNodeStore().getExtra(extra));
+	uint32_t argCount = ctx.getNodeStore().getExtra(extra + 1);
+	const std::string &methodName =
+	    ctx.getStringPool().get(methodNameId);
+
+	// Resolve receiver to a struct or enum name. lookupStruct /
+	// lookupEnum handle GenericCall TypeIdx via resolveGenericCall.
+	std::string receiverName;
+	if (const auto *sinfo = ctx.lookupStruct(recvTy)) {
+		receiverName = sinfo->name;
+	} else if (const auto *einfo = ctx.lookupEnum(recvTy)) {
+		receiverName = einfo->name;
+	} else {
+		throw std::runtime_error(
+		    "Type-method-call receiver doesn't resolve to a struct "
+		    "or enum");
+	}
+
+	// Synthesize a regular Call AST node with the canonical qualified
+	// name. The args (NodeIdx list in the TypeMethodCall extra) are
+	// reused as-is for the synthesized Call. Then codegenCall handles
+	// static-method dispatch + enum-variant construction uniformly.
+	std::string qualified = receiverName + "." + methodName;
+	StringIdx calleeId =
+	    ctx.getStringPool().intern(qualified);
+	ExtraIdx callExtra =
+	    ctx.getNodeStore().reserveExtra(1 + argCount);
+	ctx.getNodeStore().setExtra(callExtra, argCount);
+	for (uint32_t i = 0; i < argCount; i++) {
+		ctx.getNodeStore().setExtra(
+		    callExtra + 1 + i,
+		    ctx.getNodeStore().getExtra(extra + 2 + i));
+	}
+	AstNode synth{AstTag::Call,    0, 0, 0,
+	              static_cast<uint32_t>(calleeId), callExtra};
+	return codegenCall(ctx, synth);
+}
+
 static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
-	const std::string &callee =
+	// `callee` may be rewritten below (e.g. instance-receiver method
+	// dispatch turns `inst.method` into `StructName.method`), so it's
+	// a value not a reference.
+	std::string callee =
 	    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
 	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
 	uint32_t argCount = ctx.getNodeStore().getExtra(extra);
@@ -623,6 +866,17 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		    callee.find('.', dot + 1) == std::string::npos) {
 			std::string enumName = callee.substr(0, dot);
 			std::string varName = callee.substr(dot + 1);
+			// Resolve aliases (`const OptI32 = Option(i32);`) to the
+			// canonical enum name so generic enum variant construction
+			// works through the alias.
+			if (!ctx.getEnum(enumName)) {
+				TypeIdx aliasTarget = ctx.lookupTypeAlias(enumName);
+				if (aliasTarget != kNoType) {
+					if (const auto *info = ctx.lookupEnum(aliasTarget)) {
+						enumName = info->name;
+					}
+				}
+			}
 			if (const auto *einfo = ctx.getEnum(enumName)) {
 				int idx = ctx.getEnumVariantIndex(enumName, varName);
 				if (idx < 0) {
@@ -716,6 +970,63 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		    callee.find('.', dot + 1) == std::string::npos) {
 			std::string typeName = callee.substr(0, dot);
 			std::string methodPart = callee.substr(dot + 1);
+
+			// Instance-receiver method call: `instance.method(args)`.
+			// The LHS is a value (variable, including `self` inside
+			// another method's body), not a type name. Look up its
+			// type, find the method on that struct, and prepend a
+			// synthesized AST node for the receiver to the arg list
+			// so the rest of this function sees the call shape
+			// `StructName.method(receiver, args...)`.
+			//
+			// The receiver node is either `Variable(name)` (for
+			// `let` self — pass by value, codegen auto-addresses if
+			// the ABI demands it for size > 16B aggregates) or
+			// `AddressOf(Variable(name))` (for `mut` / `move` /
+			// `undefined` self — the call site needs an explicit
+			// address to match the user-visible borrow shape).
+			if (ctx.getVariable(typeName) != nullptr) {
+				TypeIdx recvTy = ctx.getVariableType(typeName);
+				if (recvTy != kNoType) {
+					if (const auto *sinfo =
+					        ctx.lookupStruct(recvTy)) {
+						// Look up the method AST to pick the right
+						// receiver shape based on its first-param
+						// mode (let vs mut/move/undefined).
+						std::string canonicalCallee =
+						    sinfo->name + "." + methodPart;
+						const FunctionAST *methodAST =
+						    ctx.getFunctionAST(canonicalCallee);
+						if (methodAST && !methodAST->Args.empty()) {
+							StringIdx recvName =
+							    ctx.getStringPool().intern(typeName);
+							NodeIdx recvNode =
+							    ctx.getNodeStore().addNode(
+							        AstNode{AstTag::Variable, 0, 0, 0,
+							                recvName, 0});
+							ParamMode m = methodAST->Args[0].Mode;
+							if (m == ParamMode::Mut ||
+							    m == ParamMode::Move) {
+								// Wrap in AddressOf — the method
+								// expects a pointer-shaped self.
+								recvNode = ctx.getNodeStore().addNode(
+								    AstNode{AstTag::AddressOf, 0, 0,
+								            0,
+								            static_cast<uint32_t>(
+								                recvNode),
+								            0});
+							}
+							args.insert(args.begin(), recvNode);
+							argCount++;
+
+							// Rewrite callee so the canonical-type
+							// path below picks up the right method.
+							typeName = sinfo->name;
+							callee = canonicalCallee;
+						}
+					}
+				}
+			}
 
 			// Generics G6: if `typeName` is `Self` and we're inside
 			// the body of an instantiated method, the substitution
@@ -1646,25 +1957,14 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		           : JamLLVMConstInt(ctx.getInt1Type(), 0, false);
 	}
 	case AstTag::PatEnumVariant: {
-		// Two encodings:
-		//   no bindings : lhs = enumNameId, rhs = variantNameId, flags=0
-		//   bindings    : lhs = ExtraIdx → [enumNameId, variantNameId,
-		//                                   count, name0, name1, …]
-		//                 flags bit 0 = 1
-		const StringPool &sp = ctx.getStringPool();
-		StringIdx enumNameId, variantNameId;
-		if ((pn.flags & 1) == 0) {
-			enumNameId = static_cast<StringIdx>(pn.lhs);
-			variantNameId = static_cast<StringIdx>(pn.rhs);
-		} else {
-			ExtraIdx ex = static_cast<ExtraIdx>(pn.lhs);
-			enumNameId = static_cast<StringIdx>(ns.getExtra(ex));
-			variantNameId = static_cast<StringIdx>(ns.getExtra(ex + 1));
-		}
-		const std::string &enumName = sp.get(enumNameId);
-		const std::string &variantName = sp.get(variantNameId);
-		const auto *einfo = ctx.getEnum(enumName);
-		int idx = ctx.getEnumVariantIndex(enumName, variantName);
+		// Encoded via PatEnumVariant flags — see decodePatEnumVariant
+		// for the four-way encoding cross product (bindings × TypeIdx
+		// receiver) and alias resolution.
+		DecodedPatEnumVariant d = decodePatEnumVariant(ctx, pn);
+		const std::string &enumName = d.enumName;
+		const std::string &variantName = d.variantName;
+		const auto *einfo = d.einfo;
+		int idx = d.variantIndex;
 		if (!einfo || idx < 0) {
 			throw std::runtime_error("Enum `" + enumName +
 			                         "` has no variant `" + variantName +
@@ -1724,23 +2024,12 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			case AstTag::PatWildcard:
 				return true;
 			case AstTag::PatEnumVariant: {
-				StringIdx enumNameId, variantNameId;
-				if ((pp.flags & 1) == 0) {
-					enumNameId = static_cast<StringIdx>(pp.lhs);
-					variantNameId = static_cast<StringIdx>(pp.rhs);
-				} else {
-					ExtraIdx ex = static_cast<ExtraIdx>(pp.lhs);
-					enumNameId =
-					    static_cast<StringIdx>(ns.getExtra(ex));
-					variantNameId =
-					    static_cast<StringIdx>(ns.getExtra(ex + 1));
+				DecodedPatEnumVariant d =
+				    decodePatEnumVariant(ctx, pp);
+				if (foundEnum.empty()) foundEnum = d.enumName;
+				if (foundEnum == d.enumName) {
+					coveredVariants.push_back(d.variantName);
 				}
-				const std::string &en =
-				    ctx.getStringPool().get(enumNameId);
-				const std::string &vn =
-				    ctx.getStringPool().get(variantNameId);
-				if (foundEnum.empty()) foundEnum = en;
-				if (foundEnum == en) coveredVariants.push_back(vn);
 				return false;
 			}
 			case AstTag::PatOr: {
@@ -1895,30 +2184,23 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), bodyBBs[i]);
 
 		// Materialize payload bindings if the pattern carries any.
-		// Pattern shape:
-		//   PatEnumVariant with flags & 1: lhs = ExtraIdx
-		//   ExtraIdx → [enumNameId, variantNameId, count, n0, n1, ...]
+		// Decoded via the shared helper which handles all four
+		// encoding combinations + alias / generic-call resolution.
 		const AstNode &pn = ns.get(patIdx);
 		if (scrutIsEnum && pn.tag == AstTag::PatEnumVariant &&
 		    (pn.flags & 1) != 0) {
-			ExtraIdx ex = static_cast<ExtraIdx>(pn.lhs);
-			StringIdx enumNameId =
-			    static_cast<StringIdx>(ns.getExtra(ex));
-			StringIdx variantNameId =
-			    static_cast<StringIdx>(ns.getExtra(ex + 1));
-			uint32_t bcount = ns.getExtra(ex + 2);
-			const std::string &enumName =
-			    ctx.getStringPool().get(enumNameId);
-			const std::string &variantName =
-			    ctx.getStringPool().get(variantNameId);
-			const auto *einfo = ctx.getEnum(enumName);
-			int vidx = ctx.getEnumVariantIndex(enumName, variantName);
-			if (!einfo || vidx < 0) {
+			DecodedPatEnumVariant d = decodePatEnumVariant(ctx, pn);
+			if (!d.einfo || d.variantIndex < 0) {
 				throw std::runtime_error(
-				    "Pattern references unknown variant `" + enumName +
-				    "." + variantName + "`");
+				    "Pattern references unknown variant `" + d.enumName +
+				    "." + d.variantName + "`");
 			}
-			const auto &v = einfo->variants[vidx];
+			const auto *einfo = d.einfo;
+			const std::string &enumName = d.enumName;
+			const std::string &variantName = d.variantName;
+			uint32_t bcount = d.bindingCount;
+			ExtraIdx ex = d.bindingsStart - 3;  // anchor for backward-compat
+			const auto &v = einfo->variants[d.variantIndex];
 			if (bcount != v.payloadTypes.size()) {
 				throw std::runtime_error(
 				    "Pattern for `" + enumName + "." + variantName +
@@ -2299,9 +2581,21 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 	// struct with tag set and payload bytes undefined — equivalent to
 	// `EnumName.Variant()` with no payload args.
 	if (path.size() == 1) {
-		const std::string &enumName = sp.get(rootName);
+		std::string enumName = sp.get(rootName);
 		const std::string &variantName = sp.get(path[0]);
-		if (const auto *einfo = ctx.getEnum(enumName)) {
+		const auto *einfo = ctx.getEnum(enumName);
+		if (!einfo) {
+			// Resolve type alias (`const OptI32 = Option(i32);`) so
+			// generic enum unit-variant references work.
+			TypeIdx aliasTarget = ctx.lookupTypeAlias(enumName);
+			if (aliasTarget != kNoType) {
+				if (const auto *info = ctx.lookupEnum(aliasTarget)) {
+					enumName = info->name;
+					einfo = info;
+				}
+			}
+		}
+		if (einfo) {
 			int idx = ctx.getEnumVariantIndex(enumName, variantName);
 			if (idx < 0) {
 				throw std::runtime_error("Enum `" + enumName +
@@ -2447,6 +2741,12 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		throw std::runtime_error(
 		    "internal: struct expression reached LLVM codegen "
 		    "(generic was not instantiated before lowering)");
+	case AstTag::EnumExpr:
+		// Same story for `enum { ... }` expressions — the substitution
+		// engine consumes these from ModuleAST::AnonEnums.
+		throw std::runtime_error(
+		    "internal: enum expression reached LLVM codegen "
+		    "(generic was not instantiated before lowering)");
 	case AstTag::Variable: {
 		const std::string &name =
 		    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
@@ -2484,6 +2784,8 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return codegenCall(ctx, n);
 	case AstTag::AtCall:
 		return codegenAtCall(ctx, n);
+	case AstTag::TypeMethodCall:
+		return codegenTypeMethodCall(ctx, n);
 	case AstTag::Return:
 		return codegenReturn(ctx, n);
 	case AstTag::Assign:

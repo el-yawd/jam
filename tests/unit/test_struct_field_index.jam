@@ -1,0 +1,59 @@
+// `struct.ptr[i]` — many-pointer indexing through a struct field.
+// Used to segfault because the lvalue resolver did ArrayGEP on the
+// field's slot address instead of loading the pointer value first.
+const { assert } = import("test");
+
+extern fn malloc(size: u64) *mut[] u8;
+extern fn free(ptr: *mut[] u8);
+
+const Box = struct {
+    ptr: *mut[] i32,
+};
+
+tfn writeThroughField() {
+    var raw: *mut[] u8 = malloc(64);
+    var b: Box = { ptr: raw as *mut[] i32 };
+    b.ptr[0] = 42;
+    b.ptr[1] = 99;
+    b.ptr[2] = 7;
+    assert(b.ptr[0], 42);
+    assert(b.ptr[1], 99);
+    assert(b.ptr[2], 7);
+    free(b.ptr as *mut[] u8);
+}
+
+tfn readThroughField() {
+    var raw: *mut[] u8 = malloc(64);
+    var p: *mut[] i32 = raw as *mut[] i32;
+    p[0] = 11;
+    p[1] = 22;
+    var b: Box = { ptr: p };
+    assert(b.ptr[0], 11);
+    assert(b.ptr[1], 22);
+    free(b.ptr as *mut[] u8);
+}
+
+// Same shape inside a generic struct method on `self.ptr[i]`.
+fn Cell(T: type) type {
+    return struct {
+        ptr: *mut[] T,
+
+        fn set(self: mut Self, i: u32, v: T) {
+            self.ptr[i] = v;
+        }
+
+        fn get(self: Self, i: u32) T {
+            return self.ptr[i];
+        }
+    };
+}
+
+tfn writeThroughSelfField() {
+    var raw: *mut[] u8 = malloc(64);
+    var c: Cell(i32) = { ptr: raw as *mut[] i32 };
+    c.set(0, 5);
+    c.set(1, 17);
+    assert(c.get(0), 5);
+    assert(c.get(1), 17);
+    free(c.ptr as *mut[] u8);
+}

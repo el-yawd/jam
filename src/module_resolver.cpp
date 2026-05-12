@@ -44,6 +44,16 @@ std::string ModuleResolver::resolve(const std::string &importPath) const {
 		return fs::canonical(indexPath).string();
 	}
 
+	// Fall back to the std-lib: `<cwd>/std/<path>.jam`. This is the
+	// minimum-viable std-lib lookup — `import("collections")` finds
+	// `<repo>/std/collections.jam` when the compiler runs from the
+	// repo root. v2 will resolve based on the compiler binary's
+	// install location instead.
+	fs::path stdPath = fs::path("std") / (path + ".jam");
+	if (fs::exists(stdPath) && fs::is_regular_file(stdPath)) {
+		return fs::canonical(stdPath).string();
+	}
+
 	return "";  // Not found
 }
 
@@ -60,6 +70,8 @@ ModuleResolver::parseSource(const std::string &source) const {
 	Lexer lexer(source);
 	std::vector<Token> tokens = lexer.scanTokens();
 	Parser parser(tokens, *typePool, *stringPool, *nodeStore);
+	parser.sharedAnonStructs = sharedAnonStructs_;
+	parser.sharedAnonEnums = sharedAnonEnums_;
 	return parser.parse();
 }
 

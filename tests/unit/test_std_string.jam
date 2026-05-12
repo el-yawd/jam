@@ -1,0 +1,106 @@
+// std.string byte-slice utilities.
+const { assert } = import("test");
+const { eq, startsWith, endsWith, find, contains, indexOfByte } =
+    import("string");
+
+// -------------------- eq --------------------
+
+tfn eqSelf() {
+    var s: []u8 = "hello";
+    assert(eq(s, s) as i32, 1);
+}
+
+tfn eqIdenticalLiterals() {
+    var a: []u8 = "world";
+    var b: []u8 = "world";
+    assert(eq(a, b) as i32, 1);
+}
+
+tfn eqDifferentLengths() {
+    var a: []u8 = "abc";
+    var b: []u8 = "abcd";
+    assert(eq(a, b) as i32, 0);
+}
+
+tfn eqDifferentBytes() {
+    var a: []u8 = "abc";
+    var b: []u8 = "abd";
+    assert(eq(a, b) as i32, 0);
+}
+
+// -------------------- startsWith --------------------
+
+tfn startsWithMatch() {
+    assert(startsWith("hello world", "hello") as i32, 1);
+}
+
+tfn startsWithMiss() {
+    assert(startsWith("hello world", "world") as i32, 0);
+}
+
+tfn startsWithEmptyPrefix() {
+    assert(startsWith("hello", "") as i32, 1);
+}
+
+tfn startsWithLongerPrefix() {
+    assert(startsWith("ab", "abc") as i32, 0);
+}
+
+// -------------------- endsWith --------------------
+
+tfn endsWithMatch() {
+    assert(endsWith("hello world", "world") as i32, 1);
+}
+
+tfn endsWithMiss() {
+    assert(endsWith("hello world", "hello") as i32, 0);
+}
+
+tfn endsWithEmpty() {
+    assert(endsWith("foo", "") as i32, 1);
+}
+
+// -------------------- find / contains --------------------
+
+tfn findMatch() {
+    assert(find("hello world", "world"), 6);
+}
+
+tfn findFirstOccurrence() {
+    // Multiple matches return the lowest index.
+    assert(find("aabaab", "ab"), 1);
+}
+
+tfn findMiss() {
+    assert(find("hello", "xyz"), -1);
+}
+
+tfn findEmptyNeedle() {
+    assert(find("hello", ""), 0);
+}
+
+tfn findAtZero() {
+    assert(find("abc", "abc"), 0);
+}
+
+tfn containsTrue() {
+    assert(contains("hello world", "lo wo") as i32, 1);
+}
+
+tfn containsFalse() {
+    assert(contains("hello", "zz") as i32, 0);
+}
+
+// -------------------- indexOfByte --------------------
+
+tfn indexOfByteFound() {
+    var s: []u8 = "hello";
+    var l: u8 = 108;  // 'l'
+    assert(indexOfByte(s, l), 2);
+}
+
+tfn indexOfByteMissing() {
+    var s: []u8 = "hello";
+    var z: u8 = 122;  // 'z'
+    assert(indexOfByte(s, z), -1);
+}

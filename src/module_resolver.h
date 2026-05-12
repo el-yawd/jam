@@ -42,11 +42,27 @@ class ModuleResolver {
 	// Get the base directory
 	const std::string &getBaseDir() const { return baseDir; }
 
+	// Wire shared anonymous-struct / anon-enum vectors. When set, all
+	// parsers spawned for imported modules append to these vectors
+	// instead of into per-module ModuleAST::AnonStructs/AnonEnums.
+	// Lets generic-instantiation references that originate in an
+	// imported module (e.g. Vec(T)'s `return struct {...}`) resolve
+	// through a single shared registry at codegen.
+	void setSharedAnonRegistries(
+	    std::vector<std::unique_ptr<StructDeclAST>> *as,
+	    std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
+		sharedAnonStructs_ = as;
+		sharedAnonEnums_ = ae;
+	}
+
   private:
 	std::string baseDir;
 	TypePool *typePool;
 	StringPool *stringPool;
 	NodeStore *nodeStore;
+	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs_ =
+	    nullptr;
+	std::vector<std::unique_ptr<EnumDeclAST>> *sharedAnonEnums_ = nullptr;
 	std::unordered_map<std::string, std::unique_ptr<ModuleAST>> loadedModules;
 	std::unordered_set<std::string>
 	    currentlyLoading;  // For circular import detection
