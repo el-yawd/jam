@@ -4,9 +4,11 @@
 // signals absence. Used by fallible getters / poppers.
 //
 // `Vec(T)` — growable dynamic array. Uses libc malloc / free /
-// realloc as the backing allocator (a proper `Allocator` interface
-// lands in v2, see jamls/ALLOCATORS_PLAN.md). MVS auto-drops the
-// backing buffer at scope exit.
+// realloc as the backing allocator. MVS auto-drops the backing
+// buffer at scope exit. A user-pluggable Allocator interface is
+// deferred until function-pointer support lands in the compiler;
+// once it does, `std.mem.Allocator` will be a runtime vtable type
+// matching Zig's `std.mem.Allocator`.
 
 pub extern fn malloc(size: u64) *mut[] u8;
 pub extern fn free(ptr: *mut[] u8);
@@ -41,10 +43,9 @@ pub fn Vec(T: type) type {
         }
 
         // Pre-allocate `cap` slots up front. Useful when the caller
-        // knows the final size — eliminates the log(N) regrowths and
-        // the matching bulk-copy passes that `push` would otherwise
-        // do. cap=0 is clamped to 1 to avoid malloc(0)'s
-        // implementation-defined return.
+        // knows the final size — eliminates the log(N) regrowths.
+        // cap=0 clamps to 1 to avoid malloc(0)'s implementation-
+        // defined return.
         fn withCapacity(cap: u32) Self {
             var actualCap: u32 = cap;
             if (actualCap == 0) { actualCap = 1; }
@@ -53,7 +54,6 @@ pub fn Vec(T: type) type {
             return { ptr: raw as *mut[] T, length: 0, capacity: actualCap };
         }
 
-        // Append a value. Doubles capacity when full.
         fn push(self: mut Self, value: T) {
             if (self.length == self.capacity) {
                 self.grow();
@@ -62,8 +62,6 @@ pub fn Vec(T: type) type {
             self.length = self.length + 1;
         }
 
-        // Remove and return the last element. Returns None when
-        // empty so callers don't read past the end.
         fn pop(self: mut Self) Option(T) {
             if (self.length == 0) {
                 return Option(T).None();
@@ -74,8 +72,6 @@ pub fn Vec(T: type) type {
 
         fn len(self: Self) u32 { return self.length; }
 
-        // Bounds-checked indexed read. Returns None for out-of-range
-        // indices, Some(value) otherwise.
         fn get(self: Self, i: u32) Option(T) {
             if (i >= self.length) {
                 return Option(T).None();
@@ -88,19 +84,15 @@ pub fn Vec(T: type) type {
         // (jemalloc / mimalloc / glibc all do this opportunistically
         // against adjacent free pages); falls back to a fresh
         // allocation + a single bulk memcpy of the live bytes + free
-        // of the old buffer. Net: replaces our previous explicit
-        // element-by-element copy loop with a single libc call that
-        // the allocator can short-circuit when adjacent space is
-        // free.
+        // of the old buffer. Net: one libc call replacing our
+        // previous element-by-element copy loop.
         fn grow(self: mut Self) {
             var newCap: u32 = self.capacity * 2;
             var newBytes: u64 = (newCap as u64) * @sizeOf(T);
-            var newRaw: *mut[] u8 = realloc(self.ptr as *mut[] u8, newBytes);
-            self.ptr = newRaw as *mut[] T;
+            self.ptr = realloc(self.ptr as *mut[] u8, newBytes) as *mut[] T;
             self.capacity = newCap;
         }
 
-        // MVS auto-drop fires at scope exit.
         fn drop(self: mut Self) {
             free(self.ptr as *mut[] u8);
         }

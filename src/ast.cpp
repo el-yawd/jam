@@ -964,6 +964,102 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	// and `llvmName` for the LLVM symbol — they only differ for methods.
 	std::string llvmName = callee;
 	std::string lookupName = callee;
+
+	// Multi-dot instance-method dispatch: `self.field.method(args)`,
+	// `outer.inner.fn(args)`, etc. The single-dot block below handles
+	// the simple `instance.method` and `Type.method` shapes; this
+	// block extends the dispatch to walk a chain of field accesses
+	// from a root variable to the receiver value, then look up the
+	// method on the receiver's type. Synthesizes a MemberAccess chain
+	// for the receiver AST so the rest of codegenCall sees it as a
+	// regular first argument.
+	{
+		size_t firstDot = callee.find('.');
+		size_t lastDot = callee.rfind('.');
+		if (firstDot != std::string::npos && lastDot != firstDot) {
+			std::string rootVar = callee.substr(0, firstDot);
+			std::string methodPart = callee.substr(lastDot + 1);
+			std::string middle =
+			    callee.substr(firstDot + 1, lastDot - firstDot - 1);
+			// Split the middle "a.b.c" into ["a", "b", "c"].
+			std::vector<std::string> fieldChain;
+			{
+				size_t p = 0;
+				while (p <= middle.size()) {
+					size_t n = middle.find('.', p);
+					if (n == std::string::npos) {
+						fieldChain.push_back(middle.substr(p));
+						break;
+					}
+					fieldChain.push_back(middle.substr(p, n - p));
+					p = n + 1;
+				}
+			}
+
+			if (ctx.getVariable(rootVar) != nullptr) {
+				TypeIdx recvTy = ctx.getVariableType(rootVar);
+				// Walk each field, descending into nested structs.
+				for (const auto &fld : fieldChain) {
+					const auto *info = ctx.lookupStruct(recvTy);
+					if (!info) {
+						recvTy = kNoType;
+						break;
+					}
+					bool found = false;
+					for (const auto &f : info->fields) {
+						if (f.first == fld) {
+							recvTy = f.second;
+							found = true;
+							break;
+						}
+					}
+					if (!found) { recvTy = kNoType; break; }
+				}
+
+				if (recvTy != kNoType) {
+					if (const auto *sinfo = ctx.lookupStruct(recvTy)) {
+						std::string canonicalCallee =
+						    sinfo->name + "." + methodPart;
+						const FunctionAST *methodAST =
+						    ctx.getFunctionAST(canonicalCallee);
+						if (methodAST && !methodAST->Args.empty()) {
+							// Synthesize the receiver as a chain of
+							// MemberAccess nodes rooted at Variable.
+							StringIdx rootId =
+							    ctx.getStringPool().intern(rootVar);
+							NodeIdx recvNode =
+							    ctx.getNodeStore().addNode(AstNode{
+							        AstTag::Variable, 0, 0, 0, rootId,
+							        0});
+							for (const auto &fld : fieldChain) {
+								StringIdx fldId =
+								    ctx.getStringPool().intern(fld);
+								recvNode = ctx.getNodeStore().addNode(
+								    AstNode{AstTag::MemberAccess, 0, 0,
+								            0,
+								            static_cast<uint32_t>(
+								                recvNode),
+								            fldId});
+							}
+							ParamMode m = methodAST->Args[0].Mode;
+							if (m == ParamMode::Mut ||
+							    m == ParamMode::Move) {
+								recvNode = ctx.getNodeStore().addNode(
+								    AstNode{AstTag::AddressOf, 0, 0, 0,
+								            static_cast<uint32_t>(
+								                recvNode),
+								            0});
+							}
+							args.insert(args.begin(), recvNode);
+							argCount++;
+							callee = canonicalCallee;
+						}
+					}
+				}
+			}
+		}
+	}
+
 	{
 		size_t dot = callee.find('.');
 		if (dot != std::string::npos &&
