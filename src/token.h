@@ -8,6 +8,7 @@
 #ifndef TOKEN_H
 #define TOKEN_H
 
+#include <cstdint>
 #include <string>
 
 // Token types
@@ -76,14 +77,26 @@ enum TokenType {
 	TOK_AS,         // as keyword (explicit type cast)
 };
 
-// Token structure
+// Token structure.
+//
+// `byteOffset` is the start byte offset of the token in the source —
+// matches Zig's `Ast.TokenList = MultiArrayList({ tag, start })`. Zig
+// stores only `start` per token; the end is recomputed on demand from
+// the tokenizer (`tokenSlice` re-tokenizes for variable-length tokens,
+// short-circuits on a static lexeme table for keywords/operators).
+//
+// `lexeme` and `line` are legacy: kept for compat while the rest of
+// the codebase migrates to byte-offset-only access. Under strict
+// `lib/std/zig/` parity neither will exist in the long run.
 struct Token {
 	TokenType type;
 	std::string lexeme;
 	int line;
+	uint32_t byteOffset = 0;
 
-	Token(TokenType type, std::string lexeme, int line)
-	    : type(type), lexeme(std::move(lexeme)), line(line) {}
+	Token(TokenType type, std::string lexeme, int line, uint32_t byteOffset = 0)
+	    : type(type), lexeme(std::move(lexeme)), line(line),
+	      byteOffset(byteOffset) {}
 };
 
 #endif  // TOKEN_H

@@ -69,7 +69,10 @@ bool Lexer::isAlphaNumeric(char c) const { return isAlpha(c) || isDigit(c); }
 void Lexer::addToken(TokenType type) { addToken(type, ""); }
 
 void Lexer::addToken(TokenType type, const std::string &lexeme) {
-	tokens.emplace_back(type, lexeme, line);
+	// `tokenStart` is captured at the top of each scan-loop iteration
+	// (before the first `advance()`), so we can stamp it onto every
+	// emitted Token without per-call site bookkeeping.
+	tokens.emplace_back(type, lexeme, line, tokenStart);
 }
 
 void Lexer::identifier() {
@@ -430,6 +433,11 @@ std::vector<Token> Lexer::scanTokens() {
 		skipWhitespace();
 		if (isAtEnd()) break;
 
+		// Snapshot the byte offset of the token we're about to scan.
+		// Every `addToken` call below reads this via member state, so
+		// each emitted Token carries its start offset — matches Zig's
+		// `Ast.TokenList.start` field.
+		tokenStart = static_cast<uint32_t>(current);
 		char c = advance();
 
 		switch (c) {
