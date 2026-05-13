@@ -30,3 +30,4 @@ docs/vendor/
 abi_tests
 codegen_error_tests
 init_tests
+output
