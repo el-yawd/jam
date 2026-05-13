@@ -22,17 +22,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM and dependencies
+      - name: Install LLVM 20
         run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          codename=$(lsb_release -cs)
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y llvm-dev libclang-dev clang cmake
-          llvm-config --version
+          sudo apt-get install -y llvm-20-dev libclang-20-dev clang-20 cmake
+          /usr/lib/llvm-20/bin/llvm-config --version
 
       - name: Configure and build
         run: |
           mkdir -p build
           cd build
-          cmake ..
+          cmake .. -DCMAKE_PREFIX_PATH=/usr/lib/llvm-20
           cmake --build . -j $(nproc)
 
       - name: Run unit tests
@@ -52,17 +57,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM and dependencies
+      - name: Install LLVM 20
         run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          codename=$(lsb_release -cs)
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y llvm-dev libclang-dev clang cmake
-          llvm-config --version
+          sudo apt-get install -y llvm-20-dev libclang-20-dev clang-20 cmake
+          /usr/lib/llvm-20/bin/llvm-config --version
 
       - name: Configure and build
         run: |
           mkdir -p build
           cd build
-          cmake ..
+          cmake .. -DCMAKE_PREFIX_PATH=/usr/lib/llvm-20
           cmake --build . -j $(nproc)
 
       - name: Run unit tests
@@ -85,9 +95,6 @@ jobs:
       - name: Install LLVM via Homebrew
         run: |
           brew install llvm
-          # Homebrew LLVM is keg-only; expose its bin/ to subsequent steps via
-          # $GITHUB_PATH, and verify in the same step with the full path
-          # (the new PATH only takes effect in later steps).
           LLVM_PREFIX="$(brew --prefix llvm)"
           echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
           echo "LLVM_PREFIX=${LLVM_PREFIX}" >> "$GITHUB_ENV"
