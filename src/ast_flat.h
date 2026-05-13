@@ -98,11 +98,11 @@ enum class AstTag : uint8_t {
 	// d.lhs = TypeIdx (target array type, kNoType if unbound)
 	// d.rhs = ExtraIdx → [valueNode, countNode]
 	ArrayRepeat,
-	// Generics G2: a `struct { fields, methods }` expression, evaluated at
+	// a `struct { fields, methods }` expression, evaluated at
 	// compile time to a value of type `type`. The expression's body lives
 	// in ModuleAST::AnonStructs as a regular StructDeclAST with a
 	// synthetic name; this node carries the index so the substitution
-	// engine in G4 can find it.
+	// engine in can find it.
 	// d.lhs = u32 (index into ModuleAST::AnonStructs)
 	StructExpr,
 
@@ -317,12 +317,12 @@ enum class TypeKind : uint8_t {
 	// or enum. The codegen resolves Named values by consulting the
 	// three registries, in that order.
 	Named,       // namedT.name (StringIdx)
-	// Generics G1: the type of types — a value of this kind is itself
+	// the type of types — a value of this kind is itself
 	// a TypeIdx, used at compile time only. A function parameter
 	// declared `T: type` accepts a type argument when called. Has no
 	// runtime ABI; the codegen never lowers it to an LLVM type.
 	Type,
-	// Generics G4: deferred generic instantiation, parsed from
+	// deferred generic instantiation, parsed from
 	// `Identifier(arg, ...)` in a type position. The TypeKey carries
 	// the callee name in `a` (StringIdx) and an index into
 	// TypePool::genericArgs in `b`. The codegen resolves this lazily
@@ -374,7 +374,7 @@ inline bool operator==(const TypeKey &x, const TypeKey &y) {
 		// Singleton meta-type: every TypeKey of kind Type is equal.
 		return true;
 	case TypeKind::GenericCall:
-		// G4: equal iff callee name AND args-list index match. The
+		// equal iff callee name AND args-list index match. The
 		// args index is canonical because the side table interns
 		// args lists.
 		return x.a == y.a && x.b == y.b;
@@ -415,7 +415,7 @@ constexpr TypeIdx U1 = Bool;  // alias
 class TypePool {
 	std::vector<TypeKey> keys_;
 	std::unordered_map<TypeKey, TypeIdx, TypeKeyHash> idx_;
-	// Generics G4: side table for generic-call argument lists. A
+	// side table for generic-call argument lists. A
 	// `TypeKind::GenericCall` TypeKey stores the index into this vector
 	// in `b`. Two `Maybe(File)` references at distinct sites resolve to
 	// the same TypeIdx because the args list `[File]` is interned here
@@ -483,7 +483,7 @@ class TypePool {
 		return intern(TypeKey{TypeKind::Struct, 0, 0, nameId, 0});
 	}
 
-	// Generics G4: intern a `Identifier(arg, ...)` generic call as a
+	// intern a `Identifier(arg, ...)` generic call as a
 	// TypeIdx. The args list itself is interned in the side table so two
 	// identical calls share an args index and consequently the same
 	// TypeIdx.

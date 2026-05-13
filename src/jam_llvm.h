@@ -169,7 +169,7 @@ JAM_EXTERN_C void JamLLVMAddRetAttrZeroExt(JamFunctionRef func);
 JAM_EXTERN_C void JamLLVMApplyDefaultFnAttrs(JamFunctionRef func,
                                              bool isExtern);
 
-// P9.6: mark a function parameter as the sret (struct-return) slot.
+// mark a function parameter as the sret (struct-return) slot.
 // Equivalent to LLVM `sret(<type>) align <a> noalias`. The argument
 // must be `ptr`-typed; the pointee type and alignment are passed
 // explicitly. Used by codegen for functions returning aggregates whose

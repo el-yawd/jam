@@ -142,7 +142,7 @@ void Lexer::identifier() {
 	           text == "i32" || text == "i64" || text == "f32" ||
 	           text == "f64" || text == "bool" || text == "str" ||
 	           text == "type") {
-		// Generics G1: `type` is the meta-type — values of this type are
+		// `type` is the meta-type — values of this type are
 		// themselves types, used at compile time only. Lexed as TOK_TYPE
 		// alongside the scalar built-ins so the parser sees it in a type
 		// position uniformly.

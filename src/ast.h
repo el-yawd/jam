@@ -78,7 +78,7 @@ class FunctionAST {
 	// callers (extern, repl-style code) still work.
 	JamFunctionRef codegen(JamCodegenContext &ctx);
 
-	// Generics G1: a function is generic iff any of its parameters has
+	// a function is generic iff any of its parameters has
 	// type `type` (the meta-type) or its return type is `type`. Generic
 	// functions are not lowered to LLVM at decl time — instead they are
 	// registered for compile-time instantiation at each call site that
@@ -126,8 +126,8 @@ struct EnumVariantAST {
 };
 
 // Top-level enum declaration:
-//   const Direction = enum { Up, Down, Left, Right };          (E1)
-//   const Op = enum { Nop, LdR8R8(u8, u8), Jp(u16) };           (E2)
+//   const Direction = enum { Up, Down, Left, Right };         
+//   const Op = enum { Nop, LdR8R8(u8, u8), Jp(u16) };          
 //
 // Variants get sequential discriminants assigned in declaration order
 // (Up=0, Down=1, …). Unit variants have no payload; tagged variants
@@ -179,7 +179,7 @@ class ConstDeclAST {
 	std::string Name;
 	TypeIdx DeclaredType;  // kNoType when omitted; init drives the type
 	NodeIdx InitExpr;
-	// Generics G4: if non-kNoType, this const is a type alias (RHS is a
+	// if non-kNoType, this const is a type alias (RHS is a
 	// generic-instantiation expression like `Box(i32)`). InitExpr is
 	// kNoNode in that case. main.cpp processes type-alias consts
 	// before regular consts and registers the alias in the codegen
@@ -221,11 +221,11 @@ class ModuleAST {
 	std::vector<std::unique_ptr<EnumDeclAST>> Enums;
 	std::vector<std::unique_ptr<ConstDeclAST>> Consts;
 	std::vector<std::unique_ptr<FunctionAST>> Functions;
-	// Generics G2: bodies of `struct { ... }` expressions. Each entry is
+	// bodies of `struct { ... }` expressions. Each entry is
 	// a regular StructDeclAST with a synthetic name (`__anon_struct_<N>`).
 	// Index N comes from the AnonStructs vector at parse time and is
 	// stored in the StructExpr AST node's d.lhs slot. The substitution
-	// engine in G4 reads from here to instantiate the struct with
+	// engine in reads from here to instantiate the struct with
 	// concrete type arguments.
 	std::vector<std::unique_ptr<StructDeclAST>> AnonStructs;
 

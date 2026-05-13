@@ -359,7 +359,7 @@ static int compileAndRun(const std::string &filename,
 	// only need to teach the codegen context about them — no LLVM
 	// globals get emitted.
 	//
-	// Generics G4: a const whose RHS is a generic-instantiation type
+	// a const whose RHS is a generic-instantiation type
 	// expression (e.g. `const BoxI32 = Box(i32);`) is a *type alias*
 	// instead. The parser flagged these by setting AliasedType; we
 	// register them in the type-alias table so subsequent type lookups
@@ -415,15 +415,15 @@ static int compileAndRun(const std::string &filename,
 		if (function->isTest) {
 			testFunctionNames.push_back("__test_" + function->Name);
 		}
-		// Generics G1: skip prototype + body emission for generic
+		// skip prototype + body emission for generic
 		// functions. They get registered (so call sites can find them)
-		// but no LLVM is emitted until an instantiation in G5 supplies
+		// but no LLVM is emitted until an instantiation in supplies
 		// concrete type arguments.
 		if (!function->isGeneric()) {
 			function->declarePrototype(codegenCtx);
 			mainModuleEmits.push_back(function.get());
 		}
-		// P9: register by source-level name so call codegen can recover
+		// register by source-level name so call codegen can recover
 		// parameter modes for callsite ABI decisions. Generic functions
 		// also need to be in the registry — call sites consult it to
 		// drive instantiation.

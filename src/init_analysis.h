@@ -56,7 +56,7 @@ struct Diagnostic {
 };
 
 // Map of function name → FunctionAST* used by the analyzer to look up
-// callee parameter modes for callsite propagation (P4). The map is
+// callee parameter modes for callsite propagation. The map is
 // borrowed; the analyzer never owns the FunctionAST pointers. May be
 // null, in which case mode propagation is conservatively skipped at
 // every call site (caller's bindings are unchanged).

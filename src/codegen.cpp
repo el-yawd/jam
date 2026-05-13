@@ -146,9 +146,9 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 	}
 	case TypeKind::Named: {
 		// Parser-deferred user type. Resolution order:
-		//   1. Generics G6 substitution context (T, Self, __anon_struct_N)
+		//   1. substitution context (T, Self, __anon_struct_N)
 		//   2. struct/union/enum registries
-		//   3. type alias map (Generics G4)
+		//   3. type alias map
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 		TypeIdx substTarget = lookupCurrentSubst(name);
 		if (substTarget != kNoType) {
@@ -190,14 +190,14 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		break;
 	}
 	case TypeKind::Type:
-		// Generics G1: the meta-type has no runtime representation.
+		// the meta-type has no runtime representation.
 		// Reaching this path means a generic function leaked to LLVM
 		// codegen without being instantiated first.
 		throw std::runtime_error(
 		    "internal: cannot lower `type` to LLVM (generic was not "
 		    "instantiated before codegen)");
 	case TypeKind::GenericCall: {
-		// Generics G4: lazily resolve the call to a concrete TypeIdx
+		// lazily resolve the call to a concrete TypeIdx
 		// via the substitution engine, then recurse on the result.
 		// The resolution is memoized in genericResolutions so each
 		// distinct call site only does the work once.
@@ -260,7 +260,7 @@ const JamCodegenContext::StructInfo *
 JamCodegenContext::lookupStruct(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
-	// Generics G4: a `GenericCall` TypeIdx resolves to a concrete type
+	// a `GenericCall` TypeIdx resolves to a concrete type
 	// (typically a Named struct produced by instantiation). Recurse on
 	// the resolved TypeIdx so downstream lookups behave as if the user
 	// had written the instantiated name directly.
@@ -273,7 +273,7 @@ JamCodegenContext::lookupStruct(TypeIdx ty) const {
 		return nullptr;
 	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
-	// Generics G6: substitution context wins (T, Self, __anon_struct_N
+	// substitution context wins (T, Self, __anon_struct_N
 	// resolved per-instantiation during method body codegen).
 	TypeIdx substTarget = lookupCurrentSubst(name);
 	if (substTarget != kNoType) {
@@ -282,7 +282,7 @@ JamCodegenContext::lookupStruct(TypeIdx ty) const {
 	if (const StructInfo *direct = getStruct(name)) {
 		return direct;
 	}
-	// Generics G4: try the type alias table — `const BoxI32 = Box(i32);`
+	// try the type alias table — `const BoxI32 = Box(i32);`
 	// maps `BoxI32` to the instantiated struct's TypeIdx.
 	TypeIdx aliasTarget = lookupTypeAlias(name);
 	if (aliasTarget != kNoType) {
@@ -393,7 +393,7 @@ const JamCodegenContext::EnumInfo *
 JamCodegenContext::lookupEnum(TypeIdx ty) const {
 	if (ty == kNoType) return nullptr;
 	const TypeKey &k = typePool.get(ty);
-	// Generics G4: a GenericCall TypeIdx resolves to a concrete type;
+	// a GenericCall TypeIdx resolves to a concrete type;
 	// recurse on the resolved TypeIdx so generic enum instantiations
 	// (e.g. `Option(i32)` → `Option__i32`) resolve uniformly.
 	if (k.kind == TypeKind::GenericCall) {
@@ -406,7 +406,7 @@ JamCodegenContext::lookupEnum(TypeIdx ty) const {
 	}
 	const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 	if (const EnumInfo *direct = getEnum(name)) return direct;
-	// Generics G4: try the type alias table — `const OptI32 =
+	// try the type alias table — `const OptI32 =
 	// Option(i32);` maps `OptI32` to the instantiated enum's TypeIdx.
 	TypeIdx aliasTarget = lookupTypeAlias(name);
 	if (aliasTarget != kNoType) {
@@ -441,7 +441,7 @@ void JamCodegenContext::registerModuleConst(const std::string &name,
 	moduleConsts[name] = ModuleConstInfo{init, declared};
 }
 
-// P8.1+P8.3: drop tracking with a scope stack. registerLocalDrop pushes
+// drop tracking with a scope stack. registerLocalDrop pushes
 // to the topmost active scope; pushDropScope/popDropScope are called at
 // block boundaries by the codegen. clearDrops resets the entire stack
 // (called at function-body entry).
@@ -461,7 +461,7 @@ void JamCodegenContext::popDropScope() {
 
 void JamCodegenContext::clearDrops() { dropScopes.clear(); }
 
-// P9: function-AST lookup. main.cpp registers each Jam-defined function
+// function-AST lookup. main.cpp registers each Jam-defined function
 // by source-level name so call codegen can recover the parameter modes
 // and route ByPointer-classified Let/Move args through implicit
 // address-of at the call site.
@@ -520,7 +520,7 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		       typeSize(static_cast<TypeIdx>(k.a));
 	case TypeKind::Struct:
 	case TypeKind::Named: {
-		// Generics G6: a Named type may be a substitution-context
+		// a Named type may be a substitution-context
 		// reference to a parameter (T → i32) or to Self. Resolve
 		// through the substitution map first; if found and the
 		// target is a primitive (Int/Float/etc.), the recursive
@@ -574,7 +574,7 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 			if (paddedPayload == 0) return 2 * mPA;
 			return mPA + paddedPayload;
 		}
-		// Generics G4: alias lookup fallback, same as typeAlign.
+		// alias lookup fallback, same as typeAlign.
 		if (TypeIdx aliasTarget = lookupTypeAlias(substName);
 		    aliasTarget != kNoType) {
 			return typeSize(aliasTarget);
@@ -603,7 +603,7 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		// Meta-type has no runtime size.
 		return 0;
 	case TypeKind::GenericCall:
-		// G4: resolve and recurse.
+		// resolve and recurse.
 		return typeSize(resolveGenericCall(ty));
 	}
 	throw std::runtime_error("typeSize: unhandled type kind");
@@ -631,7 +631,7 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		return typeAlign(static_cast<TypeIdx>(k.a));
 	case TypeKind::Struct:
 	case TypeKind::Named: {
-		// Generics G6: substitution context wins. A Named type may
+		// substitution context wins. A Named type may
 		// be a parameter reference (T → i32) or Self that resolves
 		// to a non-aggregate; the recursive call handles primitives.
 		const std::string &substName =
@@ -659,7 +659,7 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		if (const EnumInfo *info = lookupEnum(ty)) {
 			return info->hasPayloadVariant ? info->maxPayloadAlign : 1;
 		}
-		// Generics G4: a Named TypeIdx may be a type alias produced by
+		// a Named TypeIdx may be a type alias produced by
 		// `const Foo = Bar(args);`. Resolve through the alias table
 		// and recurse — matches lookupStruct's behavior.
 		if (TypeIdx aliasTarget = lookupTypeAlias(substName);
@@ -692,7 +692,7 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 	throw std::runtime_error("typeAlign: unhandled type kind");
 }
 
-// Generics G4: substitution engine for `Identifier(arg, ...)` types.
+// substitution engine for `Identifier(arg, ...)` types.
 
 namespace {
 
@@ -934,7 +934,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 	JamLLVMStructSetBody(llvmStruct, fieldLLVM.data(),
 	                     static_cast<unsigned>(fieldLLVM.size()), false);
 
-	// Generics G6: instantiate methods. Two passes so methods on the
+	// instantiate methods. Two passes so methods on the
 	// same struct can call each other regardless of declaration order
 	// — the first pass clones + registers + declares LLVM prototypes
 	// for every method (so any later self.method() lookup succeeds);

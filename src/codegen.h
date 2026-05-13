@@ -166,7 +166,7 @@ class JamCodegenContext {
 	                         TypeIdx declared);
 	const ModuleConstInfo *getModuleConst(const std::string &name) const;
 
-	// MVS P8.1: drop emission state.
+	// drop emission state.
 	//
 	// The DropRegistry pointer is set once per module before codegen begins
 	// and lives for the duration of the run. When VarDecl codegen sees a
@@ -185,7 +185,7 @@ class JamCodegenContext {
 	const jam::drops::DropRegistry *getDropRegistry() const {
 		return dropRegistry;
 	}
-	// Generics G6: look up a drop method for an instantiated struct
+	// look up a drop method for an instantiated struct
 	// (e.g. Box__i32). Falls back to the pre-built drop registry.
 	// Returns nullptr if the struct has no drop method.
 	const FunctionAST *lookupDropFn(const std::string &structName) const {
@@ -217,7 +217,7 @@ class JamCodegenContext {
 	JamBuilderRef builder;
 	std::map<std::string, JamValueRef> namedValues;
 	std::map<std::string, TypeIdx> namedValueTypes;
-	// `structs` is mutable because Generics G4 lazily instantiates new
+	// `structs` is mutable because lazily instantiates new
 	// struct types (e.g. `Maybe(File)`) on demand from inside the
 	// otherwise-const `resolveGenericCall` / `getLLVMType` paths.
 	mutable std::map<std::string, StructInfo> structs;
@@ -264,13 +264,13 @@ class JamCodegenContext {
 	JamValueRef sretSlot = nullptr;
 	TypeIdx currentReturnType_ = kNoType;
 
-	// Generics G4: cache mapping from the deferred-call TypeIdx (a
+	// cache mapping from the deferred-call TypeIdx (a
 	// `TypeKind::GenericCall` entry) to the concrete TypeIdx produced
 	// by substitution + memoization. Populated lazily from
 	// resolveGenericCall.
 	mutable std::unordered_map<TypeIdx, TypeIdx> genericResolutions_;
 
-	// Generics G4: borrowed pointer to the parsed module's anonymous
+	// borrowed pointer to the parsed module's anonymous
 	// struct bodies (those produced by `struct { ... }` expressions).
 	// Set by main.cpp before any codegen runs. The substitution engine
 	// reads from here when resolving generic calls whose bodies contain
@@ -283,21 +283,21 @@ class JamCodegenContext {
 	const std::vector<std::unique_ptr<EnumDeclAST>> *anonEnums_ =
 	    nullptr;
 
-	// Generics G4: type alias table. `const BoxI32 = Box(i32);` registers
+	// type alias table. `const BoxI32 = Box(i32);` registers
 	// `BoxI32 → resolved-TypeIdx-of-Box(i32)`. Consulted by lookupStruct
 	// (and by getLLVMType via the recursive lookup path) so a binding
 	// declared `var b: BoxI32` finds the same struct that `Box(i32)`
 	// would produce.
 	mutable std::map<std::string, TypeIdx> typeAliases_;
 
-	// Generics G6: clones of FunctionASTs produced by method
+	// clones of FunctionASTs produced by method
 	// instantiation. Each clone has substituted parameter and return
 	// types and a unique source-level name (`Box__i32.unwrap`) so the
 	// existing function registry / LLVM symbol pipeline handles them
 	// as ordinary functions.
 	mutable std::vector<std::unique_ptr<FunctionAST>> instantiatedMethods_;
 
-	// Generics G6: drop methods on instantiated types. The pre-built
+	// drop methods on instantiated types. The pre-built
 	// drop registry is borrowed via const pointer and was populated
 	// before lazy instantiation. Drop methods produced by
 	// instantiateStructExpr go here and are consulted alongside the
@@ -305,14 +305,14 @@ class JamCodegenContext {
 	mutable std::unordered_map<std::string, const FunctionAST *>
 	    instantiatedDrops_;
 
-	// Generics G6: type substitution context active during codegen of an
+	// type substitution context active during codegen of an
 	// instantiated method's body. Lookups of Named types (T, Self,
 	// __anon_struct_N) consult this map first. Set/cleared around
 	// declarePrototype + defineBody calls in instantiateStructExpr.
 	mutable std::unordered_map<std::string, TypeIdx> currentSubst_;
 
   public:
-	// Generics G6: snapshot/restore of the per-function codegen state.
+	// snapshot/restore of the per-function codegen state.
 	// Used to wrap recursive method instantiation that runs inside the
 	// outer caller's codegen flow — the inner declarePrototype +
 	// defineBody would otherwise clear the caller's variables and
@@ -340,13 +340,13 @@ class JamCodegenContext {
 		self.sretSlot = s.sretSlot;
 	}
 
-	// Generics G4: resolve a `TypeKind::GenericCall` TypeIdx to a concrete
+	// resolve a `TypeKind::GenericCall` TypeIdx to a concrete
 	// TypeIdx by running the substitution engine on the generic
 	// function's body. Result is memoized — subsequent calls with the
 	// same TypeIdx hit the cache and return the same concrete TypeIdx.
 	TypeIdx resolveGenericCall(TypeIdx callTy) const;
 
-	// Generics G4: register the anonymous-struct table for the current
+	// register the anonymous-struct table for the current
 	// module so the substitution engine can find struct expression
 	// bodies by their AnonStructs index.
 	void setAnonStructs(
@@ -359,7 +359,7 @@ class JamCodegenContext {
 		anonEnums_ = ae;
 	}
 
-	// Generics G4: register a type alias (`const Name = Box(i32);`).
+	// register a type alias (`const Name = Box(i32);`).
 	// Consulted by lookupStruct when resolving a Named TypeIdx whose
 	// name matches an alias.
 	void registerTypeAlias(const std::string &name, TypeIdx target) {
@@ -371,7 +371,7 @@ class JamCodegenContext {
 		return kNoType;
 	}
 
-	// Generics G6: substitution context manipulators. The map is active
+	// substitution context manipulators. The map is active
 	// only during codegen of an instantiated method's body — set right
 	// before declarePrototype/defineBody, cleared right after.
 	void setCurrentSubst(
@@ -386,7 +386,7 @@ class JamCodegenContext {
 	}
 
   private:
-	// Generics G4: instantiate a `struct {...}` expression as the result
+	// instantiate a `struct {...}` expression as the result
 	// of a generic call. Substitutes each field's type with the
 	// concrete generic args, creates a fresh LLVM struct type with a
 	// synthesized name, and returns a Named TypeIdx pointing at it.

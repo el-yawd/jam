@@ -1116,7 +1116,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 				}
 			}
 
-			// Generics G6: if `typeName` is `Self` and we're inside
+			// if `typeName` is `Self` and we're inside
 			// the body of an instantiated method, the substitution
 			// context maps `Self` to the synthetic anon-struct name,
 			// which in turn maps to the instantiated struct's Named
@@ -1147,7 +1147,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 				}
 			}
 
-			// Generics G4/G6: if the LHS is a type alias
+			// if the LHS is a type alias
 			// (`const BoxI32 = Box(i32);`), resolve it to the
 			// canonical instantiated struct name (`Box__i32`) and
 			// look up the method there. Both `BoxI32.unwrap` and
@@ -1196,7 +1196,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		throw std::runtime_error("Unknown function referenced: " + callee);
 	}
 
-	// P9.5: when the callee's parameter is a Let/Move-mode aggregate that
+	// when the callee's parameter is a Let/Move-mode aggregate that
 	// the ABI classifier sends ByPointer (size > 16 B), the call site
 	// implicitly passes the address of the arg's storage rather than the
 	// value. The user does NOT write `&` for these — by-value semantics
@@ -1204,7 +1204,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	// optimization. (Mut and Undefined modes still require explicit `&`
 	// at the call site since their borrow shape is user-visible.)
 	//
-	// Generics G6: lookupName is the resolved name (alias-canonicalized)
+	// lookupName is the resolved name (alias-canonicalized)
 	// for instantiated methods. For non-method calls it equals callee.
 	const FunctionAST *calleeAST = ctx.getFunctionAST(lookupName);
 	if (!calleeAST) calleeAST = ctx.getFunctionAST(callee);
@@ -1252,7 +1252,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			    JamLLVMGetParam(CalleeF, i + calleeSretOffset));
 
 			bool autoAddress = false;
-			// P9.8: extern callees follow the C ABI literally; never
+			// extern callees follow the C ABI literally; never
 			// auto-address. The user wrote the FFI-facing parameter
 			// types directly, and LLVM's backend handles any byval
 			// passing per the platform's MEMORY classification.
@@ -1311,7 +1311,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	JamValueRef callResult = JamLLVMBuildCall(
 	    ctx.getBuilder(), CalleeF, ArgsV.data(), ArgsV.size(), callName);
 
-	// P9.6: when sret was used, the call returned void and the actual
+	// when sret was used, the call returned void and the actual
 	// result lives in the pre-allocated slot. Load it so the surrounding
 	// expression sees the value.
 	if (calleeSretSlot != nullptr) {
@@ -1364,7 +1364,7 @@ static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 		}
 	}
 
-	// P9.6: when the enclosing function returns via sret, the codegen
+	// when the enclosing function returns via sret, the codegen
 	// stores the return value into the caller-provided slot rather than
 	// returning by value. The slot's LLVM pointee type tells us what
 	// shape the codegen of the return expression should produce.
@@ -1727,7 +1727,7 @@ static void emitOneDrop(JamCodegenContext &ctx,
 	JamLLVMBuildCall(ctx.getBuilder(), dropFn, args, 1, "");
 }
 
-// P8.3: emit drops for the topmost active scope, in reverse declaration
+// emit drops for the topmost active scope, in reverse declaration
 // order. Used at the end of nested blocks (if/else arms, while/for body,
 // match arm body, function body fall-through) just before branching to
 // the merge / cond / next-statement BB.
@@ -1740,7 +1740,7 @@ static void emitTopScopeDrops(JamCodegenContext &ctx) {
 	}
 }
 
-// P8.3: emit drops for every active scope, innermost-first. Used at every
+// emit drops for every active scope, innermost-first. Used at every
 // `return` statement so a return inside a nested block drops both the
 // block-scoped locals and the outer function-scoped locals.
 static void emitAllScopeDrops(JamCodegenContext &ctx) {
@@ -1752,7 +1752,7 @@ static void emitAllScopeDrops(JamCodegenContext &ctx) {
 	}
 }
 
-// P8.4: emit drops for every scope from the innermost down to (and
+// emit drops for every scope from the innermost down to (and
 // including) `targetScopeIdx`. Used by `break` and `continue` to drop
 // the loop body's locals — and any deeper nested scopes — before
 // branching out of (or to the next iteration of) the loop. The function
@@ -1855,7 +1855,7 @@ static JamValueRef codegenWhile(JamCodegenContext &ctx, const AstNode &n) {
 	JamLLVMBuildCondBr(ctx.getBuilder(), CondV, LoopBB, AfterBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), LoopBB);
-	// P8.4: the loop body's scope is the next one to be pushed.
+	// the loop body's scope is the next one to be pushed.
 	CurrentLoopBodyScopeIdx = ctx.getDropScopes().size();
 	ctx.pushDropScope();
 	for (uint32_t i = 0; i < bodyCount; i++) {
@@ -1988,7 +1988,7 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 // without us emitting `switch` ourselves.
 //
 // The Maranget decision-tree formalism degenerates to "specialize the only
-// column" in M1 (one scrutinee, one column); the cascade is the canonical
+// column" in (one scrutinee, one column); the cascade is the canonical
 // one-column lowering. M2+ replaces this with a multi-column tree.
 
 // Build a boolean (i1) value that is true iff the scrutinee matches the
@@ -2073,7 +2073,7 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 	}
 	default:
 		throw std::runtime_error(
-		    "Unsupported pattern node kind in M1 codegen");
+		    "Unsupported pattern node kind in codegen");
 	}
 }
 
@@ -2087,7 +2087,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	// Arm records begin immediately after the armCount slot.
 	uint32_t armsOff = 1;
 
-	// E3 — compile-time exhaustiveness + reachability over enum
+	// compile-time exhaustiveness + reachability over enum
 	// variants. We scan all arm patterns once, accumulating which
 	// variants are covered and detecting duplicates (an arm that
 	// would never run because an earlier arm already covers it).
@@ -2188,7 +2188,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	// Evaluate the scrutinee once. The value is reused for every pattern
 	// test below; LLVM mem2reg promotes the local to an SSA value for
 	// free. We also alloca a slot holding the scrutinee so payload
-	// bindings (E2) can GEP into the {tag, payload} struct.
+	// bindings can GEP into the {tag, payload} struct.
 	JamValueRef scrut = codegenNode(ctx, scrutIdx);
 	if (!scrut) return nullptr;
 	JamTypeRef scrutType = JamLLVMTypeOf(scrut);
@@ -2819,8 +2819,8 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return codegenStringLit(
 		    ctx, ctx.getStringPool().get(static_cast<StringIdx>(n.lhs)));
 	case AstTag::StructExpr:
-		// Generics G2: a `struct {...}` expression evaluates to a `type`
-		// value at compile time. The substitution engine in G4 consumes
+		// a `struct {...}` expression evaluates to a `type`
+		// value at compile time. The substitution engine in consumes
 		// these from ModuleAST::AnonStructs. Reaching this case during
 		// regular codegen means a generic function leaked through —
 		// generics should be skipped at the function-emit pass.
@@ -2888,7 +2888,7 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		if (!CurrentLoopBreak) {
 			throw std::runtime_error("break statement not inside a loop");
 		}
-		// P8.4: drop all scopes inside (and including) the enclosing
+		// drop all scopes inside (and including) the enclosing
 		// loop body before exiting the loop.
 		emitDropsThroughScope(ctx, CurrentLoopBodyScopeIdx);
 		JamLLVMBuildBr(ctx.getBuilder(), CurrentLoopBreak);
@@ -2897,7 +2897,7 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		if (!CurrentLoopContinue) {
 			throw std::runtime_error("continue statement not inside a loop");
 		}
-		// P8.4: drop all scopes inside (and including) the enclosing
+		// drop all scopes inside (and including) the enclosing
 		// loop body before jumping to the next iteration.
 		emitDropsThroughScope(ctx, CurrentLoopBodyScopeIdx);
 		JamLLVMBuildBr(ctx.getBuilder(), CurrentLoopContinue);
@@ -2989,7 +2989,7 @@ JamValueRef resolveLvaluePtr(JamCodegenContext &ctx, NodeIdx node,
 // any body. That's what lets `main` (or any caller) appear above its
 // callees in source order.
 
-// P8.2: name-mangling for `fn drop(self: mut T)`. When the source-level
+// name-mangling for `fn drop(self: mut T)`. When the source-level
 // name "drop" coincides with a recognizable drop-fn signature, mangle to
 // "__drop_<TypeName>" at the LLVM level so multiple types can each have
 // their own drop fn without colliding. Used by declarePrototype,
@@ -3040,7 +3040,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	if (!isTest) {
 		for (const auto &arg : Args) {
 			if (isExtern) {
-				// P9.8: extern fns follow the C ABI literally. The user
+				// extern fns follow the C ABI literally. The user
 				// already wrote the parameter types as they want them
 				// to appear at the FFI boundary (e.g. `*const T` for a
 				// pointer arg, `u32` for a scalar). LLVM's backend
@@ -3088,7 +3088,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 		JamLLVMSetLinkage((JamValueRef)F, JAM_LINKAGE_INTERNAL);
 	}
 
-	// P9.6: when the function uses sret, the user's parameter at source
+	// when the function uses sret, the user's parameter at source
 	// index `i` lives at LLVM index `i + 1` (the sret slot is index 0).
 	const unsigned argOffset =
 	    (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) ? 1u : 0u;
@@ -3129,7 +3129,7 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	ctx.clearDrops();
 	ctx.pushDropScope();  // function-level scope
 
-	// P9.6: if this function uses sret, the leading LLVM arg is the
+	// if this function uses sret, the leading LLVM arg is the
 	// caller-provided result slot. Record it so codegenReturn writes
 	// through it; user parameters shift one slot to the right.
 	jam::abi::ReturnABI rabi =

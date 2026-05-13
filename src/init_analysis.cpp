@@ -19,7 +19,7 @@
 // `if` / `match` AST shape; loops merge their body output back with the
 // pre-loop state.
 //
-// P2 scope (this file):
+// Scope (this file):
 //   - Tracks state for locals declared `var name: T = ...`.
 //   - Function parameters enter as Init (modes are applied in P3).
 //   - Detects reads of Uninit / MaybeInit Variable nodes.
@@ -27,7 +27,7 @@
 //   - while/for/match: single-pass merge of body output with pre-state
 //     (sound for most patterns; refine to fixed-point if needed).
 //
-// Out of P2 scope (deferred):
+// Out of scope (deferred):
 //   - Field-level init tracking (struct.field, array[i] partial init).
 //   - Mode-aware parameter entry states.
 //   - `move` / `undefined` callsite mode propagation.
@@ -95,7 +95,7 @@ class Analyzer {
 	StringIdx findBasePathBinding(NodeIdx argIdx) const;
 
 	// One step in a borrow path: a field projection, an array indexing,
-	// or a dereference. Used by the exclusivity check (P5) to compare two
+	// or a dereference. Used by the exclusivity check to compare two
 	// arg expressions for overlapping access.
 	struct PathStep {
 		enum Kind : uint8_t { Field, Index, Deref };
@@ -146,7 +146,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	varTypes_.clear();
 
 	NameMap state;
-	// P3: parameter entry state depends on the declared mode.
+	// parameter entry state depends on the declared mode.
 	//   Let / Mut / Move → Init (caller's binding is valid)
 	// `move` does not change anything for the callee's view of its own
 	// parameter — the moved-from-ness applies to the *caller's* binding
@@ -293,7 +293,7 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 	case AstTag::StringLit:
 	case AstTag::ImportLit:
 	case AstTag::AtCall:
-	// Generics G2: `struct {...}` / `enum { ... }` expressions evaluate
+	// `struct {...}` / `enum { ... }` expressions evaluate
 	// to a value of type `type` at compile time. The bodies live in
 	// ModuleAST and are processed by the substitution engine — the
 	// analyzer doesn't see them because generic functions skip analysis
@@ -358,7 +358,7 @@ Result Analyzer::analyzeAssign(NodeIdx idx, NameMap state) {
 // Variable in the path — is being *written to*, not read, so it does not
 // trigger a read check. Sub-expressions like array indices *are* reads.
 //
-// In P2, any write to a sub-path (`arr[i] = x`, `s.field = x`) marks the
+// In any write to a sub-path (`arr[i] = x`, `s.field = x`) marks the
 // whole base binding as Init. This is intentionally imprecise: P2 does
 // not track field-level init. A later phase can refine this to only mark
 // the touched sub-path.
@@ -544,7 +544,7 @@ Result Analyzer::analyzeMatch(NodeIdx idx, NameMap state) {
 
 Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 	const AstNode &n = nodes_.get(idx);
-	// P5.5: scope-escape check before any reads of the operand. Returning
+	// scope-escape check before any reads of the operand. Returning
 	// `&` of a borrow-shaped (mut/undefined) parameter would extend the
 	// borrow's lifetime past the call frame. Returning the parameter as
 	// a value (without `&`) is a copy and is fine — that's value semantics.
@@ -552,7 +552,7 @@ Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 
 	Result r{std::move(state), false};
 	if (n.lhs != kNoNode) { r = analyze(n.lhs, std::move(r.state)); }
-	// P8.2: every drop-bearing local must be Init at every return path —
+	// every drop-bearing local must be Init at every return path —
 	// codegen will emit drop on it at this exit, and dropping uninit
 	// memory is UB.
 	checkDropBearingLocalsInit(r.state, idx);
@@ -580,7 +580,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 	uint32_t argCount = nodes_.getExtra(extra);
 
 	// Pre-pass: collect (path, mode) for each arg so we can run the
-	// exclusivity check (P5) before applying any state transitions.
+	// exclusivity check before applying any state transitions.
 	// Doing this first means a flagged conflict still surfaces even if
 	// one of the args would have terminated the analysis (rare).
 	struct ArgInfo {
@@ -599,7 +599,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 		argInfos.push_back({argIdx, mode, extractPath(argIdx)});
 	}
 
-	// P5: exclusivity rule. For each pair of args with overlapping paths,
+	// exclusivity rule. For each pair of args with overlapping paths,
 	// the borrow set is OK only if both modes are Let (multiple readers).
 	// Any other combination on overlapping paths is rejected.
 	for (std::size_t i = 0; i < argInfos.size(); i++) {
@@ -634,14 +634,14 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 			if (info.path.base != kNoString) {
 				const std::string &name = strings_.get(info.path.base);
 
-				// P8 foundation: reject `move` on a drop-bearing binding
+				// reject `move` on a drop-bearing binding
 				// until move-aware drop tracking lands in P8.1. Without
 				// it, codegen would emit drop on the moved-out slot at
 				// scope exit — a double-free.
 				if (lookupDropFor(name) != nullptr) {
 					emitError("cannot `move` binding `" + name +
 					              "` of drop-bearing type — drop+move "
-					              "tracking is not yet implemented (P8.1); "
+					              "tracking is not yet implemented; "
 					              "consider passing as `mut` or `let` "
 					              "instead",
 					          info.argIdx, name);
@@ -846,7 +846,7 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 		const std::string &name = sv.first;
 		// Skip parameters — drops for owning-mode params would belong to
 		// the caller's binding, not the callee. Today's codegen only
-		// drops `var` locals (P8.1).
+		// drops `var` locals.
 		bool isParam = false;
 		if (args_) {
 			for (const Param &p : *args_) {

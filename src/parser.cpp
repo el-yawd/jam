@@ -109,7 +109,7 @@ std::string Parser::qualifiedName(NodeIdx chainRoot) const {
 
 NodeIdx Parser::parsePrimary() {
 	// `match (…) { … }` is also valid in expression position so it can
-	// produce a value (M3). The same call works for both statement and
+	// produce a value. The same call works for both statement and
 	// expression forms; the codegen builds a phi over arm values.
 	if (check(TOK_MATCH)) { return parseMatch(); }
 
@@ -574,7 +574,7 @@ NodeIdx Parser::parsePatternAtom() {
 			consume(TOK_NUMBER, "Expected upper bound after `..=`");
 			bool hiNeg = false;
 			uint64_t hi = parseNumLexeme(previous().lexeme, hiNeg);
-			// M1: range bounds fit in u32; truncate gracefully.
+			// range bounds fit in u32; truncate gracefully.
 			return emit(AstNode{AstTag::PatRange, 0, 0, 0,
 			                    static_cast<uint32_t>(lo & 0xFFFFFFFFu),
 			                    static_cast<uint32_t>(hi & 0xFFFFFFFFu)});
@@ -589,7 +589,7 @@ NodeIdx Parser::parsePatternAtom() {
 	// lexer in a future patch. For now, only TOK_NUMBER is accepted.
 	if (match(TOK_STRING_LITERAL)) {
 		throw std::runtime_error(
-		    "Char literals in patterns are not yet supported (M1)");
+		    "Char literals in patterns are not yet supported");
 	}
 	// Wildcard `_` is lexed as TOK_IDENTIFIER; recognize it here.
 	if (check(TOK_IDENTIFIER) && peek().lexeme == "_") {

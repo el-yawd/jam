@@ -34,7 +34,7 @@ namespace drops {
 //   - The init analyzer (P8 foundation) uses the registry to reject
 //     `move` on drop-bearing bindings until move-aware drop tracking
 //     lands in P8.1.
-//   - The codegen (P8.1) walks the registry to emit drop calls at
+//   - The codegen walks the registry to emit drop calls at
 //     scope exit for in-scope bindings of drop-bearing types.
 //
 // See docs/MVS.md §6 for the full drop semantics.
