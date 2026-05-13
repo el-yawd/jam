@@ -309,22 +309,63 @@ JAM_EXTERN_C char *JamLLVMGetDefaultTargetTriple(void);
 JAM_EXTERN_C char *JamLLVMGetHostCPUName(void);
 JAM_EXTERN_C char *JamLLVMGetHostCPUFeatures(void);
 
-// Optimization levels mirror llvm::CodeGenOpt::Level. Default for jam is
-// `None` to match Zig's Debug mode — Debug compiles 5-10× faster than -O2
-// because LLVM's machine codegen is the dominant cost.
+// Optimization levels selected at TargetMachine creation. Default for jam is
+// `None` to match Zig's Debug / rustc's `opt-level=0` — Debug compiles 5-10×
+// faster than -O2 because LLVM's machine codegen + the full new-PM module
+// pipeline are the dominant cost. The IR-level pipeline (inlining, GVN, SROA,
+// vectorization, MergeFunctions, globaldce, …) is driven by these values
+// inside JamLLVMEmitObjectFile.
+//
+// Maps to rustc's `-C opt-level=N` values; see compile_codegen_options in the
+// rustc source for the same mapping. SIZE/SMALL still run codegen at
+// Aggressive (instruction selection / regalloc have no "size" tier) — size
+// optimization happens at the IR-pipeline level and via function attributes.
 typedef enum {
-	JAM_OPT_NONE = 0,        // -O0 (Zig "Debug")
-	JAM_OPT_LESS = 1,        // -O1
-	JAM_OPT_DEFAULT = 2,     // -O2 (LLVM default)
-	JAM_OPT_AGGRESSIVE = 3,  // -O3 (Zig "ReleaseFast")
+	JAM_OPT_NONE = 0,        // -O0  (rustc `0`)
+	JAM_OPT_LESS = 1,        // -O1  (rustc `1`)
+	JAM_OPT_DEFAULT = 2,     // -O2  (rustc `2`, LLVM default)
+	JAM_OPT_AGGRESSIVE = 3,  // -O3  (rustc `3`, Zig "ReleaseFast")
+	JAM_OPT_SIZE = 4,        // -Os  (rustc `s` — moderate size; optsize attr)
+	JAM_OPT_SMALL = 5,       // -Oz  (rustc `z`, Zig "ReleaseSmall";
+	                         //       minsize + optsize attrs)
 } JamOptLevel;
+
+// Link-time optimization mode. When enabled, jam emits LLVM bitcode (.bc)
+// instead of an object file, and clang/lld re-runs the optimization pipeline
+// across the bitcode plus any LTO-compatible static libraries at link time.
+// Matches rustc's `-C lto={off,thin,fat}` and Zig's want_lto plumbing
+// (zig-0.10.1/src/Compilation.zig:1248-1273).
+//
+// Useful even though jam already compiles to a single combined module:
+// link-time LTO lets the optimizer see across into libc++/libc/static
+// archives that were themselves built with LTO bitcode, enabling
+// cross-boundary inlining and DCE.
+typedef enum {
+	JAM_LTO_OFF = 0,   // emit a regular object file (default)
+	JAM_LTO_THIN = 1,  // ThinLTO bitcode — fast, parallel link
+	JAM_LTO_FAT = 2,   // full LTO bitcode — slowest link, most opt
+} JamLTO;
+
+// Symbol/debug-info stripping mode applied at link time. Pure linker-flag
+// plumbing — emit-time IR doesn't carry debug info today, so these flags
+// remove the tiny tables (unwind info, dyld stubs, local symbols) that ld
+// emits by default. Matches rustc's `-C strip={none,debuginfo,symbols}`.
+typedef enum {
+	JAM_STRIP_NONE = 0,       // keep all debug info & symbols (default)
+	JAM_STRIP_DEBUGINFO = 1,  // strip debug info only
+	JAM_STRIP_SYMBOLS = 2,    // strip debug info + local symbols
+} JamStrip;
 
 JAM_EXTERN_C JamTargetMachineRef
 JamLLVMCreateTargetMachine(const char *triple, const char *cpu,
                            const char *features, bool isRelocationPIC,
-                           JamOptLevel optLevel);
+                           JamOptLevel optLevel, JamLTO lto);
 JAM_EXTERN_C void JamLLVMDisposeTargetMachine(JamTargetMachineRef tm);
 
+// Emits an object file at `filename` when the TargetMachine's LTO mode is
+// `JAM_LTO_OFF`. When LTO is on, emits LLVM bitcode at the same path — the
+// caller is responsible for choosing a `.bc`-shaped path and passing
+// `-flto={thin,full}` plus the bitcode file to the system linker.
 JAM_EXTERN_C bool JamLLVMEmitObjectFile(JamModuleRef mod,
                                         JamTargetMachineRef tm,
                                         const char *filename,

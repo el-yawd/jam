@@ -7,6 +7,11 @@
 
 #include "jam_llvm.h"
 
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -14,14 +19,19 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/OptimizationLevel.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <cstring>
 
@@ -46,8 +56,22 @@
 #define WRAP_FUNCTION(func) reinterpret_cast<JamFunctionRef>(func)
 #define UNWRAP_FUNCTION(func) reinterpret_cast<llvm::Function *>(func)
 
-#define WRAP_TARGET_MACHINE(tm) reinterpret_cast<JamTargetMachineRef>(tm)
-#define UNWRAP_TARGET_MACHINE(tm) reinterpret_cast<llvm::TargetMachine *>(tm)
+namespace {
+// Internal wrapper that pairs the TargetMachine with the JamOptLevel and LTO
+// mode the user requested. Both are captured at TargetMachine creation so the
+// emit step can build the correct new-PM pipeline (O0 / Oz / O1-O3, optionally
+// LTO pre-link) without changing the public C API. UNWRAP_TARGET_MACHINE still
+// yields the raw TargetMachine*, so existing callsites keep working.
+struct JamTargetMachineImpl {
+	llvm::TargetMachine *tm;
+	JamOptLevel optLevel;
+	JamLTO lto;
+};
+}  // namespace
+#define WRAP_TARGET_MACHINE(impl) reinterpret_cast<JamTargetMachineRef>(impl)
+#define UNWRAP_TARGET_MACHINE_IMPL(tm) \
+	reinterpret_cast<JamTargetMachineImpl *>(tm)
+#define UNWRAP_TARGET_MACHINE(tm) (UNWRAP_TARGET_MACHINE_IMPL(tm)->tm)
 
 void JamLLVMInitializeNativeTarget(void) { llvm::InitializeNativeTarget(); }
 
@@ -758,13 +782,23 @@ JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
                                                const char *cpu,
                                                const char *features,
                                                bool isRelocationPIC,
-                                               JamOptLevel optLevel) {
+                                               JamOptLevel optLevel,
+                                               JamLTO lto) {
 	std::string error;
 	const llvm::Target *target =
 	    llvm::TargetRegistry::lookupTarget(triple, error);
 	if (!target) { return nullptr; }
 
 	llvm::TargetOptions opt;
+	// Emit each function/global into its own section so the linker can drop
+	// the unreferenced ones at link time (-Wl,--gc-sections on ELF,
+	// -Wl,-dead_strip on Mach-O). Debug builds skip this — the extra section
+	// table entries cost compile time we don't want to pay there. Matches
+	// Zig's function_sections option (zig-0.10.1/src/Compilation.zig:939).
+	if (optLevel != JAM_OPT_NONE) {
+		opt.FunctionSections = true;
+		opt.DataSections = true;
+	}
 	auto rm = isRelocationPIC ? llvm::Reloc::PIC_ : llvm::Reloc::Static;
 
 	llvm::CodeGenOptLevel cgOpt;
@@ -773,18 +807,26 @@ JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
 	case JAM_OPT_LESS:       cgOpt = llvm::CodeGenOptLevel::Less; break;
 	case JAM_OPT_DEFAULT:    cgOpt = llvm::CodeGenOptLevel::Default; break;
 	case JAM_OPT_AGGRESSIVE: cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
+	// Codegen-level has no "size" tier — Zig also uses Aggressive for
+	// ReleaseSmall (zig-0.10.1/src/codegen/llvm.zig opt_level branch).
+	case JAM_OPT_SIZE:       cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
+	case JAM_OPT_SMALL:      cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
 	default:                 cgOpt = llvm::CodeGenOptLevel::None; break;
 	}
 
 	llvm::TargetMachine *tm = target->createTargetMachine(
 	    triple, cpu ? cpu : "generic", features ? features : "", opt, rm,
 	    std::nullopt, cgOpt);
+	if (!tm) { return nullptr; }
 
-	return WRAP_TARGET_MACHINE(tm);
+	auto *impl = new JamTargetMachineImpl{tm, optLevel, lto};
+	return WRAP_TARGET_MACHINE(impl);
 }
 
 void JamLLVMDisposeTargetMachine(JamTargetMachineRef tm) {
-	delete UNWRAP_TARGET_MACHINE(tm);
+	JamTargetMachineImpl *impl = UNWRAP_TARGET_MACHINE_IMPL(tm);
+	delete impl->tm;
+	delete impl;
 }
 
 bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
@@ -797,8 +839,104 @@ bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
 		return false;
 	}
 
+	llvm::Module *M = UNWRAP_MODULE(mod);
+	JamTargetMachineImpl *impl = UNWRAP_TARGET_MACHINE_IMPL(tm);
+	llvm::TargetMachine *targetMachine = impl->tm;
+	const JamOptLevel optLevel = impl->optLevel;
+	const JamLTO lto = impl->lto;
+	const bool isDebug = (optLevel == JAM_OPT_NONE);
+
+	// Size-optimized modes: stamp size-favoring attrs on every Jam-defined
+	// function so the inliner and the rest of the pipeline favor code size.
+	// Mirrors rustc's behavior: `s` adds optsize, `z` adds both minsize and
+	// optsize. Declarations are skipped — those are extern fns whose body
+	// lives in another translation unit; we don't get to dictate their
+	// inlining policy.
+	if (optLevel == JAM_OPT_SIZE || optLevel == JAM_OPT_SMALL) {
+		for (llvm::Function &F : *M) {
+			if (F.isDeclaration()) continue;
+			F.addFnAttr(llvm::Attribute::OptimizeForSize);
+			if (optLevel == JAM_OPT_SMALL) {
+				F.addFnAttr(llvm::Attribute::MinSize);
+			}
+		}
+	}
+
+	// New-PM module-level optimization pipeline. Without this we'd only run
+	// LLVM's codegen passes (instruction selection, register allocation),
+	// leaving every IR-level pass — inlining, GVN, mem2reg, SROA, loop opts,
+	// vectorization, MergeFunctions, globaldce — disabled. That made
+	// `--release` little better than `-O0` for real programs.
+	//
+	// Mirrors Zig's release pipeline (see
+	// misc/references/zig-0.10.1/src/zig_llvm.cpp ZigLLVMTargetMachineEmitToFile).
+	llvm::PipelineTuningOptions pto;
+	pto.LoopUnrolling = !isDebug;
+	pto.SLPVectorization = !isDebug;
+	pto.LoopVectorization = !isDebug;
+	pto.LoopInterleaving = !isDebug;
+	pto.MergeFunctions = !isDebug;
+
+	llvm::PassInstrumentationCallbacks pic;
+	llvm::StandardInstrumentations si(M->getContext(),
+	                                  /*DebugLogging=*/false);
+	si.registerCallbacks(pic);
+
+	llvm::PassBuilder pb(targetMachine, pto, std::nullopt, &pic);
+
+	llvm::LoopAnalysisManager lam;
+	llvm::FunctionAnalysisManager fam;
+	llvm::CGSCCAnalysisManager cam;
+	llvm::ModuleAnalysisManager mam;
+
+	fam.registerPass([&] { return pb.buildDefaultAAPipeline(); });
+	fam.registerPass([&] {
+		return llvm::TargetLibraryAnalysis(
+		    llvm::TargetLibraryInfoImpl(llvm::Triple(M->getTargetTriple())));
+	});
+
+	pb.registerModuleAnalyses(mam);
+	pb.registerCGSCCAnalyses(cam);
+	pb.registerFunctionAnalyses(fam);
+	pb.registerLoopAnalyses(lam);
+	pb.crossRegisterProxies(lam, fam, cam, mam);
+
+	llvm::OptimizationLevel level;
+	switch (optLevel) {
+	case JAM_OPT_NONE:       level = llvm::OptimizationLevel::O0; break;
+	case JAM_OPT_LESS:       level = llvm::OptimizationLevel::O1; break;
+	case JAM_OPT_DEFAULT:    level = llvm::OptimizationLevel::O2; break;
+	case JAM_OPT_AGGRESSIVE: level = llvm::OptimizationLevel::O3; break;
+	case JAM_OPT_SIZE:       level = llvm::OptimizationLevel::Os; break;
+	case JAM_OPT_SMALL:      level = llvm::OptimizationLevel::Oz; break;
+	default:                 level = llvm::OptimizationLevel::O0; break;
+	}
+
+	// LTO mode swaps in the LTO pre-link pipeline. The actual cross-module
+	// optimization happens at link time inside lld/ld's LTO plugin once it
+	// sees this module's bitcode plus any other LTO inputs.
+	llvm::ModulePassManager mpm;
+	if (level == llvm::OptimizationLevel::O0) {
+		mpm = pb.buildO0DefaultPipeline(level);
+	} else if (lto != JAM_LTO_OFF) {
+		mpm = pb.buildLTOPreLinkDefaultPipeline(level);
+	} else {
+		mpm = pb.buildPerModuleDefaultPipeline(level);
+	}
+
+	mpm.run(*M, mam);
+
+	// LTO modes emit bitcode; the linker will run the rest of the pipeline.
+	// Otherwise lower IR → MIR → object via the legacy codegen-PM (LLVM has
+	// not migrated codegen to the new PM yet).
+	if (lto != JAM_LTO_OFF) {
+		llvm::WriteBitcodeToFile(*M, dest);
+		dest.close();
+		return true;
+	}
+
 	llvm::legacy::PassManager pass;
-	if (UNWRAP_TARGET_MACHINE(tm)->addPassesToEmitFile(
+	if (targetMachine->addPassesToEmitFile(
 	        pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
 		if (errorMessage) {
 			*errorMessage = strdup("Target machine cannot emit object file");
@@ -806,7 +944,7 @@ bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
 		return false;
 	}
 
-	pass.run(*UNWRAP_MODULE(mod));
+	pass.run(*M);
 	dest.close();
 	return true;
 }

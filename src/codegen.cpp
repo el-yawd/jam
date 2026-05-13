@@ -489,6 +489,16 @@ JamCodegenContext::getModuleConst(const std::string &name) const {
 // callers needing exact struct sizes should ask LLVM via the data
 // layout instead. For union fields the simple sum is enough because we
 // pick the field with the largest size as the layout type.
+namespace {
+// Round `off` up to the next multiple of `align`. `align` must be a power of
+// two (which every Jam alignment value is, by construction). Used by all
+// aggregate-size paths so jam's typeSize matches LLVM's getTypeAllocSize for
+// the same struct/union/enum body.
+inline uint64_t alignUp(uint64_t off, uint64_t align) {
+	return (off + align - 1) / align * align;
+}
+}  // namespace
+
 uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 	const TypeKey &k = typePool.get(ty);
 	switch (k.kind) {
@@ -523,26 +533,46 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		}
 		// User-named types resolve through any of the three registries.
 		if (const StructInfo *info = lookupStruct(ty)) {
-			uint64_t total = 0;
-			for (const auto &f : info->fields) total += typeSize(f.second);
-			return total;
+			// Mirror LLVM's struct layout: each field starts at the next
+			// multiple of its own alignment, and the struct's total size
+			// is padded to its overall alignment so arrays-of-struct
+			// land elements at correctly aligned offsets. The old plain
+			// sum disagreed with LLVM for any struct containing a
+			// less-aligned trailing field — e.g. `{i64, i8}` would
+			// report 9 bytes while LLVM lays it out as 16.
+			uint64_t off = 0, maxAlign = 1;
+			for (const auto &f : info->fields) {
+				uint64_t a = typeAlign(f.second);
+				off = alignUp(off, a);
+				off += typeSize(f.second);
+				if (a > maxAlign) maxAlign = a;
+			}
+			return alignUp(off, maxAlign);
 		}
 		if (const UnionInfo *info = lookupUnion(ty)) {
-			uint64_t maxSize = 0;
+			uint64_t maxSize = 0, maxAlign = 1;
 			for (const auto &f : info->fields) {
 				uint64_t s = typeSize(f.second);
+				uint64_t a = typeAlign(f.second);
 				if (s > maxSize) maxSize = s;
+				if (a > maxAlign) maxAlign = a;
 			}
-			return maxSize;
+			return alignUp(maxSize, maxAlign);
 		}
 		if (const EnumInfo *info = lookupEnum(ty)) {
 			if (!info->hasPayloadVariant) return 1;
-			// {tag, payload}: tag (1 byte), padding to align, payload.
-			uint64_t padToAlign =
-			    (info->maxPayloadAlign > 1)
-			        ? info->maxPayloadAlign - 1
-			        : 0;
-			return 1 + padToAlign + info->maxPayloadSize;
+			// Layout matches `fillEnumBodies` in main.cpp: an
+			// `{i8 tag, alignDriver, [extraBytes x i8]}` named struct
+			// where alignDriver is the scalar whose alignment == enum
+			// alignment. LLVM places alignDriver at offset maxAlign
+			// (padding the tag out), then the optional trailing array,
+			// then pads the whole thing to maxAlign. The old formula
+			// `1 + (align-1) + maxPayloadSize` under-counted when the
+			// payload size wasn't already a multiple of the alignment.
+			uint64_t mPA = info->maxPayloadAlign;
+			uint64_t paddedPayload = alignUp(info->maxPayloadSize, mPA);
+			if (paddedPayload == 0) return 2 * mPA;
+			return mPA + paddedPayload;
 		}
 		// Generics G4: alias lookup fallback, same as typeAlign.
 		if (TypeIdx aliasTarget = lookupTypeAlias(substName);
@@ -558,12 +588,14 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 			throw std::runtime_error(
 			    "typeSize on unregistered union type");
 		}
-		uint64_t maxSize = 0;
+		uint64_t maxSize = 0, maxAlign = 1;
 		for (const auto &f : info->fields) {
 			uint64_t s = typeSize(f.second);
+			uint64_t a = typeAlign(f.second);
 			if (s > maxSize) maxSize = s;
+			if (a > maxAlign) maxAlign = a;
 		}
-		return maxSize;
+		return alignUp(maxSize, maxAlign);
 	}
 	case TypeKind::Enum:
 		return 1;  // M2 E1 enums lower to u8

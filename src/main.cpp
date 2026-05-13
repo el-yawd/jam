@@ -77,7 +77,8 @@ class SpinnerGuard {
 
 static int compileAndRun(const std::string &filename,
                          const std::string &outputName, bool runFlag,
-                         bool emitIR, bool testMode, bool releaseMode,
+                         bool emitIR, bool testMode, JamOptLevel optLevel,
+                         JamLTO lto, JamStrip strip,
                          const std::vector<std::string> &linkLibs) {
 	// Show a pink dot spinner during build/run; suppress for test mode (the
 	// per-test logging is its own progress indicator).
@@ -692,13 +693,13 @@ static int compileAndRun(const std::string &filename,
 	JamLLVMSetTargetTriple(codegenCtx.getModule(), tripleStr);
 
 	// Create target machine. Default to JAM_OPT_NONE (Zig Debug-equivalent)
-	// — LLVM's machine codegen at -O2 dominates compile time. Debug builds
-	// drop compile time roughly 30×; `--release` opts into -O3.
-	JamTargetMachineRef tm =
-	    JamLLVMCreateTargetMachine(tripleStr, "generic", "",
-	                               false,  // not PIC for now
-	                               releaseMode ? JAM_OPT_AGGRESSIVE
-	                                           : JAM_OPT_NONE);
+	// — LLVM's machine codegen + module pipeline at -O2 dominate compile
+	// time. Debug builds compile ~30× faster; `--release` opts into -O3,
+	// `--release-small` into -Oz.
+	JamTargetMachineRef tm = JamLLVMCreateTargetMachine(
+	    tripleStr, "generic", "",
+	    false,  // not PIC for now
+	    optLevel, lto);
 	JamLLVMDisposeMessage(tripleStr);
 
 	if (!tm) {
@@ -708,11 +709,14 @@ static int compileAndRun(const std::string &filename,
 
 	JamLLVMSetDataLayout(codegenCtx.getModule(), tm);
 
-	// Emit object file
-	std::string objectFile = outputName + ".o";
+	// Emit object file (or LLVM bitcode when LTO is on; the linker re-runs
+	// the optimization pipeline against the bitcode plus any LTO-compatible
+	// static libs and produces the final binary).
+	const std::string intermediate =
+	    (lto == JAM_LTO_OFF) ? (outputName + ".o") : (outputName + ".bc");
 	char *emitError = nullptr;
 	bool success = JamLLVMEmitObjectFile(codegenCtx.getModule(), tm,
-	                                     objectFile.c_str(), &emitError);
+	                                     intermediate.c_str(), &emitError);
 
 	JamLLVMDisposeTargetMachine(tm);
 
@@ -725,10 +729,60 @@ static int compileAndRun(const std::string &filename,
 
 	// Link to create executable using system compiler. Append any -l flags
 	// the user passed (`-lncurses`, `-l ncurses`, `--library ncurses`) so
-	// extern fns from system libraries resolve.
-	std::string linkCmd = "clang " + objectFile + " -o " + outputName;
+	// extern fns from system libraries resolve. When LTO is on, hand the
+	// bitcode to clang with `-flto=` so its driver picks the right linker
+	// plugin (lld for ELF, ld64 for Mach-O, both with LTO support).
+	std::string linkCmd = "clang " + intermediate + " -o " + outputName;
+	if (lto == JAM_LTO_THIN) linkCmd += " -flto=thin";
+	else if (lto == JAM_LTO_FAT) linkCmd += " -flto=full";
 	for (const auto &lib : linkLibs) {
 		linkCmd += " -l" + lib;
+	}
+
+	jam::Target host = jam::Target::getHostTarget();
+
+	// Strip unreferenced functions/data at link time. Pairs with
+	// FunctionSections / DataSections set on the TargetMachine, which split
+	// each symbol into its own section so the linker can GC them
+	// individually. Mach-O uses -dead_strip; ELF (Linux/FreeBSD) uses
+	// --gc-sections. Skipped in debug to keep link fast.
+	if (optLevel != JAM_OPT_NONE) {
+		switch (host.os) {
+		case jam::OS::MacOS:
+			linkCmd += " -Wl,-dead_strip";
+			break;
+		case jam::OS::Linux:
+		case jam::OS::FreeBSD:
+			linkCmd += " -Wl,--gc-sections";
+			break;
+		case jam::OS::Windows:
+		case jam::OS::Unknown:
+			// PE/COFF link.exe uses /OPT:REF; lld-link the same. clang
+			// driver translates --gc-sections appropriately when targeting
+			// COFF, but the safer minimum is to not pass it from here.
+			break;
+		}
+	}
+
+	// Symbol/debug-info stripping at link time. Pure linker-flag plumbing.
+	// Mach-O: -Wl,-S strips DWARF symbols; -Wl,-x removes local (non-global)
+	// syms. ELF: --strip-debug for debug only, -s (a.k.a. --strip-all) for
+	// everything. Symbols mode stacks debug+locals; rustc semantics.
+	if (strip != JAM_STRIP_NONE) {
+		switch (host.os) {
+		case jam::OS::MacOS:
+			linkCmd += " -Wl,-S";
+			if (strip == JAM_STRIP_SYMBOLS) linkCmd += " -Wl,-x";
+			break;
+		case jam::OS::Linux:
+		case jam::OS::FreeBSD:
+			linkCmd += (strip == JAM_STRIP_SYMBOLS) ? " -Wl,-s"
+			                                       : " -Wl,--strip-debug";
+			break;
+		case jam::OS::Windows:
+		case jam::OS::Unknown:
+			break;
+		}
 	}
 	int linkResult = system(linkCmd.c_str());
 	if (linkResult != 0) {
@@ -736,8 +790,8 @@ static int compileAndRun(const std::string &filename,
 		return 1;
 	}
 
-	// Clean up object file
-	std::remove(objectFile.c_str());
+	// Clean up the intermediate (object or bitcode) file.
+	std::remove(intermediate.c_str());
 
 	// Stop the spinner thread before either handing the terminal to the
 	// child process or printing the success line — otherwise the spinner
@@ -797,9 +851,31 @@ static void printHelp(const char *prog) {
 	             "run them\n"
 	             "\n"
 	             "Options:\n"
-	             "  --release       Optimized build (LLVM -O3). Default is "
-	             "debug (no opts,\n"
-	             "                  ~30× faster compile).\n"
+	             "  -C opt-level=N  Optimization level, rustc-style. Default "
+	             "is `0` (debug,\n"
+	             "                  ~30× faster compile). Accepts:\n"
+	             "                    0  no optimizations\n"
+	             "                    1  basic optimizations\n"
+	             "                    2  LLVM default (-O2)\n"
+	             "                    3  aggressive (-O3)\n"
+	             "                    s  optimize for size (-Os)\n"
+	             "                    z  aggressively optimize for size "
+	             "(-Oz)\n"
+	             "  -C lto=MODE     Link-time optimization. Default is "
+	             "`off`. Accepts:\n"
+	             "                    off   regular object file (no LTO)\n"
+	             "                    thin  ThinLTO bitcode — fast, "
+	             "parallel link\n"
+	             "                    fat   full LTO bitcode — slowest "
+	             "link, most opt\n"
+	             "  -C strip=MODE   Symbol / debug-info stripping. Default "
+	             "is `none`.\n"
+	             "                    none       keep all symbols & debug "
+	             "info\n"
+	             "                    debuginfo  strip DWARF / debug "
+	             "sections only\n"
+	             "                    symbols    strip debug + local "
+	             "symbols\n"
 	             "  --emit-ir       Print LLVM IR to stdout\n"
 	             "  --target-info   Show host target info (arch, triple, "
 	             "pointer size, ...)\n"
@@ -857,7 +933,9 @@ int main(int argc, char *argv[]) {
 	bool showTarget = false;
 	bool emitIR = false;
 	bool testMode = false;
-	bool releaseMode = false;
+	JamOptLevel optLevel = JAM_OPT_NONE;
+	JamLTO lto = JAM_LTO_OFF;
+	JamStrip strip = JAM_STRIP_NONE;
 	std::string filename;
 	std::string outputName = "output";
 	std::vector<std::string> linkLibs;
@@ -890,11 +968,94 @@ int main(int argc, char *argv[]) {
 			linkLibs.push_back(arg.substr(2));
 			continue;
 		}
-		// --release toggles LLVM optimizations (off by default — debug
-		// builds compile ~30× faster). Accepted in every mode.
+		// Friendly transition error: `--release` and `--release-small` were
+		// the old optimization flags. Direct users to the new -C syntax
+		// instead of letting the arg flow through as a phantom filename.
 		if (arg == "--release") {
-			releaseMode = true;
-			continue;
+			std::cerr << "Error: `--release` was removed; use `-C "
+			             "opt-level=3` instead"
+			          << std::endl;
+			return 1;
+		}
+		if (arg == "--release-small") {
+			std::cerr << "Error: `--release-small` was removed; use `-C "
+			             "opt-level=z` instead"
+			          << std::endl;
+			return 1;
+		}
+		// `-C key=value` codegen options, modeled after `rustc -C`. Accepts
+		// both `-C key=value` (space) and `-Ckey=value` (no space) like
+		// rustc. Default is debug (~30× faster compile).
+		//
+		// Supported keys:
+		//   opt-level={0,1,2,3,s,z} — LLVM IR + codegen optimization level.
+		//                              `s` = -Os, `z` = -Oz.
+		{
+			std::string codegenArg;
+			if (arg == "-C" && i + 1 < argc) {
+				codegenArg = argv[++i];
+			} else if (arg.length() > 2 && arg.substr(0, 2) == "-C") {
+				codegenArg = arg.substr(2);
+			}
+			if (!codegenArg.empty()) {
+				auto eq = codegenArg.find('=');
+				if (eq == std::string::npos) {
+					std::cerr << "Error: -C expects key=value, got `"
+					          << codegenArg << "`" << std::endl;
+					return 1;
+				}
+				std::string key = codegenArg.substr(0, eq);
+				std::string value = codegenArg.substr(eq + 1);
+				if (key == "opt-level") {
+					if (value == "0") optLevel = JAM_OPT_NONE;
+					else if (value == "1") optLevel = JAM_OPT_LESS;
+					else if (value == "2") optLevel = JAM_OPT_DEFAULT;
+					else if (value == "3") optLevel = JAM_OPT_AGGRESSIVE;
+					else if (value == "s") optLevel = JAM_OPT_SIZE;
+					else if (value == "z") optLevel = JAM_OPT_SMALL;
+					else {
+						std::cerr << "Error: -C opt-level expects one of "
+						             "0|1|2|3|s|z, got `"
+						          << value << "`" << std::endl;
+						return 1;
+					}
+				} else if (key == "lto") {
+					if (value == "off" || value == "false" ||
+					    value == "no") {
+						lto = JAM_LTO_OFF;
+					} else if (value == "thin") {
+						lto = JAM_LTO_THIN;
+					} else if (value == "fat" || value == "full" ||
+					           value == "true" || value == "yes") {
+						lto = JAM_LTO_FAT;
+					} else {
+						std::cerr << "Error: -C lto expects one of "
+						             "off|thin|fat, got `"
+						          << value << "`" << std::endl;
+						return 1;
+					}
+				} else if (key == "strip") {
+					if (value == "none" || value == "off" ||
+					    value == "false" || value == "no") {
+						strip = JAM_STRIP_NONE;
+					} else if (value == "debuginfo") {
+						strip = JAM_STRIP_DEBUGINFO;
+					} else if (value == "symbols") {
+						strip = JAM_STRIP_SYMBOLS;
+					} else {
+						std::cerr << "Error: -C strip expects one of "
+						             "none|debuginfo|symbols, got `"
+						          << value << "`" << std::endl;
+						return 1;
+					}
+				} else {
+					std::cerr << "Error: unknown -C key `" << key
+					          << "` (supported: opt-level, lto, strip)"
+					          << std::endl;
+					return 1;
+				}
+				continue;
+			}
 		}
 		// Inside `run`, anything else flag-shaped is an error.
 		if (runFlag) {
@@ -991,7 +1152,7 @@ int main(int argc, char *argv[]) {
 			std::filesystem::path p(f);
 			std::string perFileOutput = "jam_test_" + p.stem().string();
 			int rc = compileAndRun(f, perFileOutput, runFlag, emitIR, testMode,
-			                       releaseMode, linkLibs);
+			                       optLevel, lto, strip, linkLibs);
 			if (rc != 0) failed++;
 			else passed++;
 		}
@@ -1010,7 +1171,7 @@ int main(int argc, char *argv[]) {
 	// instantiation referencing a method the concrete type doesn't have).
 	try {
 		return compileAndRun(filename, outputName, runFlag, emitIR,
-		                     testMode, releaseMode, linkLibs);
+		                     testMode, optLevel, lto, strip, linkLibs);
 	} catch (const std::exception &e) {
 		std::cerr << filename << ": error: " << e.what() << std::endl;
 		return 1;
