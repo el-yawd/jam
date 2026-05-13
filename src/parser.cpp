@@ -919,6 +919,7 @@ NodeIdx Parser::parseMultiplication() {
 	while (true) {
 		BinOp k = BinOp::Invalid;
 		if (match(TOK_STAR)) k = BinOp::Mul;
+		else if (match(TOK_SLASH)) k = BinOp::Div;
 		else if (match(TOK_PERCENT)) k = BinOp::Mod;
 		else break;
 		NodeIdx rhs = parseUnary();

@@ -45,13 +45,14 @@ void Lexer::skipWhitespace() {
 			advance();
 			break;
 		case '/':
+			// `//` starts a line comment; bare `/` is the divide operator
+			// (lexed as TOK_SLASH at the main scan-loop level below).
 			if (peekNext() == '/') {
 				// Comment until end of line
 				while (peek() != '\n' && !isAtEnd()) advance();
-			} else {
-				return;
+				break;
 			}
-			break;
+			return;
 		default:
 			return;
 		}
@@ -530,6 +531,11 @@ std::vector<Token> Lexer::scanTokens() {
 
 		case '*':
 			addToken(TOK_STAR, "*");
+			break;
+		case '/':
+			// Bare `/` (not `//`, which skipWhitespace consumed as a
+			// comment): the division operator.
+			addToken(TOK_SLASH, "/");
 			break;
 		case '%':
 			addToken(TOK_PERCENT, "%");

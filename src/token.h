@@ -63,6 +63,7 @@ enum TokenType {
 	TOK_UNION,      // union keyword (untagged; FFI-shaped)
 	TOK_ENUM,       // enum keyword (tagged sum type; payload-less)
 	TOK_STAR,       // * (pointer prefix; multiplication)
+	TOK_SLASH,      // / (division)
 	TOK_PERCENT,    // % (modulo)
 	TOK_AMP,        // & (bitwise AND; address-of)
 	TOK_PIPE,       // | (bitwise OR)

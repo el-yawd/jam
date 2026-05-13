@@ -1,0 +1,153 @@
+// Integer `/` and `%`. The codegen picks signed (sdiv/srem) vs.
+// unsigned (udiv/urem) based on whether either operand expression has
+// a signed integer type — the same dispatch used for `<` / `<=` etc.
+// Previously `%` was hard-wired to urem so signed-negative remainders
+// gave wrong values, and `/` didn't exist at all.
+const { assert } = import("test");
+
+fn divU8(a: u8, b: u8) u8 {
+    return a / b;
+}
+
+fn modU8(a: u8, b: u8) u8 {
+    return a % b;
+}
+
+fn divU32(a: u32, b: u32) u32 {
+    return a / b;
+}
+
+fn modU32(a: u32, b: u32) u32 {
+    return a % b;
+}
+
+fn divU64(a: u64, b: u64) u64 {
+    return a / b;
+}
+
+fn modU64(a: u64, b: u64) u64 {
+    return a % b;
+}
+
+fn divI8(a: i8, b: i8) i8 {
+    return a / b;
+}
+
+fn modI8(a: i8, b: i8) i8 {
+    return a % b;
+}
+
+fn divI32(a: i32, b: i32) i32 {
+    return a / b;
+}
+
+fn modI32(a: i32, b: i32) i32 {
+    return a % b;
+}
+
+fn divI64(a: i64, b: i64) i64 {
+    return a / b;
+}
+
+fn modI64(a: i64, b: i64) i64 {
+    return a % b;
+}
+
+tfn unsignedDivU8() {
+    assert(divU8(20, 4), 5);
+    assert(divU8(7, 2), 3);     // truncates toward zero
+    assert(divU8(255, 1), 255); // wide dividend
+    assert(divU8(0, 5), 0);
+    assert(divU8(3, 7), 0);     // smaller / larger
+}
+
+tfn unsignedModU8() {
+    assert(modU8(20, 4), 0);
+    assert(modU8(7, 2), 1);
+    assert(modU8(255, 16), 15);
+    assert(modU8(0, 5), 0);
+    assert(modU8(3, 7), 3);     // smaller % larger == dividend
+}
+
+tfn unsignedDivU32() {
+    assert(divU32(1000000, 1000), 1000);
+    assert(divU32(4294967295, 65535), 65537);
+    assert(divU32(123456789, 1), 123456789);
+}
+
+tfn unsignedModU32() {
+    assert(modU32(1000000, 7), 1);
+    assert(modU32(4294967295, 10), 5);
+}
+
+tfn unsignedDivU64() {
+    assert(divU64(1000000000000, 1000000), 1000000);
+}
+
+tfn unsignedModU64() {
+    assert(modU64(1000000000007, 1000000000000), 7);
+}
+
+tfn signedDivI8() {
+    assert(divI8(20, 4), 5);
+    assert(divI8(-20, 4), -5);
+    assert(divI8(20, -4), -5);
+    assert(divI8(-20, -4), 5);
+    assert(divI8(7, 2), 3);
+    assert(divI8(-7, 2), -3);   // truncates toward zero, not toward -inf
+}
+
+tfn signedModI8() {
+    assert(modI8(20, 7), 6);
+    assert(modI8(-20, 7), -6);  // sign follows dividend (sdiv truncation)
+    assert(modI8(20, -7), 6);
+    assert(modI8(-20, -7), -6);
+}
+
+tfn signedDivI32() {
+    assert(divI32(-1000000, 1000), -1000);
+    assert(divI32(1000000, -1000), -1000);
+    assert(divI32(-2147483648, 1), -2147483648); // INT_MIN
+}
+
+tfn signedModI32() {
+    assert(modI32(-100, 7), -2);
+    assert(modI32(100, -7), 2);
+    assert(modI32(-100, -7), -2);
+}
+
+tfn signedDivI64() {
+    assert(divI64(-1000000000000, 1000000), -1000000);
+}
+
+tfn signedModI64() {
+    assert(modI64(-1000000000007, 1000000000000), -7);
+}
+
+tfn divPrecedenceMatchesMul() {
+    // `/` and `*` are same-precedence, left-associative — `10 / 2 * 3`
+    // groups as `(10 / 2) * 3 = 15`, not `10 / (2 * 3) = 1`.
+    var a: u32 = 10 / 2 * 3;
+    var b: u32 = 100 - 20 / 4;  // `*`/`/` bind tighter than `-`
+    var c: u32 = 6 * 4 / 3;
+    assert(a, 15);
+    assert(b, 95);
+    assert(c, 8);
+}
+
+tfn divChainedSameType() {
+    var a: u32 = 1000 / 10 / 5;
+    assert(a, 20);
+}
+
+tfn modCombinedWithDiv() {
+    // `q*b + r == a` is the integer-division identity. Sanity-check it
+    // for both sign combinations.
+    var a: i32 = -17;
+    var b: i32 = 5;
+    var q: i32 = a / b;
+    var r: i32 = a % b;
+    assert(q, -3);
+    assert(r, -2);
+    assert(q * b + r, a);
+}

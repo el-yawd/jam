@@ -907,8 +907,20 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 		return JamLLVMBuildSub(ctx.getBuilder(), L, R, "subtmp");
 	case BinOp::Mul:
 		return JamLLVMBuildMul(ctx.getBuilder(), L, R, "multmp");
-	case BinOp::Mod:
-		return JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
+	case BinOp::Div: {
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
+		return signed_
+		           ? JamLLVMBuildSDiv(ctx.getBuilder(), L, R, "divtmp")
+		           : JamLLVMBuildUDiv(ctx.getBuilder(), L, R, "divtmp");
+	}
+	case BinOp::Mod: {
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
+		return signed_
+		           ? JamLLVMBuildSRem(ctx.getBuilder(), L, R, "remtmp")
+		           : JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
+	}
 	case BinOp::BitAnd:
 		return JamLLVMBuildAnd(ctx.getBuilder(), L, R, "andtmp");
 	case BinOp::BitOr:

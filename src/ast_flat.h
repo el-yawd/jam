@@ -179,6 +179,7 @@ enum class BinOp : uint8_t {
 	Add,
 	Sub,
 	Mul,
+	Div,
 	Mod,
 	BitAnd,
 	BitOr,

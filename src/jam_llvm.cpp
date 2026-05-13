@@ -593,6 +593,24 @@ JamValueRef JamLLVMBuildURem(JamBuilderRef builder, JamValueRef lhs,
 	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
 
+JamValueRef JamLLVMBuildSRem(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateSRem(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
+JamValueRef JamLLVMBuildUDiv(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateUDiv(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
+JamValueRef JamLLVMBuildSDiv(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateSDiv(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
 JamValueRef JamLLVMBuildAnd(JamBuilderRef builder, JamValueRef lhs,
                             JamValueRef rhs, const char *name) {
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateAnd(
