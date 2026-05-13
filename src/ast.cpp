@@ -52,6 +52,16 @@ static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
 		return JamLLVMBuildIntCast(ctx.getBuilder(), val, expected, false,
 		                           "assign_icast");
 	}
+	if (JamLLVMTypeIsPointer(expected) && JamLLVMTypeIsStruct(actual)) {
+		// `[]T` slice (LLVM `{ptr, i64}`) passed where the callee declared
+		// `*const[] T` / `*const T`. Extract field 0 (the data pointer).
+		// Without this the slice's `len` half gets passed in the next
+		// register, polluting whatever the callee reads next — on Linux
+		// AArch64 this means snprintf's first vararg slot ends up holding
+		// the format slice's length instead of the user's first vararg.
+		return JamLLVMBuildExtractValue(ctx.getBuilder(), val, 0,
+		                                "slice.to.ptr");
+	}
 	return val;
 }
 
