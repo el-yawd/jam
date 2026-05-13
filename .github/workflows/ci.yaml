@@ -27,23 +27,20 @@ jobs:
           cmake ..
           cmake --build . -j $(nproc)
 
-      - name: Test compiler with sample file
+      - name: Run unit tests
         run: |
-          cp test.txt build/
           cd build
-          ./jam test.txt || echo "Execution completed with $?"
+          ./jam test ../tests/unit
 
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-x86-artifacts
-          path: |
-            build/jam
-            build/output*
+          path: build/jam
 
   build-linux-arm:
     name: Build on Linux (ARM64)
-    runs-on: ubuntu-latest-arm64
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -60,52 +57,48 @@ jobs:
           cmake ..
           cmake --build . -j $(nproc)
 
-      - name: Test compiler with sample file
+      - name: Run unit tests
         run: |
-          cp test.txt build/
           cd build
-          ./jam test.txt || echo "Execution completed with $?"
+          ./jam test ../tests/unit
 
       - name: Archive ARM build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm-artifacts
-          path: |
-            build/jam
-            build/output*
+          path: build/jam
 
   build-macos:
     name: Build on macOS
-    strategy:
-      matrix:
-        arch: [macos-latest, macos-latest-arm64]
-    runs-on: ${{ matrix.arch }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install LLVM via Homebrew
         run: |
           brew install llvm
-          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
-          llvm-config --version
+          # Homebrew LLVM is keg-only; expose its bin/ to subsequent steps via
+          # $GITHUB_PATH, and verify in the same step with the full path
+          # (the new PATH only takes effect in later steps).
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
+          echo "LLVM_PREFIX=${LLVM_PREFIX}" >> "$GITHUB_ENV"
+          "${LLVM_PREFIX}/bin/llvm-config" --version
 
       - name: Configure and build
         run: |
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
+          cmake .. -DCMAKE_PREFIX_PATH="${LLVM_PREFIX}"
           cmake --build . -j $(sysctl -n hw.ncpu)
 
-      - name: Test compiler with sample file
+      - name: Run unit tests
         run: |
-          cp test.txt build/
           cd build
-          ./jam test.txt || echo "Execution completed with $?"
+          ./jam test ../tests/unit
 
       - name: Archive macOS build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}-artifacts
-          path: |
-            build/jam
-            build/output*
+          name: macos-artifacts
+          path: build/jam
