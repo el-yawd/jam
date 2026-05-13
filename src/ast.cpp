@@ -2818,8 +2818,14 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx, const AstNode &n,
 	}
 
 	if (!ctx.hasVariable(sp.get(rootName))) {
-		throw std::runtime_error(
-		    "Direct member access codegen not yet implemented");
+		std::string memberChain;
+		for (StringIdx fld : path) {
+			memberChain += ".";
+			memberChain += sp.get(fld);
+		}
+		throw std::runtime_error("Unknown variable `" + sp.get(rootName) +
+		                         "` in `" + sp.get(rootName) +
+		                         memberChain + "`");
 	}
 
 	const std::string &varName = sp.get(rootName);
@@ -2870,8 +2876,8 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx, const AstNode &n,
 
 	const auto *info = ctx.lookupStruct(varTy);
 	if (!info) {
-		throw std::runtime_error(
-		    "Direct member access codegen not yet implemented");
+		throw std::runtime_error("Cannot access field of non-struct `" +
+		                         varName + "`");
 	}
 
 	// Walk the field chain with struct GEPs and load only the leaf field —
