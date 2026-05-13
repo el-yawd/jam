@@ -11,6 +11,10 @@ defaults:
   run:
     shell: bash --noprofile --norc -eo pipefail {0}
 
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build-linux-x86:
     name: Build on Linux (x86_64)
