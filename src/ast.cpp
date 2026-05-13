@@ -2824,8 +2824,8 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx, const AstNode &n,
 			memberChain += sp.get(fld);
 		}
 		throw std::runtime_error("Unknown variable `" + sp.get(rootName) +
-		                         "` in `" + sp.get(rootName) +
-		                         memberChain + "`");
+		                         "` in `" + sp.get(rootName) + memberChain +
+		                         "`");
 	}
 
 	const std::string &varName = sp.get(rootName);
