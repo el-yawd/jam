@@ -2662,7 +2662,7 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 	}
 
 	// Enum-variant value: `EnumName.Variant` (no parens) resolves to
-	// the discriminant for unit variants. For E2 enums (those with at
+	// the discriminant for unit variants. For payloaded enums (those with at
 	// least one payloaded variant), the result is a fully-formed enum
 	// struct with tag set and payload bytes undefined — equivalent to
 	// `EnumName.Variant()` with no payload args.
@@ -2917,8 +2917,8 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		//   • integer ↔ integer (truncate/extend)
 		//   • integer ↔ float (siToFP / fpToSI)
 		//   • float ↔ float (FPCast)
-		//   • enum ↔ integer: extracts the tag for E2 enums (which
-		//     are {tag, payload} structs); identity for E1 enums
+		//   • enum ↔ integer: extracts the tag for payloaded enums (which
+		//     are {tag, payload} structs); identity for unit-only enums
 		//     (which are already i8).
 		NodeIdx operandIdx = static_cast<NodeIdx>(n.lhs);
 		TypeIdx targetTy = static_cast<TypeIdx>(n.rhs);

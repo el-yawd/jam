@@ -288,7 +288,7 @@ var a: [4]u8  = [10, 20, 30, 40];     // [a, b, c, d]
 var b: [16]u8 = [0; 16];              // [expr; N], fill 16 slots with 0
 const empty: []u8 = [];               // empty slice
 
-// Index with []. Out-of-bounds is undefined at runtime —
+// Index with []. Out-of-bounds is undefined at runtime;
 // bounds checks are not yet inserted.
 var x: u8 = a[2];                     // 30
 a[0] = 99;

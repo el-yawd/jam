@@ -585,7 +585,7 @@ NodeIdx Parser::parsePatternAtom() {
 		                    static_cast<uint32_t>(lo >> 32)});
 	}
 	// Char literal — TOK_STRING_LITERAL is currently the only string-y
-	// token; for M1 we treat single-quote chars as TOK_NUMBER via the
+	// token; we treat single-quote chars as TOK_NUMBER via the
 	// lexer in a future patch. For now, only TOK_NUMBER is accepted.
 	if (match(TOK_STRING_LITERAL)) {
 		throw std::runtime_error(
