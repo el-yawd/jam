@@ -15,14 +15,21 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(jam 
-  src/main.cpp
-  src/lexer.cpp
-  src/parser.cpp
+add_executable(jam
+  src/abi.cpp
   src/ast.cpp
-  src/codegen.cpp
-  src/target.cpp
   src/cabi.cpp
+  src/codegen.cpp
+  src/drop_registry.cpp
+  src/init_analysis.cpp
+  src/jam_llvm.cpp
+  src/lexer.cpp
+  src/main.cpp
+  src/module_resolver.cpp
+  src/number_literal.cpp
+  src/parser.cpp
+  src/symbol_table.cpp
+  src/target.cpp
 )
 
 llvm_map_components_to_libnames(llvm_libs
@@ -48,10 +55,9 @@ install(TARGETS jam
   COMPONENT Runtime
 )
 
-install(FILES 
+install(FILES
   README.md
   LICENSE
-  LANGUAGE_SPEC.md
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   COMPONENT Documentation
 )
