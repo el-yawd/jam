@@ -1,7 +1,7 @@
 <!-- LOGO -->
 <h1>
 <p align="center">
-  <img src="./miscellaneous/jam-mascot-01.png" alt="Jam Logo" width="256">
+  <img src="./docs/assets/images/mascot-01.png" alt="Jam Logo" width="256">
   <br>Jam Programming Language
 </h1>
   <p align="center">
@@ -13,7 +13,7 @@
     ·
     <a href="https://github.com/raphamorim/jam/blob/main/CHANGELOG.md">Changelog</a>
     ·
-    <a href="https://github.com/raphamorim/jam/blob/main/docs/REFERENCE.md">Reference</a>
+    <a href="https://jamlang.org/reference/">Reference</a>
     ·
     <a href="https://github.com/sponsors/raphamorim">Sponsor</a>
   </p>
