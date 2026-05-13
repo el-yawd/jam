@@ -124,6 +124,8 @@ test-codegen-errors: build
 
 test: test-unit test-init test-abi test-codegen-errors
 
+fmt: format
+
 format:
 	@echo "Formatting $(words $(FORMAT_SOURCES)) C++ file(s)..."
 	@$(CLANG_FORMAT) --style=$(CLANG_FORMAT_STYLE) -i $(FORMAT_SOURCES)

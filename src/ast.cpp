@@ -236,9 +236,7 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 	if (n.tag == AstTag::Variable) {
 		const std::string &name = sp.get(static_cast<StringIdx>(n.lhs));
 		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + name);
-		}
+		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
 		TypeIdx ty = ctx.getVariableType(name);
 		LValueAddress r;
 		r.ptr = alloca;
@@ -250,8 +248,7 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 	if (n.tag == AstTag::MemberAccess) {
 		LValueAddress base =
 		    resolveLValueAddress(ctx, static_cast<NodeIdx>(n.lhs));
-		const std::string &fieldName =
-		    sp.get(static_cast<StringIdx>(n.rhs));
+		const std::string &fieldName = sp.get(static_cast<StringIdx>(n.rhs));
 		const TypeKey &k = ctx.getTypePool().get(base.leafType);
 
 		// `s.ptr` and `s.len`. The slice is lowered as
@@ -260,18 +257,18 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
 			if (fieldName == "ptr") {
 				LValueAddress r;
-				r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(),
-				                              base.leafLLVMType, base.ptr, 0,
-				                              "slice.ptr");
+				r.ptr =
+				    JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
+				                          base.ptr, 0, "slice.ptr");
 				r.leafType = ctx.getTypePool().internPtrMany(elemTy);
 				r.leafLLVMType = ctx.getLLVMType(r.leafType);
 				return r;
 			}
 			if (fieldName == "len") {
 				LValueAddress r;
-				r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(),
-				                              base.leafLLVMType, base.ptr, 1,
-				                              "slice.len");
+				r.ptr =
+				    JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
+				                          base.ptr, 1, "slice.len");
 				r.leafType = BuiltinType::U64;
 				r.leafLLVMType = ctx.getLLVMType(r.leafType);
 				return r;
@@ -282,12 +279,10 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 
 		// Union: every field shares the same address.
 		if (const auto *uinfo = ctx.lookupUnion(base.leafType)) {
-			TypeIdx fieldTy =
-			    ctx.getUnionFieldType(uinfo->name, fieldName);
+			TypeIdx fieldTy = ctx.getUnionFieldType(uinfo->name, fieldName);
 			if (fieldTy == kNoType) {
 				throw std::runtime_error("Union `" + uinfo->name +
-				                         "` has no field `" + fieldName +
-				                         "`");
+				                         "` has no field `" + fieldName + "`");
 			}
 			LValueAddress r;
 			r.ptr = base.ptr;
@@ -310,8 +305,7 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 		TypeIdx fldType = info->fields[fldIdx].second;
 		LValueAddress r;
 		r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
-		                              base.ptr,
-		                              static_cast<unsigned>(fldIdx),
+		                              base.ptr, static_cast<unsigned>(fldIdx),
 		                              fieldName.c_str());
 		r.leafType = fldType;
 		r.leafLLVMType = ctx.getLLVMType(fldType);
@@ -334,16 +328,15 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 			LValueAddress r;
 			r.leafType = elemTy;
 			r.leafLLVMType = ctx.getLLVMType(elemTy);
-			r.ptr = JamLLVMBuildArrayGEP(ctx.getBuilder(),
-			                             base.leafLLVMType, base.ptr, idxVal,
-			                             "idxgep");
+			r.ptr = JamLLVMBuildArrayGEP(ctx.getBuilder(), base.leafLLVMType,
+			                             base.ptr, idxVal, "idxgep");
 			return r;
 		}
 		if (k.kind == TypeKind::Slice) {
 			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
-			JamValueRef ptrSlot = JamLLVMBuildStructGEP(
-			    ctx.getBuilder(), base.leafLLVMType, base.ptr, 0,
-			    "slice.ptr.slot");
+			JamValueRef ptrSlot =
+			    JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
+			                          base.ptr, 0, "slice.ptr.slot");
 			TypeIdx ptrType = ctx.getTypePool().internPtrMany(elemTy);
 			JamTypeRef ptrLLVMType = ctx.getLLVMType(ptrType);
 			JamValueRef loadedPtr = JamLLVMBuildLoad(
@@ -397,8 +390,8 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 
 	if (n.tag == AstTag::Call) {
 		// ok so, cases like `foo().field`, `foo()[i]`, `arr[i].method().sub`.
-		// to keep the chain going we materialize the call, spill it to a stack temp,
-		// and hand back a pointer to the temp.
+		// to keep the chain going we materialize the call, spill it to a stack
+		// temp, and hand back a pointer to the temp.
 		//
 		// To allocate the right-sized temp and to find the right struct
 		// for further `.field` GEPs, we mirror codegenCall's dispatch to
@@ -409,21 +402,18 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 		//   NodeIdx callee, `…method`         ->  receiver-type method
 		TypeIdx retType = kNoType;
 		if ((n.flags & 1) == 0) {
-			const std::string &callee =
-			    sp.get(static_cast<StringIdx>(n.lhs));
+			const std::string &callee = sp.get(static_cast<StringIdx>(n.lhs));
 			if (const FunctionAST *fn = ctx.getFunctionAST(callee)) {
 				retType = fn->ReturnType;
 			} else {
 				size_t firstDot = callee.find('.');
 				size_t lastDot = callee.rfind('.');
-				if (firstDot != std::string::npos &&
-				    firstDot == lastDot) {
+				if (firstDot != std::string::npos && firstDot == lastDot) {
 					std::string instName = callee.substr(0, firstDot);
 					std::string methodPart = callee.substr(firstDot + 1);
 					if (ctx.hasVariable(instName)) {
 						TypeIdx instTy = ctx.getVariableType(instName);
-						if (const auto *sinfo =
-						        ctx.lookupStruct(instTy)) {
+						if (const auto *sinfo = ctx.lookupStruct(instTy)) {
 							std::string qualified =
 							    sinfo->name + "." + methodPart;
 							if (const FunctionAST *fn =
@@ -438,15 +428,13 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 			NodeIdx calleeNodeIdx = static_cast<NodeIdx>(n.lhs);
 			const AstNode &cn = ns.get(calleeNodeIdx);
 			if (cn.tag == AstTag::MemberAccess) {
-				TypeIdx recvTy = inferLValueType(
-				    ctx, static_cast<NodeIdx>(cn.lhs));
+				TypeIdx recvTy =
+				    inferLValueType(ctx, static_cast<NodeIdx>(cn.lhs));
 				if (const auto *sinfo = ctx.lookupStruct(recvTy)) {
 					const std::string &methodName =
 					    sp.get(static_cast<StringIdx>(cn.rhs));
-					std::string qualified =
-					    sinfo->name + "." + methodName;
-					if (const FunctionAST *fn =
-					        ctx.getFunctionAST(qualified)) {
+					std::string qualified = sinfo->name + "." + methodName;
+					if (const FunctionAST *fn = ctx.getFunctionAST(qualified)) {
 						retType = fn->ReturnType;
 					}
 				}
@@ -464,8 +452,7 @@ static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
 		}
 		JamTypeRef retLLVMType = ctx.getLLVMType(retType);
 		JamValueRef tmp = JamLLVMBuildAlloca(
-		    ctx.getBuilder(), retLLVMType, ctx.typeAlign(retType),
-		    "call.tmp");
+		    ctx.getBuilder(), retLLVMType, ctx.typeAlign(retType), "call.tmp");
 		JamLLVMBuildStore(ctx.getBuilder(), val, tmp);
 		LValueAddress r;
 		r.ptr = tmp;
@@ -491,11 +478,9 @@ static TypeIdx inferLValueType(JamCodegenContext &ctx, NodeIdx nodeIdx) {
 		return ctx.getVariableType(name);
 	}
 	if (n.tag == AstTag::MemberAccess) {
-		TypeIdx baseTy =
-		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		TypeIdx baseTy = inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
 		if (baseTy == kNoType) return kNoType;
-		const std::string &fieldName =
-		    sp.get(static_cast<StringIdx>(n.rhs));
+		const std::string &fieldName = sp.get(static_cast<StringIdx>(n.rhs));
 		const TypeKey &k = ctx.getTypePool().get(baseTy);
 		if (k.kind == TypeKind::Slice) {
 			if (fieldName == "ptr") {
@@ -515,8 +500,7 @@ static TypeIdx inferLValueType(JamCodegenContext &ctx, NodeIdx nodeIdx) {
 		return info->fields[idx].second;
 	}
 	if (n.tag == AstTag::Index) {
-		TypeIdx baseTy =
-		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		TypeIdx baseTy = inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
 		if (baseTy == kNoType) return kNoType;
 		const TypeKey &k = ctx.getTypePool().get(baseTy);
 		if (k.kind == TypeKind::Array || k.kind == TypeKind::Slice ||
@@ -526,8 +510,7 @@ static TypeIdx inferLValueType(JamCodegenContext &ctx, NodeIdx nodeIdx) {
 		return kNoType;
 	}
 	if (n.tag == AstTag::Deref) {
-		TypeIdx baseTy =
-		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		TypeIdx baseTy = inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
 		if (baseTy == kNoType) return kNoType;
 		const TypeKey &k = ctx.getTypePool().get(baseTy);
 		if (k.kind == TypeKind::PtrSingle || k.kind == TypeKind::PtrMany) {
@@ -554,13 +537,11 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 	if (k.kind == TypeKind::Slice) {
 		TypeIdx elemTy = static_cast<TypeIdx>(k.a);
 		outElemType = ctx.getLLVMType(elemTy);
-		JamValueRef ptrSlot =
-		    JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
-		                          base.ptr, 0, "slice.ptr.slot");
+		JamValueRef ptrSlot = JamLLVMBuildStructGEP(
+		    ctx.getBuilder(), base.leafLLVMType, base.ptr, 0, "slice.ptr.slot");
 		TypeIdx ptrType = ctx.getTypePool().internPtrMany(elemTy);
-		JamValueRef loadedPtr =
-		    JamLLVMBuildLoad(ctx.getBuilder(), ctx.getLLVMType(ptrType),
-		                     ptrSlot, "slice.ptr");
+		JamValueRef loadedPtr = JamLLVMBuildLoad(
+		    ctx.getBuilder(), ctx.getLLVMType(ptrType), ptrSlot, "slice.ptr");
 		return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, loadedPtr,
 		                          idxVal, "ptrgep");
 	}
@@ -1079,42 +1060,39 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 		}
 		NodeIdx receiverIdx = static_cast<NodeIdx>(cn.lhs);
 		StringIdx methodNameId = static_cast<StringIdx>(cn.rhs);
-		const std::string &methodName =
-		    ctx.getStringPool().get(methodNameId);
+		const std::string &methodName = ctx.getStringPool().get(methodNameId);
 
 		TypeIdx recvTy = inferLValueType(ctx, receiverIdx);
 		if (recvTy == kNoType) {
-			throw std::runtime_error(
-			    "Cannot infer receiver type for method `" + methodName +
-			    "`");
+			throw std::runtime_error("Cannot infer receiver type for method `" +
+			                         methodName + "`");
 		}
 		const auto *sinfo = ctx.lookupStruct(recvTy);
 		if (!sinfo) {
 			throw std::runtime_error(
-			    "Method call receiver is not a struct (method `" +
-			    methodName + "`)");
+			    "Method call receiver is not a struct (method `" + methodName +
+			    "`)");
 		}
 		std::string qualified = sinfo->name + "." + methodName;
 		const FunctionAST *methodAST = ctx.getFunctionAST(qualified);
 		if (!methodAST || methodAST->Args.empty()) {
 			throw std::runtime_error("Method `" + methodName +
-			                         "` not found on struct `" +
-			                         sinfo->name + "`");
+			                         "` not found on struct `" + sinfo->name +
+			                         "`");
 		}
 
 		NodeIdx recvArgNode = receiverIdx;
 		ParamMode mode = methodAST->Args[0].Mode;
 		if (mode == ParamMode::Mut || mode == ParamMode::Move) {
-			recvArgNode = ctx.getNodeStore().addNode(AstNode{
-			    AstTag::AddressOf, 0, 0, 0,
-			    static_cast<uint32_t>(receiverIdx), 0});
+			recvArgNode = ctx.getNodeStore().addNode(
+			    AstNode{AstTag::AddressOf, 0, 0, 0,
+			            static_cast<uint32_t>(receiverIdx), 0});
 		}
 
 		ExtraIdx origExtra = static_cast<ExtraIdx>(n.rhs);
 		uint32_t origCount = ctx.getNodeStore().getExtra(origExtra);
 		StringIdx calleeId = ctx.getStringPool().intern(qualified);
-		ExtraIdx callExtra =
-		    ctx.getNodeStore().reserveExtra(2 + origCount);
+		ExtraIdx callExtra = ctx.getNodeStore().reserveExtra(2 + origCount);
 		ctx.getNodeStore().setExtra(callExtra, 1 + origCount);
 		ctx.getNodeStore().setExtra(callExtra + 1,
 		                            static_cast<uint32_t>(recvArgNode));
@@ -1123,8 +1101,8 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			    callExtra + 2 + i,
 			    ctx.getNodeStore().getExtra(origExtra + 1 + i));
 		}
-		AstNode synth{AstTag::Call, 0, 0, 0,
-		              static_cast<uint32_t>(calleeId), callExtra};
+		AstNode synth{AstTag::Call, 0, 0, 0, static_cast<uint32_t>(calleeId),
+		              callExtra};
 		return codegenCall(ctx, synth);
 	}
 

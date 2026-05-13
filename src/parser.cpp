@@ -297,9 +297,9 @@ NodeIdx Parser::parsePrimary() {
 						nodes->setExtra(extra + 2 + i,
 						                static_cast<uint32_t>(methodArgs[i]));
 					}
-					expr = emit(AstNode{AstTag::TypeMethodCall, 0, 0, 0,
-					                    static_cast<uint32_t>(receiverTy),
-					                    extra});
+					expr =
+					    emit(AstNode{AstTag::TypeMethodCall, 0, 0, 0,
+					                 static_cast<uint32_t>(receiverTy), extra});
 					chainStarted = true;
 					continue;
 				}
