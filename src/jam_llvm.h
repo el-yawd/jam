@@ -174,8 +174,7 @@ JAM_EXTERN_C void JamLLVMApplyDefaultFnAttrs(JamFunctionRef func,
 // must be `ptr`-typed; the pointee type and alignment are passed
 // explicitly. Used by codegen for functions returning aggregates whose
 // size exceeds the by-value threshold.
-JAM_EXTERN_C void JamLLVMAddParamAttrSret(JamFunctionRef func,
-                                          unsigned argIdx,
+JAM_EXTERN_C void JamLLVMAddParamAttrSret(JamFunctionRef func, unsigned argIdx,
                                           JamTypeRef pointeeType,
                                           unsigned align);
 JAM_EXTERN_C void JamLLVMSetValueName(JamValueRef val, const char *name);
@@ -356,10 +355,9 @@ typedef enum {
 	JAM_STRIP_SYMBOLS = 2,    // strip debug info + local symbols
 } JamStrip;
 
-JAM_EXTERN_C JamTargetMachineRef
-JamLLVMCreateTargetMachine(const char *triple, const char *cpu,
-                           const char *features, bool isRelocationPIC,
-                           JamOptLevel optLevel, JamLTO lto);
+JAM_EXTERN_C JamTargetMachineRef JamLLVMCreateTargetMachine(
+    const char *triple, const char *cpu, const char *features,
+    bool isRelocationPIC, JamOptLevel optLevel, JamLTO lto);
 JAM_EXTERN_C void JamLLVMDisposeTargetMachine(JamTargetMachineRef tm);
 
 // Emits an object file at `filename` when the TargetMachine's LTO mode is

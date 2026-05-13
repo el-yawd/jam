@@ -16,8 +16,7 @@ namespace drops {
 // (`fn drop(self: mut <Struct>)`), add it to the registry under the
 // struct's name. Used by both the top-level-function scan and the
 // struct-method scan below.
-static void considerDropCandidate(const FunctionAST *fn,
-                                  const TypePool &types,
+static void considerDropCandidate(const FunctionAST *fn, const TypePool &types,
                                   const StringPool &strings,
                                   DropRegistry &registry) {
 	if (fn->Name != "drop") return;
@@ -30,9 +29,7 @@ static void considerDropCandidate(const FunctionAST *fn,
 	// Named TypeKinds carry the struct's name in their `a` slot as a
 	// StringIdx; either form means "drop fn for that struct".
 	const TypeKey &key = types.get(p.Type);
-	if (key.kind != TypeKind::Struct && key.kind != TypeKind::Named) {
-		return;
-	}
+	if (key.kind != TypeKind::Struct && key.kind != TypeKind::Named) { return; }
 	StringIdx nameIdx = static_cast<StringIdx>(key.a);
 	if (nameIdx == kNoString) return;
 	const std::string &structName = strings.get(nameIdx);

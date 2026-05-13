@@ -50,18 +50,18 @@ enum TokenType {
 	TOK_BREAK,
 	TOK_CONTINUE,
 	TOK_IN,
-	TOK_EXTERN,  // extern keyword (import C function)
-	TOK_EXPORT,  // export keyword (C ABI export)
-	TOK_PUB,     // pub keyword (visible to Jam modules, like Zig)
-	TOK_IMPORT,  // import keyword
-	TOK_DOT,     // . for member access
-	TOK_AND,     // and (logical AND)
-	TOK_OR,      // or (logical OR)
-	TOK_NOT,     // ! (logical NOT)
-	TOK_TFN,     // tfn keyword (test function)
-	TOK_STRUCT,  // struct keyword
-	TOK_UNION,   // union keyword (untagged; FFI-shaped)
-	TOK_ENUM,    // enum keyword (tagged sum type; payload-less)
+	TOK_EXTERN,     // extern keyword (import C function)
+	TOK_EXPORT,     // export keyword (C ABI export)
+	TOK_PUB,        // pub keyword (visible to Jam modules, like Zig)
+	TOK_IMPORT,     // import keyword
+	TOK_DOT,        // . for member access
+	TOK_AND,        // and (logical AND)
+	TOK_OR,         // or (logical OR)
+	TOK_NOT,        // ! (logical NOT)
+	TOK_TFN,        // tfn keyword (test function)
+	TOK_STRUCT,     // struct keyword
+	TOK_UNION,      // union keyword (untagged; FFI-shaped)
+	TOK_ENUM,       // enum keyword (tagged sum type; payload-less)
 	TOK_STAR,       // * (pointer prefix; multiplication)
 	TOK_PERCENT,    // % (modulo)
 	TOK_AMP,        // & (bitwise AND; address-of)

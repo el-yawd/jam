@@ -38,8 +38,8 @@ namespace abi {
 struct ParamABI {
 	enum class Kind { ByValue, ByPointer };
 	Kind kind;
-	JamTypeRef llvmType;      // ByValue: the parameter's LLVM type.
-	uint32_t pointerAlign;    // ByPointer: pointee alignment in bytes.
+	JamTypeRef llvmType;    // ByValue: the parameter's LLVM type.
+	uint32_t pointerAlign;  // ByPointer: pointee alignment in bytes.
 };
 
 // How a function's return value is communicated to the caller.
@@ -52,8 +52,8 @@ struct ParamABI {
 struct ReturnABI {
 	enum class Kind { Direct, Indirect };
 	Kind kind;
-	JamTypeRef directType;    // Direct: the LLVM return type.
-	uint32_t sretAlign;       // Indirect: pointee alignment in bytes.
+	JamTypeRef directType;  // Direct: the LLVM return type.
+	uint32_t sretAlign;     // Indirect: pointee alignment in bytes.
 };
 
 // Classify a parameter (mode, type) pair. Pure function of its inputs;

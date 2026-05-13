@@ -47,19 +47,16 @@ AnalyzeResult analyzeSource(const std::string &src) {
 	result.module = parser.parse();
 
 	jam::init_analysis::FunctionRegistry registry;
-	for (auto &fn : result.module->Functions) {
-		registry[fn->Name] = fn.get();
-	}
+	for (auto &fn : result.module->Functions) { registry[fn->Name] = fn.get(); }
 
 	jam::drops::DropRegistry drops = jam::drops::buildDropRegistry(
 	    *result.module, *result.types, *result.strings);
 
 	for (auto &fn : result.module->Functions) {
 		if (fn->isExtern) continue;
-		auto diags = jam::init_analysis::analyze(*fn, *result.nodes,
-		                                         *result.strings, tokens,
-		                                         &registry, &drops,
-		                                         result.types.get());
+		auto diags = jam::init_analysis::analyze(
+		    *fn, *result.nodes, *result.strings, tokens, &registry, &drops,
+		    result.types.get());
 		for (auto &d : diags) result.diagnostics.push_back(std::move(d));
 	}
 	return result;
@@ -196,7 +193,8 @@ fn dangle(p: mut u32) *mut u32 {
 }
 )");
 	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message, "cannot return `&` of `mut`-mode");
+	ASSERT_CONTAINS(r.diagnostics[0].message,
+	                "cannot return `&` of `mut`-mode");
 	ASSERT_EQ(std::string("p"), r.diagnostics[0].varName);
 }
 
@@ -209,7 +207,8 @@ fn dangleField(p: mut Pair) *mut u32 {
 }
 )");
 	ASSERT_EQ(static_cast<size_t>(1), r.diagnostics.size());
-	ASSERT_CONTAINS(r.diagnostics[0].message, "cannot return `&` of `mut`-mode");
+	ASSERT_CONTAINS(r.diagnostics[0].message,
+	                "cannot return `&` of `mut`-mode");
 }
 
 void testReturnMutParamByValueOK() {

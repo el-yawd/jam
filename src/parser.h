@@ -47,15 +47,14 @@ class Parser {
 	NodeIdx parseStructExpression();
 	NodeIdx parseEnumExpression();
 	NodeIdx parseMatch();
-	NodeIdx parsePattern();          // OrPattern
-	NodeIdx parsePatternAtom();      // single-atom pattern
+	NodeIdx parsePattern();      // OrPattern
+	NodeIdx parsePatternAtom();  // single-atom pattern
 	std::unique_ptr<FunctionAST> parseFunction();
 	std::unique_ptr<ImportDeclAST> parseImportDecl();
 	std::unique_ptr<DestructuringImportDeclAST> parseDestructuringImport();
 	std::unique_ptr<StructDeclAST> parseStructDecl();
-	void parseStructBody(
-	    std::vector<std::pair<std::string, TypeIdx>> &fields,
-	    std::vector<std::unique_ptr<FunctionAST>> &methods);
+	void parseStructBody(std::vector<std::pair<std::string, TypeIdx>> &fields,
+	                     std::vector<std::unique_ptr<FunctionAST>> &methods);
 	std::vector<std::unique_ptr<StructDeclAST>> anonStructs;
 	std::vector<std::unique_ptr<EnumDeclAST>> anonEnums;
 	std::vector<std::string> structContextStack;
@@ -68,8 +67,7 @@ class Parser {
 	Parser(std::vector<Token> tokens, TypePool &typePool,
 	       StringPool &stringPool, NodeStore &nodes);
 	std::unique_ptr<ModuleAST> parse();
-	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs =
-	    nullptr;
+	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs = nullptr;
 	std::vector<std::unique_ptr<EnumDeclAST>> *sharedAnonEnums = nullptr;
 };
 

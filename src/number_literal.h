@@ -22,24 +22,24 @@ enum class NumberBase : uint8_t {
 // Per-error variants with the position where the problem was found.
 // Position is a byte offset into the lexeme, not into the source file.
 enum class NumberErrorKind {
-	LeadingZero,                  // "07" — leading zero on decimal
-	DigitAfterBase,               // "0x" with no digit
-	UpperCaseBase,                // "0X42" — uppercase prefix
-	InvalidFloatBase,             // float in non-decimal/hex base
-	RepeatedUnderscore,           // "1__0"
-	InvalidUnderscoreAfterSpecial, // "0x_1", "1._5", etc.
-	InvalidDigit,                 // digit out of range for the base
-	InvalidDigitExponent,         // non-decimal digit in an exponent
-	DuplicatePeriod,              // "1.0.5"
-	DuplicateExponent,            // "1e10e2"
-	InvalidHexExponent,           // hex literal with `e`/`E` exponent
-	ExponentAfterUnderscore,      // "1_e10"
-	SpecialAfterUnderscore,       // "1_."
-	TrailingSpecial,              // "1.", "1+", "1e"
-	TrailingUnderscore,           // "1_"
-	InvalidCharacter,             // out of [0-9a-zA-Z._+-]
-	InvalidExponentSign,          // "+" or "-" not after p/P/e/E
-	IntegerTooLarge,              // overflows u64 (caller asks for int)
+	LeadingZero,                    // "07" — leading zero on decimal
+	DigitAfterBase,                 // "0x" with no digit
+	UpperCaseBase,                  // "0X42" — uppercase prefix
+	InvalidFloatBase,               // float in non-decimal/hex base
+	RepeatedUnderscore,             // "1__0"
+	InvalidUnderscoreAfterSpecial,  // "0x_1", "1._5", etc.
+	InvalidDigit,                   // digit out of range for the base
+	InvalidDigitExponent,           // non-decimal digit in an exponent
+	DuplicatePeriod,                // "1.0.5"
+	DuplicateExponent,              // "1e10e2"
+	InvalidHexExponent,             // hex literal with `e`/`E` exponent
+	ExponentAfterUnderscore,        // "1_e10"
+	SpecialAfterUnderscore,         // "1_."
+	TrailingSpecial,                // "1.", "1+", "1e"
+	TrailingUnderscore,             // "1_"
+	InvalidCharacter,               // out of [0-9a-zA-Z._+-]
+	InvalidExponentSign,            // "+" or "-" not after p/P/e/E
+	IntegerTooLarge,                // overflows u64 (caller asks for int)
 };
 
 struct NumberError {

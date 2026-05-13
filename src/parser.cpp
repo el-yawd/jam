@@ -27,24 +27,24 @@ static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut) {
 	case NumberResultKind::Int:
 		return r.intValue;
 	case NumberResultKind::BigInt:
-		throw std::runtime_error(
-		    "integer literal `" + abs + "` exceeds u64 range");
+		throw std::runtime_error("integer literal `" + abs +
+		                         "` exceeds u64 range");
 	case NumberResultKind::Float:
 		throw std::runtime_error(
 		    "float literal `" + abs +
 		    "` is not yet supported (only integer literals)");
 	case NumberResultKind::Failure:
-		throw std::runtime_error(
-		    std::string("invalid numeric literal `") + abs + "`: " +
-		    numberErrorMessage(r.failure.kind));
+		throw std::runtime_error(std::string("invalid numeric literal `") +
+		                         abs +
+		                         "`: " + numberErrorMessage(r.failure.kind));
 	}
 	throw std::runtime_error("unreachable");
 }
 
 Parser::Parser(std::vector<Token> tokens, TypePool &typePool_,
                StringPool &stringPool_, NodeStore &nodes_)
-    : tokens(std::move(tokens)), typePool(&typePool_),
-      stringPool(&stringPool_), nodes(&nodes_) {}
+    : tokens(std::move(tokens)), typePool(&typePool_), stringPool(&stringPool_),
+      nodes(&nodes_) {}
 
 Token Parser::peek() const { return tokens[current]; }
 
@@ -124,8 +124,7 @@ NodeIdx Parser::parsePrimary() {
 		StringIdx nameId = stringPool->intern(previous().lexeme);
 		consume(TOK_OPEN_PAREN, "Expected '(' after '@name'");
 		TypeIdx tyArg = parseType();
-		consume(TOK_CLOSE_PAREN,
-		        "Expected ')' after '@' intrinsic argument");
+		consume(TOK_CLOSE_PAREN, "Expected ')' after '@' intrinsic argument");
 		return emit(AstNode{AstTag::AtCall, 0, 0, 0, nameId,
 		                    static_cast<uint32_t>(tyArg)});
 	}
@@ -137,8 +136,11 @@ NodeIdx Parser::parsePrimary() {
 		// landed.
 		bool isNegative = false;
 		uint64_t mag = parseNumLexeme(previous().lexeme, isNegative);
-		AstNode n{AstTag::NumberLit, 0, isNegative ? uint16_t{1} : uint16_t{0},
-		          0, static_cast<uint32_t>(mag & 0xFFFFFFFFu),
+		AstNode n{AstTag::NumberLit,
+		          0,
+		          isNegative ? uint16_t{1} : uint16_t{0},
+		          0,
+		          static_cast<uint32_t>(mag & 0xFFFFFFFFu),
 		          static_cast<uint32_t>(mag >> 32)};
 		return emit(n);
 	}
@@ -172,19 +174,16 @@ NodeIdx Parser::parsePrimary() {
 		if (match(TOK_CLOSE_BRACKET)) {
 			ExtraIdx extra = nodes->reserveExtra(1);
 			nodes->setExtra(extra, 0);
-			return emit(AstNode{AstTag::ArrayLit, 0, 0, 0, kNoType,
-			                    extra});
+			return emit(AstNode{AstTag::ArrayLit, 0, 0, 0, kNoType, extra});
 		}
 		NodeIdx first = parseLogicalOr();
 		if (match(TOK_SEMI)) {
 			NodeIdx count = parseLogicalOr();
-			consume(TOK_CLOSE_BRACKET,
-			        "Expected `]` after array repeat count");
+			consume(TOK_CLOSE_BRACKET, "Expected `]` after array repeat count");
 			ExtraIdx extra = nodes->reserveExtra(2);
 			nodes->setExtra(extra, static_cast<uint32_t>(first));
 			nodes->setExtra(extra + 1, static_cast<uint32_t>(count));
-			return emit(AstNode{AstTag::ArrayRepeat, 0, 0, 0, kNoType,
-			                    extra});
+			return emit(AstNode{AstTag::ArrayRepeat, 0, 0, 0, kNoType, extra});
 		}
 		std::vector<NodeIdx> elems;
 		elems.push_back(first);
@@ -192,8 +191,7 @@ NodeIdx Parser::parsePrimary() {
 			if (check(TOK_CLOSE_BRACKET)) break;  // trailing comma
 			elems.push_back(parseLogicalOr());
 		}
-		consume(TOK_CLOSE_BRACKET,
-		        "Expected `]` or `,` in array literal");
+		consume(TOK_CLOSE_BRACKET, "Expected `]` or `,` in array literal");
 		ExtraIdx extra = nodes->reserveExtra(1 + elems.size());
 		nodes->setExtra(extra, static_cast<uint32_t>(elems.size()));
 		for (size_t i = 0; i < elems.size(); i++) {
@@ -252,12 +250,10 @@ NodeIdx Parser::parsePrimary() {
 					consume(TOK_CLOSE_PAREN,
 					        "Expected ')' after type arguments");
 					consume(TOK_DOT, "Expected '.' after generic call");
-					consume(TOK_IDENTIFIER,
-					        "Expected method name after '.'");
+					consume(TOK_IDENTIFIER, "Expected method name after '.'");
 					StringIdx methodName =
 					    stringPool->intern(previous().lexeme);
-					consume(TOK_OPEN_PAREN,
-					        "Expected '(' after method name");
+					consume(TOK_OPEN_PAREN, "Expected '(' after method name");
 
 					std::vector<NodeIdx> methodArgs;
 					if (!check(TOK_CLOSE_PAREN)) {
@@ -271,21 +267,17 @@ NodeIdx Parser::parsePrimary() {
 					TypeIdx receiverTy = typePool->internGenericCall(
 					    stringPool->intern(name), std::move(typeArgs));
 
-					ExtraIdx extra = nodes->reserveExtra(
-					    2 + methodArgs.size());
-					nodes->setExtra(extra,
-					                static_cast<uint32_t>(methodName));
+					ExtraIdx extra = nodes->reserveExtra(2 + methodArgs.size());
+					nodes->setExtra(extra, static_cast<uint32_t>(methodName));
 					nodes->setExtra(extra + 1,
-					                static_cast<uint32_t>(
-					                    methodArgs.size()));
+					                static_cast<uint32_t>(methodArgs.size()));
 					for (size_t i = 0; i < methodArgs.size(); i++) {
 						nodes->setExtra(extra + 2 + i,
-						                static_cast<uint32_t>(
-						                    methodArgs[i]));
+						                static_cast<uint32_t>(methodArgs[i]));
 					}
-					return emit(AstNode{
-					    AstTag::TypeMethodCall, 0, 0, 0,
-					    static_cast<uint32_t>(receiverTy), extra});
+					return emit(AstNode{AstTag::TypeMethodCall, 0, 0, 0,
+					                    static_cast<uint32_t>(receiverTy),
+					                    extra});
 				}
 			}
 
@@ -312,8 +304,7 @@ NodeIdx Parser::parsePrimary() {
 			for (size_t i = 0; i < args.size(); i++) {
 				nodes->setExtra(extra + 1 + i, args[i]);
 			}
-			return emit(
-			    AstNode{AstTag::Call, 0, 0, 0, calleeId, extra});
+			return emit(AstNode{AstTag::Call, 0, 0, 0, calleeId, extra});
 		}
 
 		// Postfix indexing chain: arr[i], arr[i][j], etc.
@@ -367,7 +358,7 @@ TypeIdx Parser::parseType() {
 		TypeIdx elem = parseType();
 		(void)ptrConst;  // mutability not enforced yet
 		return isMany ? typePool->internPtrMany(elem)
-		             : typePool->internPtrSingle(elem);
+		              : typePool->internPtrSingle(elem);
 	}
 	if (match(TOK_OPEN_BRACKET)) {
 		// `[]T` — slice. No tag.
@@ -411,14 +402,12 @@ TypeIdx Parser::parseType() {
 			advance();  // consume `(`
 			std::vector<TypeIdx> args;
 			if (!check(TOK_CLOSE_PAREN)) {
-				do {
-					args.push_back(parseType());
-				} while (match(TOK_COMMA));
+				do { args.push_back(parseType()); } while (match(TOK_COMMA));
 			}
 			consume(TOK_CLOSE_PAREN,
 			        "Expected ')' after generic type arguments");
-			return typePool->internGenericCall(
-			    stringPool->intern(ident), std::move(args));
+			return typePool->internGenericCall(stringPool->intern(ident),
+			                                   std::move(args));
 		}
 		return typePool->internNamed(stringPool->intern(ident));
 	}
@@ -479,10 +468,8 @@ NodeIdx Parser::parsePatternAtom() {
 				consume(TOK_CLOSE_PAREN,
 				        "Expected ')' after generic type arguments");
 				consume(TOK_DOT, "Expected '.' after generic type");
-				consume(TOK_IDENTIFIER,
-				        "Expected variant name after `.`");
-				StringIdx variantNameId =
-				    stringPool->intern(previous().lexeme);
+				consume(TOK_IDENTIFIER, "Expected variant name after `.`");
+				StringIdx variantNameId = stringPool->intern(previous().lexeme);
 				TypeIdx receiverTy = typePool->internGenericCall(
 				    stringPool->intern(typeName), std::move(typeArgs));
 
@@ -500,18 +487,16 @@ NodeIdx Parser::parsePatternAtom() {
 					        "Expected `)` to close payload bindings");
 					// flags = 3 (bit 0 = bindings, bit 1 = TypeIdx recv)
 					// extra: [typeIdx, variantNameId, count, b0, ...]
-					ExtraIdx extra =
-					    nodes->reserveExtra(3 + bindings.size());
-					nodes->setExtra(extra,
-					                static_cast<uint32_t>(receiverTy));
+					ExtraIdx extra = nodes->reserveExtra(3 + bindings.size());
+					nodes->setExtra(extra, static_cast<uint32_t>(receiverTy));
 					nodes->setExtra(extra + 1, variantNameId);
 					nodes->setExtra(extra + 2,
 					                static_cast<uint32_t>(bindings.size()));
 					for (size_t i = 0; i < bindings.size(); i++) {
 						nodes->setExtra(extra + 3 + i, bindings[i]);
 					}
-					return emit(AstNode{AstTag::PatEnumVariant, 0, 3u, 0,
-					                    extra, 0});
+					return emit(
+					    AstNode{AstTag::PatEnumVariant, 0, 3u, 0, extra, 0});
 				}
 				// No bindings: flags = 2 (TypeIdx recv, no bindings).
 				return emit(AstNode{AstTag::PatEnumVariant, 0, 2u, 0,
@@ -526,10 +511,8 @@ NodeIdx Parser::parsePatternAtom() {
 		advance();  // consume enum name
 		if (match(TOK_DOT)) {
 			consume(TOK_IDENTIFIER, "Expected variant name after `.`");
-			StringIdx enumNameId =
-			    stringPool->intern(tokens[saved].lexeme);
-			StringIdx variantNameId =
-			    stringPool->intern(previous().lexeme);
+			StringIdx enumNameId = stringPool->intern(tokens[saved].lexeme);
+			StringIdx variantNameId = stringPool->intern(previous().lexeme);
 
 			// Optional payload binding: `(name1, name2, ...)`. Empty
 			// list `()` is permitted and equivalent to no parens.
@@ -553,13 +536,13 @@ NodeIdx Parser::parsePatternAtom() {
 				for (size_t i = 0; i < bindings.size(); i++) {
 					nodes->setExtra(extra + 3 + i, bindings[i]);
 				}
-				return emit(AstNode{AstTag::PatEnumVariant, 0, 1u, 0,
-				                    extra, 0});
+				return emit(
+				    AstNode{AstTag::PatEnumVariant, 0, 1u, 0, extra, 0});
 			}
 			// No bindings: lhs = enumNameId, rhs = variantNameId,
 			// flags = 0.
-			return emit(AstNode{AstTag::PatEnumVariant, 0, 0, 0,
-			                    enumNameId, variantNameId});
+			return emit(AstNode{AstTag::PatEnumVariant, 0, 0, 0, enumNameId,
+			                    variantNameId});
 		}
 		current = saved;
 		throw std::runtime_error(
@@ -605,9 +588,7 @@ NodeIdx Parser::parsePattern() {
 	if (!check(TOK_PIPE)) { return first; }
 	std::vector<NodeIdx> alternatives;
 	alternatives.push_back(first);
-	while (match(TOK_PIPE)) {
-		alternatives.push_back(parsePatternAtom());
-	}
+	while (match(TOK_PIPE)) { alternatives.push_back(parsePatternAtom()); }
 	ExtraIdx extra = nodes->reserveExtra(1 + alternatives.size());
 	nodes->setExtra(extra, static_cast<uint32_t>(alternatives.size()));
 	for (size_t i = 0; i < alternatives.size(); i++) {
@@ -652,8 +633,7 @@ NodeIdx Parser::parseMatch() {
 	nodes->setExtra(extra + pos++, static_cast<uint32_t>(arms.size()));
 	for (const Arm &a : arms) {
 		nodes->setExtra(extra + pos++, a.pat);
-		nodes->setExtra(extra + pos++,
-		                static_cast<uint32_t>(a.body.size()));
+		nodes->setExtra(extra + pos++, static_cast<uint32_t>(a.body.size()));
 		for (NodeIdx s : a.body) { nodes->setExtra(extra + pos++, s); }
 	}
 
@@ -690,8 +670,8 @@ NodeIdx Parser::parseExpression() {
 		nodes->setExtra(extra, name);
 		nodes->setExtra(extra + 1, type);
 		nodes->setExtra(extra + 2, init);
-		return emit(AstNode{AstTag::VarDecl, 0, 0, 0, extra,
-		                    isConst ? 1u : 0u});
+		return emit(
+		    AstNode{AstTag::VarDecl, 0, 0, 0, extra, isConst ? 1u : 0u});
 	}
 	if (check(TOK_MATCH)) { return parseMatch(); }
 	if (match(TOK_IF)) {
@@ -813,9 +793,8 @@ NodeIdx Parser::parseLogicalOr() {
 	NodeIdx lhs = parseLogicalAnd();
 	while (match(TOK_OR)) {
 		NodeIdx rhs = parseLogicalAnd();
-		lhs = emit(AstNode{AstTag::BinaryOp,
-		                   static_cast<uint8_t>(BinOp::LogOr), 0, 0,
-		                   static_cast<uint32_t>(lhs),
+		lhs = emit(AstNode{AstTag::BinaryOp, static_cast<uint8_t>(BinOp::LogOr),
+		                   0, 0, static_cast<uint32_t>(lhs),
 		                   static_cast<uint32_t>(rhs)});
 	}
 	return lhs;
@@ -825,23 +804,29 @@ NodeIdx Parser::parseLogicalAnd() {
 	NodeIdx lhs = parseComparison();
 	while (match(TOK_AND)) {
 		NodeIdx rhs = parseComparison();
-		lhs = emit(AstNode{AstTag::BinaryOp,
-		                   static_cast<uint8_t>(BinOp::LogAnd), 0, 0,
-		                   static_cast<uint32_t>(lhs),
-		                   static_cast<uint32_t>(rhs)});
+		lhs = emit(
+		    AstNode{AstTag::BinaryOp, static_cast<uint8_t>(BinOp::LogAnd), 0, 0,
+		            static_cast<uint32_t>(lhs), static_cast<uint32_t>(rhs)});
 	}
 	return lhs;
 }
 
 static BinOp comparisonOp(TokenType t) {
 	switch (t) {
-	case TOK_EQUAL_EQUAL:   return BinOp::Eq;
-	case TOK_NOT_EQUAL:     return BinOp::Ne;
-	case TOK_LESS:          return BinOp::Lt;
-	case TOK_LESS_EQUAL:    return BinOp::Le;
-	case TOK_GREATER:       return BinOp::Gt;
-	case TOK_GREATER_EQUAL: return BinOp::Ge;
-	default:                return BinOp::Invalid;
+	case TOK_EQUAL_EQUAL:
+		return BinOp::Eq;
+	case TOK_NOT_EQUAL:
+		return BinOp::Ne;
+	case TOK_LESS:
+		return BinOp::Lt;
+	case TOK_LESS_EQUAL:
+		return BinOp::Le;
+	case TOK_GREATER:
+		return BinOp::Gt;
+	case TOK_GREATER_EQUAL:
+		return BinOp::Ge;
+	default:
+		return BinOp::Invalid;
 	}
 }
 
@@ -925,44 +910,43 @@ NodeIdx Parser::parseMultiplication() {
 // cast binds tightly — `5 + (x as u32)` not `(5 + x) as u32` — matching
 // the convention from C/Rust/Zig where `as` sits just above primary
 // expressions.
-static NodeIdx parseAsChain(Parser *self, NodeIdx expr,
-                             NodeStore &nodes,
-                             bool (Parser::*matchTok)(TokenType),
-                             TypeIdx (Parser::*parseType)());
+static NodeIdx parseAsChain(Parser *self, NodeIdx expr, NodeStore &nodes,
+                            bool (Parser::*matchTok)(TokenType),
+                            TypeIdx (Parser::*parseType)());
 // Forward declaration removed; we just inline the postfix loop below.
 
 NodeIdx Parser::parseUnary() {
 	auto wrapAs = [&](NodeIdx e) {
 		while (match(TOK_AS)) {
 			TypeIdx ty = parseType();
-			e = emit(AstNode{AstTag::AsCast, 0, 0, 0,
-			                  static_cast<uint32_t>(e), ty});
+			e = emit(
+			    AstNode{AstTag::AsCast, 0, 0, 0, static_cast<uint32_t>(e), ty});
 		}
 		return e;
 	};
 
 	if (match(TOK_NOT)) {
 		NodeIdx operand = parseUnary();
-		return wrapAs(emit(AstNode{
-		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::LogNot), 0,
-		    0, static_cast<uint32_t>(operand), 0}));
+		return wrapAs(
+		    emit(AstNode{AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::LogNot),
+		                 0, 0, static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_TILDE)) {
 		NodeIdx operand = parseUnary();
-		return wrapAs(emit(AstNode{
-		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::BitNot), 0,
-		    0, static_cast<uint32_t>(operand), 0}));
+		return wrapAs(
+		    emit(AstNode{AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::BitNot),
+		                 0, 0, static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_AMP)) {
 		NodeIdx operand = parseUnary();
 		return wrapAs(emit(AstNode{AstTag::AddressOf, 0, 0, 0,
-		                            static_cast<uint32_t>(operand), 0}));
+		                           static_cast<uint32_t>(operand), 0}));
 	}
 	if (match(TOK_MINUS)) {
 		NodeIdx operand = parseUnary();
-		return wrapAs(emit(AstNode{
-		    AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::Neg), 0, 0,
-		    static_cast<uint32_t>(operand), 0}));
+		return wrapAs(
+		    emit(AstNode{AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::Neg), 0,
+		                 0, static_cast<uint32_t>(operand), 0}));
 	}
 	return wrapAs(parsePrimary());
 }
@@ -976,10 +960,10 @@ std::unique_ptr<FunctionAST> Parser::parseFunction() {
 	// Modifiers can combine: `pub extern fn ...` exports an FFI
 	// symbol that other Jam modules can call. Loop so any order works.
 	while (true) {
-		if      (!isExtern && match(TOK_EXTERN)) isExtern = true;
+		if (!isExtern && match(TOK_EXTERN)) isExtern = true;
 		else if (!isExport && match(TOK_EXPORT)) isExport = true;
-		else if (!isPub    && match(TOK_PUB))    isPub    = true;
-		else if (!isTest   && match(TOK_TFN))    isTest   = true;
+		else if (!isPub && match(TOK_PUB)) isPub = true;
+		else if (!isTest && match(TOK_TFN)) isTest = true;
 		else break;
 	}
 
@@ -1072,8 +1056,7 @@ void Parser::parseStructBody(
 		TypeIdx fieldType = parseType();
 		fields.emplace_back(std::move(fieldName), fieldType);
 		if (!check(TOK_CLOSE_BRACE)) {
-			consume(TOK_COMMA,
-			        "Expected ',' or '}' after struct field");
+			consume(TOK_COMMA, "Expected ',' or '}' after struct field");
 		}
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close struct definition");
@@ -1131,8 +1114,8 @@ NodeIdx Parser::parseEnumExpression() {
 	}
 	consume(TOK_CLOSE_BRACE, "Expected '}' to close enum body");
 
-	enumsRef.push_back(std::make_unique<EnumDeclAST>(std::move(name),
-	                                                 std::move(variants)));
+	enumsRef.push_back(
+	    std::make_unique<EnumDeclAST>(std::move(name), std::move(variants)));
 
 	return emit(AstNode{AstTag::EnumExpr, 0, 0, 0, idx, 0});
 }
@@ -1218,8 +1201,8 @@ std::unique_ptr<EnumDeclAST> Parser::parseEnumDecl() {
 	consume(TOK_SEMI, "Expected ';' after enum declaration");
 
 	if (variants.empty()) {
-		throw std::runtime_error(
-		    "Enum `" + name + "` must declare at least one variant");
+		throw std::runtime_error("Enum `" + name +
+		                         "` must declare at least one variant");
 	}
 	if (variants.size() > 256) {
 		throw std::runtime_error(
@@ -1309,15 +1292,12 @@ std::unique_ptr<ConstDeclAST> Parser::parseConstDecl() {
 		} else {
 			current = saved;
 		}
-	} catch (...) {
-		current = saved;
-	}
+	} catch (...) { current = saved; }
 
 	if (aliased != kNoType) {
-		consume(TOK_SEMI,
-		        "Expected ';' after module-scope const declaration");
-		auto decl = std::make_unique<ConstDeclAST>(std::move(name),
-		                                           declared, kNoNode);
+		consume(TOK_SEMI, "Expected ';' after module-scope const declaration");
+		auto decl =
+		    std::make_unique<ConstDeclAST>(std::move(name), declared, kNoNode);
 		decl->AliasedType = aliased;
 		return decl;
 	}
@@ -1387,12 +1367,8 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 		module->Functions.push_back(parseFunction());
 	}
 
-	if (!sharedAnonStructs) {
-		module->AnonStructs = std::move(anonStructs);
-	}
-	if (!sharedAnonEnums) {
-		module->AnonEnums = std::move(anonEnums);
-	}
+	if (!sharedAnonStructs) { module->AnonStructs = std::move(anonStructs); }
+	if (!sharedAnonEnums) { module->AnonEnums = std::move(anonEnums); }
 
 	return module;
 }

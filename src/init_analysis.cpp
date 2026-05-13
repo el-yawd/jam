@@ -61,9 +61,8 @@ struct Result {
 class Analyzer {
   public:
 	Analyzer(const NodeStore &nodes, const StringPool &strings,
-	         const std::vector<Token> &tokens,
-	         const FunctionRegistry *registry, const drops::DropRegistry *drops,
-	         const TypePool *types)
+	         const std::vector<Token> &tokens, const FunctionRegistry *registry,
+	         const drops::DropRegistry *drops, const TypePool *types)
 	    : nodes_(nodes), strings_(strings), tokens_(tokens),
 	      registry_(registry), drops_(drops), types_(types) {}
 
@@ -100,14 +99,14 @@ class Analyzer {
 	struct PathStep {
 		enum Kind : uint8_t { Field, Index, Deref };
 		Kind kind;
-		bool indexIsConst;  // valid when kind == Index
-		uint32_t fieldName; // StringIdx; valid when kind == Field
-		uint64_t constIndex;// valid when kind == Index && indexIsConst
+		bool indexIsConst;    // valid when kind == Index
+		uint32_t fieldName;   // StringIdx; valid when kind == Field
+		uint64_t constIndex;  // valid when kind == Index && indexIsConst
 	};
 	struct BorrowPath {
-		StringIdx base = kNoString;  // base binding name, or kNoString if
-		                             // the arg isn't a simple lvalue chain
-		std::vector<PathStep> steps; // root → leaf order after extraction
+		StringIdx base = kNoString;   // base binding name, or kNoString if
+		                              // the arg isn't a simple lvalue chain
+		std::vector<PathStep> steps;  // root → leaf order after extraction
 	};
 
 	BorrowPath extractPath(NodeIdx argIdx) const;
@@ -172,9 +171,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	// initialized. (Functions that always return on every path produce
 	// r.terminated == true and skip this check; the per-return checks
 	// in analyzeReturn cover them.)
-	if (!r.terminated) {
-		checkDropBearingLocalsInit(r.state, kNoNode);
-	}
+	if (!r.terminated) { checkDropBearingLocalsInit(r.state, kNoNode); }
 
 	args_ = nullptr;
 	return std::move(diagnostics_);
@@ -223,8 +220,8 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		uint32_t argCount = nodes_.getExtra(extra + 1);
 		Result r{std::move(state), false};
 		for (uint32_t i = 0; i < argCount; i++) {
-			NodeIdx argIdx = static_cast<NodeIdx>(
-			    nodes_.getExtra(extra + 2 + i));
+			NodeIdx argIdx =
+			    static_cast<NodeIdx>(nodes_.getExtra(extra + 2 + i));
 			r = analyze(argIdx, std::move(r.state));
 			if (r.terminated) return r;
 		}
@@ -267,8 +264,8 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		uint32_t count = nodes_.getExtra(extra);
 		Result r{std::move(state), false};
 		for (uint32_t i = 0; i < count; i++) {
-			NodeIdx elemIdx = static_cast<NodeIdx>(
-			    nodes_.getExtra(extra + 1 + i));
+			NodeIdx elemIdx =
+			    static_cast<NodeIdx>(nodes_.getExtra(extra + 1 + i));
 			r = analyze(elemIdx, std::move(r.state));
 			if (r.terminated) return r;
 		}
@@ -593,9 +590,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 	for (uint32_t i = 0; i < argCount; i++) {
 		NodeIdx argIdx = nodes_.getExtra(extra + 1 + i);
 		ParamMode mode = ParamMode::Let;
-		if (callee && i < callee->Args.size()) {
-			mode = callee->Args[i].Mode;
-		}
+		if (callee && i < callee->Args.size()) { mode = callee->Args[i].Mode; }
 		argInfos.push_back({argIdx, mode, extractPath(argIdx)});
 	}
 
@@ -606,8 +601,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 		for (std::size_t j = i + 1; j < argInfos.size(); j++) {
 			const ArgInfo &a = argInfos[i];
 			const ArgInfo &b = argInfos[j];
-			if (a.mode == ParamMode::Let && b.mode == ParamMode::Let)
-				continue;
+			if (a.mode == ParamMode::Let && b.mode == ParamMode::Let) continue;
 			if (!pathsOverlap(a.path, b.path)) continue;
 			if (a.path.base == kNoString) continue;  // un-tracked, skip
 			const std::string &name = strings_.get(a.path.base);
@@ -715,8 +709,8 @@ Analyzer::BorrowPath Analyzer::extractPath(NodeIdx argIdx) const {
 			const AstNode &idxNode = nodes_.get(idxExpr);
 			if (idxNode.tag == AstTag::NumberLit) {
 				// d.lhs = lo32, d.rhs = hi32, flags bit 0 = isNeg
-				uint64_t mag = uint64_t(idxNode.lhs) |
-				               (uint64_t(idxNode.rhs) << 32);
+				uint64_t mag =
+				    uint64_t(idxNode.lhs) | (uint64_t(idxNode.rhs) << 32);
 				s.indexIsConst = ((idxNode.flags & 1u) == 0);
 				s.constIndex = mag;
 			} else {
@@ -822,9 +816,10 @@ void Analyzer::checkVariableRead(NodeIdx idx, const NameMap &state) {
 		emitError("use of uninitialized binding `" + name + "`", idx, name);
 		return;
 	case InitState::MaybeInit:
-		emitError("binding `" + name +
-		              "` may not be initialized on every path that reaches here",
-		          idx, name);
+		emitError(
+		    "binding `" + name +
+		        "` may not be initialized on every path that reaches here",
+		    idx, name);
 		return;
 	}
 }
@@ -850,7 +845,10 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 		bool isParam = false;
 		if (args_) {
 			for (const Param &p : *args_) {
-				if (p.Name == name) { isParam = true; break; }
+				if (p.Name == name) {
+					isParam = true;
+					break;
+				}
 			}
 		}
 		if (isParam) continue;
@@ -858,8 +856,7 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 		auto vt = varTypes_.find(name);
 		if (vt == varTypes_.end()) continue;
 		const TypeKey &k = types_->get(vt->second);
-		if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named)
-			continue;
+		if (k.kind != TypeKind::Struct && k.kind != TypeKind::Named) continue;
 		StringIdx structNameIdx = static_cast<StringIdx>(k.a);
 		if (structNameIdx == kNoString) continue;
 		const std::string &structName = strings_.get(structNameIdx);
@@ -868,8 +865,8 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 		InitState s = sv.second;
 		if (s == InitState::Init) continue;
 
-		std::string msg = "drop-bearing binding `" + name + "` of type `" +
-		                  structName + "` ";
+		std::string msg =
+		    "drop-bearing binding `" + name + "` of type `" + structName + "` ";
 		if (s == InitState::Uninit) {
 			msg += "must be initialized before this exit; drop runs on it "
 			       "and would otherwise read uninit memory";
@@ -969,7 +966,8 @@ std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
 	return a.run(fn);
 }
 
-const FunctionAST *Analyzer::lookupDropFor(const std::string &bindingName) const {
+const FunctionAST *
+Analyzer::lookupDropFor(const std::string &bindingName) const {
 	if (!drops_ || !types_) return nullptr;
 	auto vit = varTypes_.find(bindingName);
 	if (vit == varTypes_.end()) return nullptr;

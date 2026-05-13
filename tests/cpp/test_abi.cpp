@@ -31,8 +31,9 @@ namespace {
 // which we're about to populate. Lookup-before-register would throw
 // "Unknown struct type". So: build the LLVM type via JamLLVMStructType
 // against the already-known field types, then register.
-TypeIdx buildStruct(JamCodegenContext &ctx, const std::string &name,
-                    const std::vector<std::pair<std::string, TypeIdx>> &fields) {
+TypeIdx
+buildStruct(JamCodegenContext &ctx, const std::string &name,
+            const std::vector<std::pair<std::string, TypeIdx>> &fields) {
 	StringIdx nameId = ctx.getStringPool().intern(name);
 	TypeIdx ty = ctx.getTypePool().internStruct(nameId);
 	std::vector<JamTypeRef> fieldTypes;
@@ -72,8 +73,8 @@ void testMoveU8IsByValueScalar() {
 void testLetSmallStructIsByValue() {
 	// { u32, u32 } = 8 bytes ≤ 16
 	JamCodegenContext ctx("test");
-	TypeIdx pair = buildStruct(ctx, "Pair",
-	                           {{"a", BuiltinType::U32}, {"b", BuiltinType::U32}});
+	TypeIdx pair = buildStruct(
+	    ctx, "Pair", {{"a", BuiltinType::U32}, {"b", BuiltinType::U32}});
 	auto a = jam::abi::classifyParam(ParamMode::Let, pair, ctx);
 	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByValue);
 	ASSERT_TRUE(a.llvmType != nullptr);
@@ -82,8 +83,8 @@ void testLetSmallStructIsByValue() {
 void testLet16ByteStructIsByValue() {
 	// { u64, u64 } = 16 bytes (boundary case — should be ByValue)
 	JamCodegenContext ctx("test");
-	TypeIdx pair = buildStruct(ctx, "Pair64",
-	                           {{"a", BuiltinType::U64}, {"b", BuiltinType::U64}});
+	TypeIdx pair = buildStruct(
+	    ctx, "Pair64", {{"a", BuiltinType::U64}, {"b", BuiltinType::U64}});
 	auto a = jam::abi::classifyParam(ParamMode::Let, pair, ctx);
 	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByValue);
 }
@@ -126,8 +127,8 @@ void testMutLargeStructIsByPointer() {
 void testMutSmallStructIsByPointer() {
 	// `mut` is always ByPointer regardless of size.
 	JamCodegenContext ctx("test");
-	TypeIdx pair = buildStruct(ctx, "PairMut",
-	                           {{"a", BuiltinType::U32}, {"b", BuiltinType::U32}});
+	TypeIdx pair = buildStruct(
+	    ctx, "PairMut", {{"a", BuiltinType::U32}, {"b", BuiltinType::U32}});
 	auto a = jam::abi::classifyParam(ParamMode::Mut, pair, ctx);
 	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByPointer);
 }
@@ -167,8 +168,8 @@ void testReturnU32IsDirect() {
 
 void testReturn16ByteAggregateIsDirect() {
 	JamCodegenContext ctx("test");
-	TypeIdx pair = buildStruct(ctx, "PairR",
-	                           {{"a", BuiltinType::U64}, {"b", BuiltinType::U64}});
+	TypeIdx pair = buildStruct(
+	    ctx, "PairR", {{"a", BuiltinType::U64}, {"b", BuiltinType::U64}});
 	auto r = jam::abi::classifyReturn(pair, ctx);
 	ASSERT_TRUE(r.kind == jam::abi::ReturnABI::Kind::Direct);
 }

@@ -176,9 +176,7 @@ static bool isAlphaDigit(char c) {
 	       (c >= 'A' && c <= 'Z');
 }
 
-void Lexer::number() {
-	scanNumberBody(current - 1);
-}
+void Lexer::number() { scanNumberBody(current - 1); }
 
 void Lexer::negativeNumber() {
 	int start = current - 1;  // points at the leading `-`
@@ -267,7 +265,6 @@ void Lexer::scanNumberBody(int start) {
 	std::string num = source.substr(start, current - start);
 	addToken(TOK_NUMBER, num);
 }
-
 
 char Lexer::parseHexByte() {
 	// Parse two hex digits

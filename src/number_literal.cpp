@@ -157,9 +157,7 @@ NumberResult parseNumberLiteral(const std::string &bytes) {
 			if (baseValue != 10 && baseValue != 16) {
 				return fail(NumberErrorKind::InvalidFloatBase, 2);
 			}
-			if (period) {
-				return fail(NumberErrorKind::DuplicatePeriod, i);
-			}
+			if (period) { return fail(NumberErrorKind::DuplicatePeriod, i); }
 			period = true;
 			if (underscore) {
 				return fail(NumberErrorKind::SpecialAfterUnderscore, i);

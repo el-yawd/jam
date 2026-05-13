@@ -44,9 +44,7 @@ TypeIdx JamCodegenContext::internFromString(const std::string &typeStr) const {
 	if (typeStr == "f64") return BuiltinType::F64;
 	if (typeStr == "bool" || typeStr == "u1") return BuiltinType::Bool;
 	// `str` is a slice of u8.
-	if (typeStr == "str") {
-		return typePool.internSlice(BuiltinType::U8);
-	}
+	if (typeStr == "str") { return typePool.internSlice(BuiltinType::U8); }
 	// User-defined struct (looked up in the registry by name).
 	if (getStruct(typeStr)) {
 		StringIdx nameId = stringPool.intern(typeStr);
@@ -78,9 +76,7 @@ TypeIdx JamCodegenContext::internFromString(const std::string &typeStr) const {
 }
 
 JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
-	if (ty >= llvmTypeCache.size()) {
-		llvmTypeCache.resize(ty + 1, nullptr);
-	}
+	if (ty >= llvmTypeCache.size()) { llvmTypeCache.resize(ty + 1, nullptr); }
 	if (llvmTypeCache[ty]) return llvmTypeCache[ty];
 
 	const TypeKey &k = typePool.get(ty);
@@ -138,8 +134,7 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 		const auto *sinfo = getStruct(name);
 		if (!sinfo) {
-			throw std::runtime_error(
-			    "Unknown struct type: " + name);
+			throw std::runtime_error("Unknown struct type: " + name);
 		}
 		result = sinfo->type;
 		break;
@@ -170,17 +165,14 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 				result = getLLVMType(aliasTarget);
 				break;
 			}
-			throw std::runtime_error(
-			    "Unknown user-defined type: " + name);
+			throw std::runtime_error("Unknown user-defined type: " + name);
 		}
 		break;
 	}
 	case TypeKind::Union: {
 		const std::string &name = stringPool.get(static_cast<StringIdx>(k.a));
 		const auto *info = getUnion(name);
-		if (!info) {
-			throw std::runtime_error("Unknown union type: " + name);
-		}
+		if (!info) { throw std::runtime_error("Unknown union type: " + name); }
 		result = info->type;
 		break;
 	}
@@ -235,8 +227,7 @@ bool JamCodegenContext::hasVariable(const std::string &name) const {
 	return namedValues.find(name) != namedValues.end();
 }
 
-void JamCodegenContext::setVariableType(const std::string &name,
-                                        TypeIdx type) {
+void JamCodegenContext::setVariableType(const std::string &name, TypeIdx type) {
 	namedValueTypes[name] = type;
 }
 
@@ -276,18 +267,12 @@ JamCodegenContext::lookupStruct(TypeIdx ty) const {
 	// substitution context wins (T, Self, __anon_struct_N
 	// resolved per-instantiation during method body codegen).
 	TypeIdx substTarget = lookupCurrentSubst(name);
-	if (substTarget != kNoType) {
-		return lookupStruct(substTarget);
-	}
-	if (const StructInfo *direct = getStruct(name)) {
-		return direct;
-	}
+	if (substTarget != kNoType) { return lookupStruct(substTarget); }
+	if (const StructInfo *direct = getStruct(name)) { return direct; }
 	// try the type alias table — `const BoxI32 = Box(i32);`
 	// maps `BoxI32` to the instantiated struct's TypeIdx.
 	TypeIdx aliasTarget = lookupTypeAlias(name);
-	if (aliasTarget != kNoType) {
-		return lookupStruct(aliasTarget);
-	}
+	if (aliasTarget != kNoType) { return lookupStruct(aliasTarget); }
 	return nullptr;
 }
 
@@ -409,9 +394,7 @@ JamCodegenContext::lookupEnum(TypeIdx ty) const {
 	// try the type alias table — `const OptI32 =
 	// Option(i32);` maps `OptI32` to the instantiated enum's TypeIdx.
 	TypeIdx aliasTarget = lookupTypeAlias(name);
-	if (aliasTarget != kNoType) {
-		return lookupEnum(aliasTarget);
-	}
+	if (aliasTarget != kNoType) { return lookupEnum(aliasTarget); }
 	return nullptr;
 }
 
@@ -436,8 +419,7 @@ JamCodegenContext::findEnumByLLVMType(JamTypeRef ty) const {
 }
 
 void JamCodegenContext::registerModuleConst(const std::string &name,
-                                            NodeIdx init,
-                                            TypeIdx declared) {
+                                            NodeIdx init, TypeIdx declared) {
 	moduleConsts[name] = ModuleConstInfo{init, declared};
 }
 
@@ -516,8 +498,7 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 	case TypeKind::Slice:
 		return 16;  // (ptr, len)
 	case TypeKind::Array:
-		return static_cast<uint64_t>(k.b) *
-		       typeSize(static_cast<TypeIdx>(k.a));
+		return static_cast<uint64_t>(k.b) * typeSize(static_cast<TypeIdx>(k.a));
 	case TypeKind::Struct:
 	case TypeKind::Named: {
 		// a Named type may be a substitution-context
@@ -579,14 +560,12 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		    aliasTarget != kNoType) {
 			return typeSize(aliasTarget);
 		}
-		throw std::runtime_error(
-		    "typeSize on unregistered user type");
+		throw std::runtime_error("typeSize on unregistered user type");
 	}
 	case TypeKind::Union: {
 		const UnionInfo *info = lookupUnion(ty);
 		if (!info) {
-			throw std::runtime_error(
-			    "typeSize on unregistered union type");
+			throw std::runtime_error("typeSize on unregistered union type");
 		}
 		uint64_t maxSize = 0, maxAlign = 1;
 		for (const auto &f : info->fields) {
@@ -666,14 +645,12 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 		    aliasTarget != kNoType) {
 			return typeAlign(aliasTarget);
 		}
-		throw std::runtime_error(
-		    "typeAlign on unregistered user type");
+		throw std::runtime_error("typeAlign on unregistered user type");
 	}
 	case TypeKind::Union: {
 		const UnionInfo *info = lookupUnion(ty);
 		if (!info) {
-			throw std::runtime_error(
-			    "typeAlign on unregistered union type");
+			throw std::runtime_error("typeAlign on unregistered union type");
 		}
 		uint64_t maxAlign = 1;
 		for (const auto &f : info->fields) {
@@ -699,31 +676,29 @@ namespace {
 // Recursively rewrite a TypeIdx, replacing parameter Named-types with their
 // bound concrete TypeIdx. Other compound types (pointers, slices, arrays,
 // nested generic calls) are reconstructed with substituted children.
-TypeIdx substituteType(
-    TypeIdx ty, const std::unordered_map<std::string, TypeIdx> &subst,
-    TypePool &types, const StringPool &strings) {
+TypeIdx substituteType(TypeIdx ty,
+                       const std::unordered_map<std::string, TypeIdx> &subst,
+                       TypePool &types, const StringPool &strings) {
 	const TypeKey &k = types.get(ty);
 	switch (k.kind) {
 	case TypeKind::Named: {
-		const std::string &name =
-		    strings.get(static_cast<StringIdx>(k.a));
+		const std::string &name = strings.get(static_cast<StringIdx>(k.a));
 		auto it = subst.find(name);
 		if (it != subst.end()) return it->second;
 		return ty;
 	}
 	case TypeKind::PtrSingle:
-		return types.internPtrSingle(substituteType(
-		    static_cast<TypeIdx>(k.a), subst, types, strings));
+		return types.internPtrSingle(
+		    substituteType(static_cast<TypeIdx>(k.a), subst, types, strings));
 	case TypeKind::PtrMany:
-		return types.internPtrMany(substituteType(
-		    static_cast<TypeIdx>(k.a), subst, types, strings));
+		return types.internPtrMany(
+		    substituteType(static_cast<TypeIdx>(k.a), subst, types, strings));
 	case TypeKind::Slice:
-		return types.internSlice(substituteType(
-		    static_cast<TypeIdx>(k.a), subst, types, strings));
+		return types.internSlice(
+		    substituteType(static_cast<TypeIdx>(k.a), subst, types, strings));
 	case TypeKind::Array:
 		return types.internArray(
-		    substituteType(static_cast<TypeIdx>(k.a), subst, types,
-		                   strings),
+		    substituteType(static_cast<TypeIdx>(k.a), subst, types, strings),
 		    k.b);
 	case TypeKind::GenericCall: {
 		// Recurse into args: a generic call inside a generic body
@@ -732,8 +707,7 @@ TypeIdx substituteType(
 		std::vector<TypeIdx> newArgs;
 		newArgs.reserve(args.size());
 		for (TypeIdx a : args) {
-			newArgs.push_back(
-			    substituteType(a, subst, types, strings));
+			newArgs.push_back(substituteType(a, subst, types, strings));
 		}
 		return types.internGenericCall(static_cast<StringIdx>(k.a),
 		                               std::move(newArgs));
@@ -750,8 +724,7 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 	if (cached != genericResolutions_.end()) return cached->second;
 
 	const TypeKey &k = typePool.get(callTy);
-	const std::string &calleeName =
-	    stringPool.get(static_cast<StringIdx>(k.a));
+	const std::string &calleeName = stringPool.get(static_cast<StringIdx>(k.a));
 	const auto &args = typePool.genericArgsAt(k.b);
 
 	const FunctionAST *generic = getFunctionAST(calleeName);
@@ -764,10 +737,10 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 		    "` is a non-generic function used in a type position");
 	}
 	if (args.size() != generic->Args.size()) {
-		throw std::runtime_error(
-		    "Generic `" + calleeName + "` expects " +
-		    std::to_string(generic->Args.size()) +
-		    " type argument(s), got " + std::to_string(args.size()));
+		throw std::runtime_error("Generic `" + calleeName + "` expects " +
+		                         std::to_string(generic->Args.size()) +
+		                         " type argument(s), got " +
+		                         std::to_string(args.size()));
 	}
 
 	// v1 only supports `T: type` parameters (no comptime values yet).
@@ -806,20 +779,16 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 			// Not a parameter — treat as a named type reference and
 			// substitute through (handles forwarding generics that
 			// return a non-parameter named type).
-			TypeIdx asNamed =
-			    typePool.internNamed(stringPool.intern(name));
-			result = substituteType(asNamed, subst, typePool,
-			                        stringPool);
+			TypeIdx asNamed = typePool.internNamed(stringPool.intern(name));
+			result = substituteType(asNamed, subst, typePool, stringPool);
 			break;
 		}
 		if (value.tag == AstTag::StructExpr) {
-			result = instantiateStructExpr(
-			    value, calleeName, args, subst);
+			result = instantiateStructExpr(value, calleeName, args, subst);
 			break;
 		}
 		if (value.tag == AstTag::EnumExpr) {
-			result = instantiateEnumExpr(
-			    value, calleeName, args, subst);
+			result = instantiateEnumExpr(value, calleeName, args, subst);
 			break;
 		}
 		throw std::runtime_error(
@@ -829,9 +798,8 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 	}
 
 	if (result == kNoType) {
-		throw std::runtime_error(
-		    "Generic `" + calleeName +
-		    "` has no return statement to evaluate");
+		throw std::runtime_error("Generic `" + calleeName +
+		                         "` has no return statement to evaluate");
 	}
 
 	genericResolutions_[callTy] = result;
@@ -872,8 +840,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 		switch (ak.kind) {
 		case TypeKind::Int: {
 			char buf[16];
-			std::snprintf(buf, sizeof(buf), "%c%u",
-			              ak.b ? 'i' : 'u', ak.a);
+			std::snprintf(buf, sizeof(buf), "%c%u", ak.b ? 'i' : 'u', ak.a);
 			instName += buf;
 			break;
 		}
@@ -882,8 +849,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 			break;
 		case TypeKind::Struct:
 		case TypeKind::Named:
-			instName +=
-			    stringPool.get(static_cast<StringIdx>(ak.a));
+			instName += stringPool.get(static_cast<StringIdx>(ak.a));
 			break;
 		default:
 			instName += "T";  // catch-all; v2 spec needed
@@ -908,8 +874,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 	// it via the same map. Used for field types, method signatures,
 	// and method body codegen.
 	std::unordered_map<std::string, TypeIdx> bodySubst = subst;
-	TypeIdx instNamed =
-	    typePool.internNamed(stringPool.intern(instName));
+	TypeIdx instNamed = typePool.internNamed(stringPool.intern(instName));
 	bodySubst[anon->Name] = instNamed;
 	bodySubst["Self"] = instNamed;
 
@@ -918,12 +883,11 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 	instFields.reserve(anon->Fields.size());
 	for (const auto &f : anon->Fields) {
 		instFields.emplace_back(
-		    f.first,
-		    substituteType(f.second, bodySubst, typePool, stringPool));
+		    f.first, substituteType(f.second, bodySubst, typePool, stringPool));
 	}
 
-	JamTypeRef llvmStruct = JamLLVMStructCreateNamed(
-	    getContext(), instName.c_str());
+	JamTypeRef llvmStruct =
+	    JamLLVMStructCreateNamed(getContext(), instName.c_str());
 	registerStruct(instName, llvmStruct, instFields);
 
 	std::vector<JamTypeRef> fieldLLVM;
@@ -950,8 +914,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 		std::vector<InstMethod> insts;
 		insts.reserve(anon->Methods.size());
 
-		JamCodegenContext &mutCtx =
-		    const_cast<JamCodegenContext &>(*this);
+		JamCodegenContext &mutCtx = const_cast<JamCodegenContext &>(*this);
 
 		// Pass 1: clone + register + declarePrototype for every method.
 		for (const auto &origMethod : anon->Methods) {
@@ -959,27 +922,25 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 			instArgs.reserve(origMethod->Args.size());
 			for (const auto &p : origMethod->Args) {
 				Param sp = p;
-				sp.Type = substituteType(p.Type, bodySubst, typePool,
-				                         stringPool);
+				sp.Type =
+				    substituteType(p.Type, bodySubst, typePool, stringPool);
 				instArgs.push_back(std::move(sp));
 			}
 			TypeIdx instReturn = origMethod->ReturnType;
 			if (instReturn != kNoType) {
-				instReturn = substituteType(instReturn, bodySubst,
-				                            typePool, stringPool);
+				instReturn =
+				    substituteType(instReturn, bodySubst, typePool, stringPool);
 			}
 
 			std::string instMethodName = instName + "." + origMethod->Name;
 			auto cloned = std::make_unique<FunctionAST>(
 			    instMethodName, std::move(instArgs), instReturn,
-			    origMethod->Body, origMethod->isExtern,
-			    origMethod->isExport, origMethod->isPub,
-			    origMethod->isTest, origMethod->isVarArgs);
+			    origMethod->Body, origMethod->isExtern, origMethod->isExport,
+			    origMethod->isPub, origMethod->isTest, origMethod->isVarArgs);
 			FunctionAST *clonePtr = cloned.get();
 			instantiatedMethods_.push_back(std::move(cloned));
 
-			if (origMethod->Name == "drop" &&
-			    origMethod->Args.size() == 1 &&
+			if (origMethod->Name == "drop" && origMethod->Args.size() == 1 &&
 			    origMethod->Args[0].Name == "self" &&
 			    origMethod->Args[0].Mode == ParamMode::Mut) {
 				instantiatedDrops_[instName] = clonePtr;
@@ -997,8 +958,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 		// Pass 2: define bodies. All methods are now declared, so
 		// `self.method()` calls between them resolve cleanly.
 		StateSnapshot savedState = snapshotState();
-		JamBasicBlockRef savedBB =
-		    JamLLVMGetInsertBlock(getBuilder());
+		JamBasicBlockRef savedBB = JamLLVMGetInsertBlock(getBuilder());
 		for (const auto &im : insts) {
 			setCurrentSubst(bodySubst);
 			// TODO v2: errors thrown here surface with the generic
@@ -1009,9 +969,7 @@ TypeIdx JamCodegenContext::instantiateStructExpr(
 			clearCurrentSubst();
 		}
 		restoreState(std::move(savedState));
-		if (savedBB) {
-			JamLLVMPositionBuilderAtEnd(getBuilder(), savedBB);
-		}
+		if (savedBB) { JamLLVMPositionBuilderAtEnd(getBuilder(), savedBB); }
 	}
 
 	return typePool.internNamed(stringPool.intern(instName));
@@ -1047,8 +1005,7 @@ TypeIdx JamCodegenContext::instantiateEnumExpr(
 		switch (ak.kind) {
 		case TypeKind::Int: {
 			char buf[16];
-			std::snprintf(buf, sizeof(buf), "%c%u",
-			              ak.b ? 'i' : 'u', ak.a);
+			std::snprintf(buf, sizeof(buf), "%c%u", ak.b ? 'i' : 'u', ak.a);
 			instName += buf;
 			break;
 		}
@@ -1058,8 +1015,7 @@ TypeIdx JamCodegenContext::instantiateEnumExpr(
 		case TypeKind::Struct:
 		case TypeKind::Enum:
 		case TypeKind::Named:
-			instName +=
-			    stringPool.get(static_cast<StringIdx>(ak.a));
+			instName += stringPool.get(static_cast<StringIdx>(ak.a));
 			break;
 		default:
 			instName += "T";
@@ -1100,9 +1056,7 @@ TypeIdx JamCodegenContext::instantiateEnumExpr(
 
 	// For unit-only enums the LLVM type is plain i8 — no body to set.
 	// Done.
-	if (!hasPayload) {
-		return instEnumTy;
-	}
+	if (!hasPayload) { return instEnumTy; }
 
 	// Payloaded enum: layout mirrors main.cpp's fillEnumBodies path —
 	// create a named struct {i8 tag, alignDriver, [extraBytes x i8]},
@@ -1122,9 +1076,7 @@ TypeIdx JamCodegenContext::instantiateEnumExpr(
 			off += s;
 			if (a > varAlign) varAlign = a;
 		}
-		if (varAlign > 1) {
-			off = (off + varAlign - 1) / varAlign * varAlign;
-		}
+		if (varAlign > 1) { off = (off + varAlign - 1) / varAlign * varAlign; }
 		if (off > maxSize) maxSize = off;
 		if (varAlign > maxAlign) maxAlign = varAlign;
 	}
@@ -1132,28 +1084,38 @@ TypeIdx JamCodegenContext::instantiateEnumExpr(
 	JamTypeRef alignDriver;
 	uint64_t alignDriverSize;
 	switch (maxAlign) {
-	case 1: alignDriver = getInt8Type();  alignDriverSize = 1; break;
-	case 2: alignDriver = getInt16Type(); alignDriverSize = 2; break;
-	case 4: alignDriver = getInt32Type(); alignDriverSize = 4; break;
-	case 8: alignDriver = getInt64Type(); alignDriverSize = 8; break;
+	case 1:
+		alignDriver = getInt8Type();
+		alignDriverSize = 1;
+		break;
+	case 2:
+		alignDriver = getInt16Type();
+		alignDriverSize = 2;
+		break;
+	case 4:
+		alignDriver = getInt32Type();
+		alignDriverSize = 4;
+		break;
+	case 8:
+		alignDriver = getInt64Type();
+		alignDriverSize = 8;
+		break;
 	default:
 		throw std::runtime_error(
 		    "Enum `" + instName +
 		    "` requires alignment > 8, which is not yet supported");
 	}
 
-	uint64_t paddedSize =
-	    (maxSize + maxAlign - 1) / maxAlign * maxAlign;
-	uint64_t extraBytes = (paddedSize > alignDriverSize)
-	                          ? paddedSize - alignDriverSize
-	                          : 0;
+	uint64_t paddedSize = (maxSize + maxAlign - 1) / maxAlign * maxAlign;
+	uint64_t extraBytes =
+	    (paddedSize > alignDriverSize) ? paddedSize - alignDriverSize : 0;
 
 	std::vector<JamTypeRef> bodyTypes;
 	bodyTypes.push_back(getInt8Type());
 	bodyTypes.push_back(alignDriver);
 	if (extraBytes > 0) {
-		bodyTypes.push_back(JamLLVMArrayType(
-		    getInt8Type(), static_cast<unsigned>(extraBytes)));
+		bodyTypes.push_back(
+		    JamLLVMArrayType(getInt8Type(), static_cast<unsigned>(extraBytes)));
 	}
 	JamLLVMStructSetBody(llvmStruct, bodyTypes.data(),
 	                     static_cast<unsigned>(bodyTypes.size()), false);

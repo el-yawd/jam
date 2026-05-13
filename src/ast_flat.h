@@ -46,9 +46,9 @@ enum class AstTag : uint8_t {
 	Invalid = 0,
 
 	// Literals
-	NumberLit,     // d.lhs = lo32(val), d.rhs = hi32(val); flags bit 0 = isNeg
-	BoolLit,       // d.lhs = 0|1
-	StringLit,     // d.lhs = StringIdx
+	NumberLit,  // d.lhs = lo32(val), d.rhs = hi32(val); flags bit 0 = isNeg
+	BoolLit,    // d.lhs = 0|1
+	StringLit,  // d.lhs = StringIdx
 
 	// Lvalues / refs
 	Variable,      // d.lhs = StringIdx (name)
@@ -58,8 +58,8 @@ enum class AstTag : uint8_t {
 	AddressOf,     // d.lhs = NodeIdx (operand)
 
 	// Operators
-	UnaryOp,       // d.lhs = NodeIdx (operand); op kind in `op`
-	BinaryOp,      // d.lhs = NodeIdx (lhs), d.rhs = NodeIdx (rhs); op in `op`
+	UnaryOp,   // d.lhs = NodeIdx (operand); op kind in `op`
+	BinaryOp,  // d.lhs = NodeIdx (lhs), d.rhs = NodeIdx (rhs); op in `op`
 
 	// Calls
 	// d.lhs = StringIdx (callee fully qualified, e.g. "std.fmt.println")
@@ -67,8 +67,8 @@ enum class AstTag : uint8_t {
 	Call,
 
 	// Statements
-	Return,        // d.lhs = NodeIdx (operand) or kNoNode for bare `return;`
-	Assign,        // d.lhs = NodeIdx (target), d.rhs = NodeIdx (value)
+	Return,  // d.lhs = NodeIdx (operand) or kNoNode for bare `return;`
+	Assign,  // d.lhs = NodeIdx (target), d.rhs = NodeIdx (value)
 	// d.lhs = ExtraIdx → [StringIdx name, TypeIdx type, NodeIdx init]
 	// d.rhs = flags (bit 0 = isConst)
 	VarDecl,
@@ -84,7 +84,7 @@ enum class AstTag : uint8_t {
 	Continue,
 
 	// Module-level
-	ImportLit,     // d.lhs = StringIdx (module path)
+	ImportLit,  // d.lhs = StringIdx (module path)
 	// d.lhs = TypeIdx (struct type, kNoType if inferred from var-decl context)
 	// d.rhs = ExtraIdx → [fieldCount, fieldName0, fieldExpr0, fieldName1, ...]
 	StructLit,
@@ -302,21 +302,21 @@ enum class TypeKind : uint8_t {
 	Invalid = 0,
 	Void,
 	Bool,
-	Int,         // intT.bits, intT.isSigned
-	Float,       // floatT.bits
-	PtrSingle,   // *T   — ptrT.elem (no indexing on this kind)
-	PtrMany,     // [*]T — ptrT.elem (indexable)
-	Slice,       // []T  — sliceT.elem  (lowered to {ptr, len} struct)
-	Array,       // [N]T — arrayT.elem, arrayT.len
-	Struct,      // structT.name (StringIdx)
-	Enum,        // enumT.name (StringIdx); see EnumDeclAST for variants
-	Union,       // unionT.name (StringIdx); see UnionDeclAST for fields
+	Int,        // intT.bits, intT.isSigned
+	Float,      // floatT.bits
+	PtrSingle,  // *T   — ptrT.elem (no indexing on this kind)
+	PtrMany,    // [*]T — ptrT.elem (indexable)
+	Slice,      // []T  — sliceT.elem  (lowered to {ptr, len} struct)
+	Array,      // [N]T — arrayT.elem, arrayT.len
+	Struct,     // structT.name (StringIdx)
+	Enum,       // enumT.name (StringIdx); see EnumDeclAST for variants
+	Union,      // unionT.name (StringIdx); see UnionDeclAST for fields
 	// Parser-emitted "user-named type, kind resolution deferred." The
 	// parser sees `MyType` in a position where it must produce a
 	// TypeIdx but doesn't yet know whether `MyType` is a struct, union,
 	// or enum. The codegen resolves Named values by consulting the
 	// three registries, in that order.
-	Named,       // namedT.name (StringIdx)
+	Named,  // namedT.name (StringIdx)
 	// the type of types — a value of this kind is itself
 	// a TypeIdx, used at compile time only. A function parameter
 	// declared `T: type` accepts a type argument when called. Has no
@@ -497,8 +497,7 @@ class TypePool {
 			genericArgs_.push_back(args);
 			genericArgsIdx_.emplace(std::move(args), argsIdx);
 		}
-		return intern(
-		    TypeKey{TypeKind::GenericCall, 0, 0, nameId, argsIdx});
+		return intern(TypeKey{TypeKind::GenericCall, 0, 0, nameId, argsIdx});
 	}
 
 	const std::vector<TypeIdx> &genericArgsAt(uint32_t idx) const {

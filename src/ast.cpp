@@ -6,12 +6,12 @@
  */
 
 #include "ast.h"
+#include "abi.h"
 #include "ast_flat.h"
 #include "codegen.h"
 #include "jam_llvm.h"
 #include <cstdint>
 #include <stdexcept>
-#include "abi.h"
 #include <string>
 #include <vector>
 
@@ -78,32 +78,33 @@ static TypeIdx pointeeTypeOf(const TypePool &tp, TypeIdx ptrType) {
 // Reconstruct the u64 numeric value from a NumberLit node (lhs holds low 32
 // bits, rhs holds high 32 bits; flags bit 0 marks negation).
 static uint64_t numberLitValue(const AstNode &n) {
-	return static_cast<uint64_t>(n.lhs) |
-	       (static_cast<uint64_t>(n.rhs) << 32);
+	return static_cast<uint64_t>(n.lhs) | (static_cast<uint64_t>(n.rhs) << 32);
 }
 
 // Resolve a PatEnumVariant AST node to its canonical enum name + variant
 // info. Handles all four encoding combinations:
 //   flags & 1 == 0: no bindings (lhs = StringIdx OR TypeIdx, rhs = variant)
-//   flags & 1 == 1: with bindings (lhs = ExtraIdx → [recv, variant, count, ...])
-//   flags & 2 == 0: receiver is StringIdx (source-level name, alias-resolve)
-//   flags & 2 == 1: receiver is TypeIdx (GenericCall — resolved via lookupEnum)
+//   flags & 1 == 1: with bindings (lhs = ExtraIdx → [recv, variant, count,
+//   ...]) flags & 2 == 0: receiver is StringIdx (source-level name,
+//   alias-resolve) flags & 2 == 1: receiver is TypeIdx (GenericCall — resolved
+//   via lookupEnum)
 //
 // Used by every codegen / exhaustiveness / payload-binding site that
 // consumes a PatEnumVariant. Centralizes the alias / generic-call
 // resolution so future encodings only touch this function.
 struct DecodedPatEnumVariant {
-	std::string enumName;         // canonical (`Option__i32`, not alias)
+	std::string enumName;  // canonical (`Option__i32`, not alias)
 	std::string variantName;
 	const JamCodegenContext::EnumInfo *einfo = nullptr;
-	int variantIndex = -1;        // -1 if variant missing
+	int variantIndex = -1;  // -1 if variant missing
 	bool hasBindings = false;
-	ExtraIdx bindingsStart = 0;   // start of [count, b0, b1, ...] when hasBindings
+	ExtraIdx bindingsStart =
+	    0;  // start of [count, b0, b1, ...] when hasBindings
 	uint32_t bindingCount = 0;
 };
 
 static DecodedPatEnumVariant decodePatEnumVariant(JamCodegenContext &ctx,
-                                                   const AstNode &pn) {
+                                                  const AstNode &pn) {
 	const NodeStore &ns = ctx.getNodeStore();
 	const StringPool &sp = ctx.getStringPool();
 	DecodedPatEnumVariant d;
@@ -147,8 +148,7 @@ static DecodedPatEnumVariant decodePatEnumVariant(JamCodegenContext &ctx,
 		}
 	}
 	if (d.einfo) {
-		d.variantIndex =
-		    ctx.getEnumVariantIndex(d.enumName, d.variantName);
+		d.variantIndex = ctx.getEnumVariantIndex(d.enumName, d.variantName);
 	}
 	return d;
 }
@@ -176,8 +176,7 @@ static JamValueRef numberLitConst(JamCodegenContext &ctx, const AstNode &n,
 		else if (val <= 2147483648ULL) IntType = ctx.getInt32Type();
 		else IntType = ctx.getInt64Type();
 		int64_t signedVal = -static_cast<int64_t>(val);
-		return JamLLVMConstInt(IntType, static_cast<uint64_t>(signedVal),
-		                       true);
+		return JamLLVMConstInt(IntType, static_cast<uint64_t>(signedVal), true);
 	}
 	if (val <= 255) IntType = ctx.getInt8Type();
 	else if (val <= 65535) IntType = ctx.getInt16Type();
@@ -224,9 +223,7 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 	if (on.tag == AstTag::Variable) {
 		const std::string &name = sp.get(static_cast<StringIdx>(on.lhs));
 		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + name);
-		}
+		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
 		TypeIdx varTy = ctx.getVariableType(name);
 		const TypeKey &k = ctx.getTypePool().get(varTy);
 
@@ -241,9 +238,8 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 		if (k.kind == TypeKind::PtrMany) {
 			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
 			outElemType = ctx.getLLVMType(elemTy);
-			JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(),
-			                                      allocatedType, alloca,
-			                                      name.c_str());
+			JamValueRef ptrVal = JamLLVMBuildLoad(
+			    ctx.getBuilder(), allocatedType, alloca, name.c_str());
 			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, ptrVal,
 			                          idxVal, "ptrgep");
 		}
@@ -283,11 +279,9 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 			const TypeKey &lvlKey = ctx.getTypePool().get(typeAtLevel);
 			if (lvlKey.kind == TypeKind::Slice && fieldName == "ptr") {
 				currentPtr = JamLLVMBuildStructGEP(
-				    ctx.getBuilder(), currentType, currentPtr, 0,
-				    "slice.ptr");
+				    ctx.getBuilder(), currentType, currentPtr, 0, "slice.ptr");
 				TypeIdx elemTy = static_cast<TypeIdx>(lvlKey.a);
-				typeAtLevel =
-				    ctx.getTypePool().internPtrMany(elemTy);
+				typeAtLevel = ctx.getTypePool().internPtrMany(elemTy);
 				currentType = ctx.getLLVMType(typeAtLevel);
 				continue;
 			}
@@ -321,8 +315,8 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 			outElemType = ctx.getLLVMType(elemTy);
 			JamValueRef loadedPtr = JamLLVMBuildLoad(
 			    ctx.getBuilder(), currentType, currentPtr, "fld.ptr");
-			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType,
-			                          loadedPtr, idxVal, "ptrgep");
+			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, loadedPtr,
+			                          idxVal, "ptrgep");
 		}
 
 		outElemType = JamLLVMGetArrayElementType(currentType);
@@ -337,15 +331,15 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 // Special-form calls (println/print/sleep/assert)
 
 static JamValueRef genPrintCall(JamCodegenContext &ctx,
-                                const std::string &callee,
-                                const uint32_t *args, uint32_t argCount) {
+                                const std::string &callee, const uint32_t *args,
+                                uint32_t argCount) {
 	JamFunctionRef printfFunc = JamLLVMGetFunction(ctx.getModule(), "printf");
 	if (!printfFunc) {
 		JamTypeRef i8PtrType = JamLLVMPointerType(ctx.getInt8Type(), 0);
 		JamTypeRef printfRetType = ctx.getInt32Type();
 		JamTypeRef printfParamTypes[1] = {i8PtrType};
-		JamTypeRef printfType = JamLLVMFunctionType(
-		    printfRetType, printfParamTypes, 1, true);
+		JamTypeRef printfType =
+		    JamLLVMFunctionType(printfRetType, printfParamTypes, 1, true);
 		printfFunc = JamLLVMAddFunction(ctx.getModule(), "printf", printfType);
 		JamLLVMApplyDefaultFnAttrs(printfFunc, /*isExtern=*/true);
 	}
@@ -355,8 +349,8 @@ static JamValueRef genPrintCall(JamCodegenContext &ctx,
 		JamTypeRef i8PtrType = JamLLVMPointerType(ctx.getInt8Type(), 0);
 		JamTypeRef putsRetType = ctx.getInt32Type();
 		JamTypeRef putsParamTypes[1] = {i8PtrType};
-		JamTypeRef putsType = JamLLVMFunctionType(
-		    putsRetType, putsParamTypes, 1, false);
+		JamTypeRef putsType =
+		    JamLLVMFunctionType(putsRetType, putsParamTypes, 1, false);
 		putsFunc = JamLLVMAddFunction(ctx.getModule(), "puts", putsType);
 		JamLLVMApplyDefaultFnAttrs(putsFunc, /*isExtern=*/true);
 	}
@@ -365,8 +359,7 @@ static JamValueRef genPrintCall(JamCodegenContext &ctx,
 		JamValueRef arg = codegenNode(ctx, args[0]);
 		if (!arg) return nullptr;
 		if (JamLLVMTypeIsStruct(JamLLVMTypeOf(arg))) {
-			arg = JamLLVMBuildExtractValue(ctx.getBuilder(), arg, 0,
-			                               "str_ptr");
+			arg = JamLLVMBuildExtractValue(ctx.getBuilder(), arg, 0, "str_ptr");
 		}
 		JamValueRef callArgs[1] = {arg};
 		return JamLLVMBuildCall(ctx.getBuilder(), putsFunc, callArgs, 1,
@@ -376,11 +369,10 @@ static JamValueRef genPrintCall(JamCodegenContext &ctx,
 		JamValueRef arg = codegenNode(ctx, args[0]);
 		if (!arg) return nullptr;
 		if (JamLLVMTypeIsStruct(JamLLVMTypeOf(arg))) {
-			arg = JamLLVMBuildExtractValue(ctx.getBuilder(), arg, 0,
-			                               "str_ptr");
+			arg = JamLLVMBuildExtractValue(ctx.getBuilder(), arg, 0, "str_ptr");
 		}
-		JamValueRef formatPtr = JamLLVMBuildGlobalStringPtr(
-		    ctx.getBuilder(), "%s", "print_fmt");
+		JamValueRef formatPtr =
+		    JamLLVMBuildGlobalStringPtr(ctx.getBuilder(), "%s", "print_fmt");
 		JamValueRef callArgs[2] = {formatPtr, arg};
 		return JamLLVMBuildCall(ctx.getBuilder(), printfFunc, callArgs, 2,
 		                        "printf_call");
@@ -394,14 +386,12 @@ static JamValueRef genSleepCall(JamCodegenContext &ctx, const uint32_t *args,
 		throw std::runtime_error(
 		    "std.thread.sleep expects exactly 1 argument (milliseconds)");
 	}
-	JamFunctionRef usleepFunc =
-	    JamLLVMGetFunction(ctx.getModule(), "usleep");
+	JamFunctionRef usleepFunc = JamLLVMGetFunction(ctx.getModule(), "usleep");
 	if (!usleepFunc) {
 		JamTypeRef usleepRetType = ctx.getInt32Type();
 		JamTypeRef usleepParamTypes[1] = {ctx.getInt32Type()};
-		JamTypeRef usleepType = JamLLVMFunctionType(usleepRetType,
-		                                            usleepParamTypes, 1,
-		                                            false);
+		JamTypeRef usleepType =
+		    JamLLVMFunctionType(usleepRetType, usleepParamTypes, 1, false);
 		usleepFunc = JamLLVMAddFunction(ctx.getModule(), "usleep", usleepType);
 		JamLLVMApplyDefaultFnAttrs(usleepFunc, /*isExtern=*/true);
 	}
@@ -410,14 +400,13 @@ static JamValueRef genSleepCall(JamCodegenContext &ctx, const uint32_t *args,
 	if (!msArg) return nullptr;
 
 	JamTypeRef i64Type = ctx.getInt64Type();
-	JamValueRef msArg64 = JamLLVMBuildIntCast(ctx.getBuilder(), msArg, i64Type,
-	                                          false, "ms_cast");
+	JamValueRef msArg64 =
+	    JamLLVMBuildIntCast(ctx.getBuilder(), msArg, i64Type, false, "ms_cast");
 	JamValueRef thousand = JamLLVMConstInt(i64Type, 1000, false);
-	JamValueRef usArg64 = JamLLVMBuildMul(ctx.getBuilder(), msArg64, thousand,
-	                                      "us_mul");
-	JamValueRef usArg = JamLLVMBuildIntCast(ctx.getBuilder(), usArg64,
-	                                        ctx.getInt32Type(), false,
-	                                        "us_trunc");
+	JamValueRef usArg64 =
+	    JamLLVMBuildMul(ctx.getBuilder(), msArg64, thousand, "us_mul");
+	JamValueRef usArg = JamLLVMBuildIntCast(
+	    ctx.getBuilder(), usArg64, ctx.getInt32Type(), false, "us_trunc");
 	JamValueRef callArgs[1] = {usArg};
 	return JamLLVMBuildCall(ctx.getBuilder(), usleepFunc, callArgs, 1,
 	                        "usleep_call");
@@ -452,13 +441,13 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 			unsigned aw = JamLLVMGetIntTypeWidth(actualType);
 			unsigned ew = JamLLVMGetIntTypeWidth(expectedType);
 			if (aw > ew) {
-				expected = JamLLVMBuildIntCast(ctx.getBuilder(), expected,
-				                               actualType, false,
-				                               "assert_cast");
+				expected =
+				    JamLLVMBuildIntCast(ctx.getBuilder(), expected, actualType,
+				                        false, "assert_cast");
 			} else {
-				actual = JamLLVMBuildIntCast(ctx.getBuilder(), actual,
-				                             expectedType, false,
-				                             "assert_cast");
+				actual =
+				    JamLLVMBuildIntCast(ctx.getBuilder(), actual, expectedType,
+				                        false, "assert_cast");
 			}
 		}
 	}
@@ -481,16 +470,16 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 	if (!printfFunc) {
 		JamTypeRef i8PtrType = JamLLVMPointerType(ctx.getInt8Type(), 0);
 		JamTypeRef printfParamTypes[1] = {i8PtrType};
-		JamTypeRef printfType = JamLLVMFunctionType(
-		    ctx.getInt32Type(), printfParamTypes, 1, true);
+		JamTypeRef printfType =
+		    JamLLVMFunctionType(ctx.getInt32Type(), printfParamTypes, 1, true);
 		printfFunc = JamLLVMAddFunction(ctx.getModule(), "printf", printfType);
 		JamLLVMApplyDefaultFnAttrs(printfFunc, /*isExtern=*/true);
 	}
 	JamFunctionRef exitFunc = JamLLVMGetFunction(ctx.getModule(), "exit");
 	if (!exitFunc) {
 		JamTypeRef exitParamTypes[1] = {ctx.getInt32Type()};
-		JamTypeRef exitType = JamLLVMFunctionType(
-		    ctx.getVoidType(), exitParamTypes, 1, false);
+		JamTypeRef exitType =
+		    JamLLVMFunctionType(ctx.getVoidType(), exitParamTypes, 1, false);
 		exitFunc = JamLLVMAddFunction(ctx.getModule(), "exit", exitType);
 		JamLLVMApplyDefaultFnAttrs(exitFunc, /*isExtern=*/true);
 	}
@@ -514,8 +503,8 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 
 static JamValueRef codegenStringLit(JamCodegenContext &ctx,
                                     const std::string &val) {
-	JamValueRef StrConstant = JamLLVMConstString(ctx.getContext(), val.c_str(),
-	                                              val.length(), true);
+	JamValueRef StrConstant =
+	    JamLLVMConstString(ctx.getContext(), val.c_str(), val.length(), true);
 	JamTypeRef strArrayType =
 	    JamLLVMArrayType(ctx.getInt8Type(), val.length() + 1);
 	JamValueRef StrGlobal =
@@ -526,14 +515,14 @@ static JamValueRef codegenStringLit(JamCodegenContext &ctx,
 	JamTypeRef i8PtrType = JamLLVMPointerType(ctx.getInt8Type(), 0);
 	JamTypeRef usizeType = ctx.getInt64Type();
 	JamTypeRef sliceTypes[2] = {i8PtrType, usizeType};
-	JamTypeRef sliceType = JamLLVMStructType(ctx.getContext(), sliceTypes, 2,
-	                                          false);
+	JamTypeRef sliceType =
+	    JamLLVMStructType(ctx.getContext(), sliceTypes, 2, false);
 
-	JamValueRef StrPtr = JamLLVMBuildBitCast(ctx.getBuilder(), StrGlobal,
-	                                         i8PtrType, "str_ptr");
+	JamValueRef StrPtr =
+	    JamLLVMBuildBitCast(ctx.getBuilder(), StrGlobal, i8PtrType, "str_ptr");
 	JamValueRef SliceStruct = JamLLVMGetUndef(sliceType);
-	SliceStruct = JamLLVMBuildInsertValue(ctx.getBuilder(), SliceStruct,
-	                                       StrPtr, 0, "slice_ptr");
+	SliceStruct = JamLLVMBuildInsertValue(ctx.getBuilder(), SliceStruct, StrPtr,
+	                                      0, "slice_ptr");
 	SliceStruct = JamLLVMBuildInsertValue(
 	    ctx.getBuilder(), SliceStruct,
 	    JamLLVMConstInt(usizeType, val.length(), false), 1, "slice_len");
@@ -572,8 +561,7 @@ static bool isSignedIntExpr(JamCodegenContext &ctx, NodeIdx idx) {
 		return isSignedTy(ctx.getVariableType(name));
 	}
 	case AstTag::Call: {
-		const std::string &callee =
-		    sp.get(static_cast<StringIdx>(n.lhs));
+		const std::string &callee = sp.get(static_cast<StringIdx>(n.lhs));
 		if (const FunctionAST *fn = ctx.getFunctionAST(callee)) {
 			return isSignedTy(fn->ReturnType);
 		}
@@ -592,15 +580,12 @@ static bool isSignedIntExpr(JamCodegenContext &ctx, NodeIdx idx) {
 		StringIdx member = static_cast<StringIdx>(n.rhs);
 		const AstNode &bn = ns.get(base);
 		if (bn.tag == AstTag::Variable) {
-			const std::string &varName =
-			    sp.get(static_cast<StringIdx>(bn.lhs));
+			const std::string &varName = sp.get(static_cast<StringIdx>(bn.lhs));
 			TypeIdx baseTy = ctx.getVariableType(varName);
 			if (const auto *info = ctx.lookupStruct(baseTy)) {
 				const std::string &memName = sp.get(member);
 				for (const auto &f : info->fields) {
-					if (f.first == memName) {
-						return isSignedTy(f.second);
-					}
+					if (f.first == memName) { return isSignedTy(f.second); }
 				}
 			}
 		}
@@ -642,9 +627,9 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 		rhsBlock = JamLLVMGetInsertBlock(ctx.getBuilder());
 
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), mergeBlock);
-		JamValueRef phi = JamLLVMBuildPhi(
-		    ctx.getBuilder(), ctx.getInt1Type(),
-		    op == BinOp::LogAnd ? "and.result" : "or.result");
+		JamValueRef phi =
+		    JamLLVMBuildPhi(ctx.getBuilder(), ctx.getInt1Type(),
+		                    op == BinOp::LogAnd ? "and.result" : "or.result");
 
 		JamValueRef shortCircuitVal = JamLLVMConstInt(
 		    ctx.getInt1Type(), op == BinOp::LogAnd ? 0 : 1, false);
@@ -685,9 +670,12 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	}
 
 	switch (op) {
-	case BinOp::Add: return JamLLVMBuildAdd(ctx.getBuilder(), L, R, "addtmp");
-	case BinOp::Sub: return JamLLVMBuildSub(ctx.getBuilder(), L, R, "subtmp");
-	case BinOp::Mul: return JamLLVMBuildMul(ctx.getBuilder(), L, R, "multmp");
+	case BinOp::Add:
+		return JamLLVMBuildAdd(ctx.getBuilder(), L, R, "addtmp");
+	case BinOp::Sub:
+		return JamLLVMBuildSub(ctx.getBuilder(), L, R, "subtmp");
+	case BinOp::Mul:
+		return JamLLVMBuildMul(ctx.getBuilder(), L, R, "multmp");
 	case BinOp::Mod:
 		return JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
 	case BinOp::BitAnd:
@@ -705,32 +693,32 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	case BinOp::Ne:
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_NE, L, R, "cmptmp");
 	case BinOp::Lt: {
-		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
-		               isSignedIntExpr(ctx, rhsIdx);
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
 		return JamLLVMBuildICmp(ctx.getBuilder(),
-		                         signed_ ? JAM_ICMP_SLT : JAM_ICMP_ULT,
-		                         L, R, "cmptmp");
+		                        signed_ ? JAM_ICMP_SLT : JAM_ICMP_ULT, L, R,
+		                        "cmptmp");
 	}
 	case BinOp::Le: {
-		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
-		               isSignedIntExpr(ctx, rhsIdx);
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
 		return JamLLVMBuildICmp(ctx.getBuilder(),
-		                         signed_ ? JAM_ICMP_SLE : JAM_ICMP_ULE,
-		                         L, R, "cmptmp");
+		                        signed_ ? JAM_ICMP_SLE : JAM_ICMP_ULE, L, R,
+		                        "cmptmp");
 	}
 	case BinOp::Gt: {
-		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
-		               isSignedIntExpr(ctx, rhsIdx);
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
 		return JamLLVMBuildICmp(ctx.getBuilder(),
-		                         signed_ ? JAM_ICMP_SGT : JAM_ICMP_UGT,
-		                         L, R, "cmptmp");
+		                        signed_ ? JAM_ICMP_SGT : JAM_ICMP_UGT, L, R,
+		                        "cmptmp");
 	}
 	case BinOp::Ge: {
-		bool signed_ = isSignedIntExpr(ctx, lhsIdx) ||
-		               isSignedIntExpr(ctx, rhsIdx);
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
 		return JamLLVMBuildICmp(ctx.getBuilder(),
-		                         signed_ ? JAM_ICMP_SGE : JAM_ICMP_UGE,
-		                         L, R, "cmptmp");
+		                        signed_ ? JAM_ICMP_SGE : JAM_ICMP_UGE, L, R,
+		                        "cmptmp");
 	}
 	default:
 		throw std::runtime_error("Invalid binary operator");
@@ -739,19 +727,17 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 
 static JamValueRef codegenUnaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	UnaryOp op = static_cast<UnaryOp>(n.op);
-	JamValueRef operandVal =
-	    codegenNode(ctx, static_cast<NodeIdx>(n.lhs));
+	JamValueRef operandVal = codegenNode(ctx, static_cast<NodeIdx>(n.lhs));
 	if (!operandVal) return nullptr;
 	switch (op) {
 	case UnaryOp::LogNot:
-		return JamLLVMBuildXor(
-		    ctx.getBuilder(), operandVal,
-		    JamLLVMConstInt(ctx.getInt1Type(), 1, false), "nottmp");
+		return JamLLVMBuildXor(ctx.getBuilder(), operandVal,
+		                       JamLLVMConstInt(ctx.getInt1Type(), 1, false),
+		                       "nottmp");
 	case UnaryOp::BitNot: {
 		JamTypeRef ty = JamLLVMTypeOf(operandVal);
 		JamValueRef allOnes = JamLLVMConstInt(ty, ~0ULL, false);
-		return JamLLVMBuildXor(ctx.getBuilder(), operandVal, allOnes,
-		                       "nottmp");
+		return JamLLVMBuildXor(ctx.getBuilder(), operandVal, allOnes, "nottmp");
 	}
 	case UnaryOp::Neg: {
 		JamTypeRef ty = JamLLVMTypeOf(operandVal);
@@ -800,8 +786,7 @@ static JamValueRef codegenTypeMethodCall(JamCodegenContext &ctx,
 	StringIdx methodNameId =
 	    static_cast<StringIdx>(ctx.getNodeStore().getExtra(extra));
 	uint32_t argCount = ctx.getNodeStore().getExtra(extra + 1);
-	const std::string &methodName =
-	    ctx.getStringPool().get(methodNameId);
+	const std::string &methodName = ctx.getStringPool().get(methodNameId);
 
 	// Resolve receiver to a struct or enum name. lookupStruct /
 	// lookupEnum handle GenericCall TypeIdx via resolveGenericCall.
@@ -821,18 +806,15 @@ static JamValueRef codegenTypeMethodCall(JamCodegenContext &ctx,
 	// reused as-is for the synthesized Call. Then codegenCall handles
 	// static-method dispatch + enum-variant construction uniformly.
 	std::string qualified = receiverName + "." + methodName;
-	StringIdx calleeId =
-	    ctx.getStringPool().intern(qualified);
-	ExtraIdx callExtra =
-	    ctx.getNodeStore().reserveExtra(1 + argCount);
+	StringIdx calleeId = ctx.getStringPool().intern(qualified);
+	ExtraIdx callExtra = ctx.getNodeStore().reserveExtra(1 + argCount);
 	ctx.getNodeStore().setExtra(callExtra, argCount);
 	for (uint32_t i = 0; i < argCount; i++) {
-		ctx.getNodeStore().setExtra(
-		    callExtra + 1 + i,
-		    ctx.getNodeStore().getExtra(extra + 2 + i));
+		ctx.getNodeStore().setExtra(callExtra + 1 + i,
+		                            ctx.getNodeStore().getExtra(extra + 2 + i));
 	}
-	AstNode synth{AstTag::Call,    0, 0, 0,
-	              static_cast<uint32_t>(calleeId), callExtra};
+	AstNode synth{AstTag::Call, 0, 0, 0, static_cast<uint32_t>(calleeId),
+	              callExtra};
 	return codegenCall(ctx, synth);
 }
 
@@ -840,8 +822,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	// `callee` may be rewritten below (e.g. instance-receiver method
 	// dispatch turns `inst.method` into `StructName.method`), so it's
 	// a value not a reference.
-	std::string callee =
-	    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
+	std::string callee = ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
 	ExtraIdx extra = static_cast<ExtraIdx>(n.rhs);
 	uint32_t argCount = ctx.getNodeStore().getExtra(extra);
 	std::vector<uint32_t> args(argCount);
@@ -889,8 +870,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 				const auto &v = einfo->variants[idx];
 				if (argCount != v.payloadTypes.size()) {
 					throw std::runtime_error(
-					    "Variant `" + enumName + "." + varName +
-					    "` expects " +
+					    "Variant `" + enumName + "." + varName + "` expects " +
 					    std::to_string(v.payloadTypes.size()) +
 					    " payload arg(s), got " + std::to_string(argCount));
 				}
@@ -927,8 +907,8 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					// into field 2 via byte-offset GEP from field 1.
 					unsigned payloadFieldIdx = 1;
 					JamValueRef payloadAreaPtr = JamLLVMBuildStructGEP(
-					    ctx.getBuilder(), enumLLVMType, alloca,
-					    payloadFieldIdx, "enum.payload");
+					    ctx.getBuilder(), enumLLVMType, alloca, payloadFieldIdx,
+					    "enum.payload");
 					(void)einfo;
 					uint64_t off = 0;
 					for (size_t i = 0; i < v.payloadTypes.size(); i++) {
@@ -936,15 +916,13 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 						uint64_t a = ctx.typeAlign(v.payloadTypes[i]);
 						off = (off + a - 1) / a * a;
 						// GEP into the payload bytes at offset `off`.
-						JamValueRef i64Off = JamLLVMConstInt(
-						    ctx.getInt64Type(), off, false);
+						JamValueRef i64Off =
+						    JamLLVMConstInt(ctx.getInt64Type(), off, false);
 						JamValueRef fieldPtr = JamLLVMBuildPtrGEP(
-						    ctx.getBuilder(), ctx.getInt8Type(),
-						    payloadAreaPtr, i64Off, "enum.field.ptr");
-						JamTypeRef fieldTy =
-						    ctx.getLLVMType(v.payloadTypes[i]);
-						JamValueRef argVal =
-						    codegenNode(ctx, args[i], fieldTy);
+						    ctx.getBuilder(), ctx.getInt8Type(), payloadAreaPtr,
+						    i64Off, "enum.field.ptr");
+						JamTypeRef fieldTy = ctx.getLLVMType(v.payloadTypes[i]);
+						JamValueRef argVal = codegenNode(ctx, args[i], fieldTy);
 						if (!argVal) return nullptr;
 						argVal = coerceTo(ctx, argVal, fieldTy);
 						JamLLVMBuildStore(ctx.getBuilder(), argVal, fieldPtr);
@@ -952,8 +930,8 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					}
 				}
 				// Load the constructed enum value from the alloca.
-				return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType,
-				                        alloca, "enum.val");
+				return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType, alloca,
+				                        "enum.val");
 			}
 		}
 	}
@@ -1015,7 +993,10 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 							break;
 						}
 					}
-					if (!found) { recvTy = kNoType; break; }
+					if (!found) {
+						recvTy = kNoType;
+						break;
+					}
 				}
 
 				if (recvTy != kNoType) {
@@ -1029,28 +1010,20 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 							// MemberAccess nodes rooted at Variable.
 							StringIdx rootId =
 							    ctx.getStringPool().intern(rootVar);
-							NodeIdx recvNode =
-							    ctx.getNodeStore().addNode(AstNode{
-							        AstTag::Variable, 0, 0, 0, rootId,
-							        0});
+							NodeIdx recvNode = ctx.getNodeStore().addNode(
+							    AstNode{AstTag::Variable, 0, 0, 0, rootId, 0});
 							for (const auto &fld : fieldChain) {
 								StringIdx fldId =
 								    ctx.getStringPool().intern(fld);
-								recvNode = ctx.getNodeStore().addNode(
-								    AstNode{AstTag::MemberAccess, 0, 0,
-								            0,
-								            static_cast<uint32_t>(
-								                recvNode),
-								            fldId});
+								recvNode = ctx.getNodeStore().addNode(AstNode{
+								    AstTag::MemberAccess, 0, 0, 0,
+								    static_cast<uint32_t>(recvNode), fldId});
 							}
 							ParamMode m = methodAST->Args[0].Mode;
-							if (m == ParamMode::Mut ||
-							    m == ParamMode::Move) {
-								recvNode = ctx.getNodeStore().addNode(
-								    AstNode{AstTag::AddressOf, 0, 0, 0,
-								            static_cast<uint32_t>(
-								                recvNode),
-								            0});
+							if (m == ParamMode::Mut || m == ParamMode::Move) {
+								recvNode = ctx.getNodeStore().addNode(AstNode{
+								    AstTag::AddressOf, 0, 0, 0,
+								    static_cast<uint32_t>(recvNode), 0});
 							}
 							args.insert(args.begin(), recvNode);
 							argCount++;
@@ -1086,8 +1059,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			if (ctx.getVariable(typeName) != nullptr) {
 				TypeIdx recvTy = ctx.getVariableType(typeName);
 				if (recvTy != kNoType) {
-					if (const auto *sinfo =
-					        ctx.lookupStruct(recvTy)) {
+					if (const auto *sinfo = ctx.lookupStruct(recvTy)) {
 						// Look up the method AST to pick the right
 						// receiver shape based on its first-param
 						// mode (let vs mut/move/undefined).
@@ -1099,20 +1071,15 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 							StringIdx recvName =
 							    ctx.getStringPool().intern(typeName);
 							NodeIdx recvNode =
-							    ctx.getNodeStore().addNode(
-							        AstNode{AstTag::Variable, 0, 0, 0,
-							                recvName, 0});
+							    ctx.getNodeStore().addNode(AstNode{
+							        AstTag::Variable, 0, 0, 0, recvName, 0});
 							ParamMode m = methodAST->Args[0].Mode;
-							if (m == ParamMode::Mut ||
-							    m == ParamMode::Move) {
+							if (m == ParamMode::Mut || m == ParamMode::Move) {
 								// Wrap in AddressOf — the method
 								// expects a pointer-shaped self.
-								recvNode = ctx.getNodeStore().addNode(
-								    AstNode{AstTag::AddressOf, 0, 0,
-								            0,
-								            static_cast<uint32_t>(
-								                recvNode),
-								            0});
+								recvNode = ctx.getNodeStore().addNode(AstNode{
+								    AstTag::AddressOf, 0, 0, 0,
+								    static_cast<uint32_t>(recvNode), 0});
 							}
 							args.insert(args.begin(), recvNode);
 							argCount++;
@@ -1143,15 +1110,13 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					// Fall through to the regular lookup; the
 					// parser-time anon-struct name might have been
 					// substituted via the value-position path.
-				} else if (const auto *sinfo =
-				               ctx.lookupStruct(selfTy)) {
+				} else if (const auto *sinfo = ctx.lookupStruct(selfTy)) {
 					typeName = sinfo->name;
 				}
 			} else {
 				TypeIdx ctxTy = ctx.lookupCurrentSubst(typeName);
 				if (ctxTy != kNoType) {
-					if (const auto *sinfo =
-					        ctx.lookupStruct(ctxTy)) {
+					if (const auto *sinfo = ctx.lookupStruct(ctxTy)) {
 						typeName = sinfo->name;
 					}
 				}
@@ -1166,25 +1131,19 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			std::string canonicalType = typeName;
 			TypeIdx aliasTarget = ctx.lookupTypeAlias(typeName);
 			if (aliasTarget != kNoType) {
-				if (const auto *sinfo =
-				        ctx.lookupStruct(aliasTarget)) {
+				if (const auto *sinfo = ctx.lookupStruct(aliasTarget)) {
 					canonicalType = sinfo->name;
 				}
 			}
 
 			if (ctx.getStruct(canonicalType)) {
-				std::string canonical =
-				    canonicalType + "." + methodPart;
-				const FunctionAST *methodAST =
-				    ctx.getFunctionAST(canonical);
-				if (!methodAST) {
-					methodAST = ctx.getFunctionAST(callee);
-				}
+				std::string canonical = canonicalType + "." + methodPart;
+				const FunctionAST *methodAST = ctx.getFunctionAST(canonical);
+				if (!methodAST) { methodAST = ctx.getFunctionAST(callee); }
 				if (methodAST) {
 					lookupName = canonical;
 					llvmName = mangledFunctionName(
-					    *methodAST, ctx.getTypePool(),
-					    ctx.getStringPool());
+					    *methodAST, ctx.getTypePool(), ctx.getStringPool());
 				} else {
 					// LHS resolved to a real struct, but it has no
 					// method by that name. Report this specifically —
@@ -1192,9 +1151,9 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					// where the substituted T lacks an expected method
 					// (e.g. `Maybe(NoDefault).default()` body calling
 					// `T.default()` when NoDefault has no default()).
-					throw std::runtime_error(
-					    "type `" + canonicalType +
-					    "` has no method `" + methodPart + "`");
+					throw std::runtime_error("type `" + canonicalType +
+					                         "` has no method `" + methodPart +
+					                         "`");
 				}
 			}
 		}
@@ -1244,8 +1203,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	unsigned userParamCount =
 	    declaredParamCount - (calleeSretSlot != nullptr ? 1u : 0u);
 	bool isVarArg = JamLLVMFunctionIsVarArg(CalleeF);
-	if (isVarArg ? argCount < userParamCount
-	             : argCount != userParamCount) {
+	if (isVarArg ? argCount < userParamCount : argCount != userParamCount) {
 		throw std::runtime_error("Incorrect number of arguments passed to " +
 		                         callee);
 	}
@@ -1253,13 +1211,11 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	const unsigned calleeSretOffset = (calleeSretSlot != nullptr) ? 1u : 0u;
 
 	std::vector<JamValueRef> ArgsV;
-	if (calleeSretSlot != nullptr) {
-		ArgsV.push_back(calleeSretSlot);
-	}
+	if (calleeSretSlot != nullptr) { ArgsV.push_back(calleeSretSlot); }
 	for (unsigned i = 0; i < argCount; i++) {
 		if (i < userParamCount) {
-			JamTypeRef expected = JamLLVMTypeOf(
-			    JamLLVMGetParam(CalleeF, i + calleeSretOffset));
+			JamTypeRef expected =
+			    JamLLVMTypeOf(JamLLVMGetParam(CalleeF, i + calleeSretOffset));
 
 			bool autoAddress = false;
 			// extern callees follow the C ABI literally; never
@@ -1285,9 +1241,12 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 				    argNode.tag == AstTag::MemberAccess) {
 					// lvalue: take its address directly via the same
 					// path that the explicit `&` operator uses.
-					AstNode fakeAddrOf{
-					    AstTag::AddressOf, 0, 0, 0,
-					    static_cast<uint32_t>(args[i]), 0};
+					AstNode fakeAddrOf{AstTag::AddressOf,
+					                   0,
+					                   0,
+					                   0,
+					                   static_cast<uint32_t>(args[i]),
+					                   0};
 					argVal = codegenAddressOf(ctx, fakeAddrOf);
 				} else {
 					// rvalue: codegen as a value, store into a fresh
@@ -1380,8 +1339,8 @@ static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 	// shape the codegen of the return expression should produce.
 	JamValueRef sretSlot = ctx.getSretSlot();
 	if (sretSlot != nullptr) {
-		JamFunctionRef func = JamLLVMGetBasicBlockParent(
-		    JamLLVMGetInsertBlock(ctx.getBuilder()));
+		JamFunctionRef func =
+		    JamLLVMGetBasicBlockParent(JamLLVMGetInsertBlock(ctx.getBuilder()));
 		(void)func;  // sret functions return void; LLVM-level RetType is void
 		JamValueRef RetVal = codegenNode(ctx, retIdx);
 		if (!RetVal) return nullptr;
@@ -1391,8 +1350,8 @@ static JamValueRef codegenReturn(JamCodegenContext &ctx, const AstNode &n) {
 		return RetVal;
 	}
 
-	JamFunctionRef func = JamLLVMGetBasicBlockParent(
-	    JamLLVMGetInsertBlock(ctx.getBuilder()));
+	JamFunctionRef func =
+	    JamLLVMGetBasicBlockParent(JamLLVMGetInsertBlock(ctx.getBuilder()));
 	JamTypeRef expected = JamLLVMGetReturnType(func);
 	// Codegen the return value BEFORE emitting drops so reads of any
 	// drop-bearing binding still see live storage. Then emit drops for
@@ -1416,12 +1375,9 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 
 	// x = value
 	if (target.tag == AstTag::Variable) {
-		const std::string &name =
-		    sp.get(static_cast<StringIdx>(target.lhs));
+		const std::string &name = sp.get(static_cast<StringIdx>(target.lhs));
 		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + name);
-		}
+		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
 		JamTypeRef expected = ctx.getLLVMType(ctx.getVariableType(name));
 		JamValueRef rhsVal = codegenNode(ctx, valueIdx, expected);
 		if (!rhsVal) return nullptr;
@@ -1439,19 +1395,16 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 		}
 		const std::string &name = sp.get(static_cast<StringIdx>(op.lhs));
 		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + name);
-		}
-		TypeIdx pointee = pointeeTypeOf(ctx.getTypePool(),
-		                                ctx.getVariableType(name));
+		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
+		TypeIdx pointee =
+		    pointeeTypeOf(ctx.getTypePool(), ctx.getVariableType(name));
 		if (pointee == kNoType) {
-			throw std::runtime_error("Cannot dereference non-pointer: " +
-			                         name);
+			throw std::runtime_error("Cannot dereference non-pointer: " + name);
 		}
 		JamTypeRef pointeeType = ctx.getLLVMType(pointee);
 		JamTypeRef ptrType = ctx.getLLVMType(ctx.getVariableType(name));
-		JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(), ptrType,
-		                                      alloca, name.c_str());
+		JamValueRef ptrVal =
+		    JamLLVMBuildLoad(ctx.getBuilder(), ptrType, alloca, name.c_str());
 		JamValueRef rhsVal = codegenNode(ctx, valueIdx, pointeeType);
 		if (!rhsVal) return nullptr;
 		rhsVal = coerceTo(ctx, rhsVal, pointeeType);
@@ -1495,16 +1448,13 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 			const auto *uinfo = ctx.lookupUnion(varTy);
 			if (uinfo) {
 				const std::string &member = sp.get(path[0]);
-				TypeIdx fieldTy =
-				    ctx.getUnionFieldType(uinfo->name, member);
+				TypeIdx fieldTy = ctx.getUnionFieldType(uinfo->name, member);
 				if (fieldTy == kNoType) {
 					throw std::runtime_error("Union `" + uinfo->name +
-					                         "` has no field `" + member +
-					                         "`");
+					                         "` has no field `" + member + "`");
 				}
 				JamTypeRef expected = ctx.getLLVMType(fieldTy);
-				JamValueRef rhsVal =
-				    codegenNode(ctx, valueIdx, expected);
+				JamValueRef rhsVal = codegenNode(ctx, valueIdx, expected);
 				if (!rhsVal) return nullptr;
 				rhsVal = coerceTo(ctx, rhsVal, expected);
 				JamLLVMBuildStore(ctx.getBuilder(), rhsVal, alloca);
@@ -1517,8 +1467,8 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 
 		const auto *info = ctx.lookupStruct(varTy);
 		if (!info) {
-			throw std::runtime_error(
-			    "Cannot assign to field of non-struct: " + varName);
+			throw std::runtime_error("Cannot assign to field of non-struct: " +
+			                         varName);
 		}
 
 		// Walk the field chain with struct GEPs so we end up with a pointer
@@ -1543,14 +1493,12 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 				throw std::runtime_error("Unknown field '" + fieldName +
 				                         "' in " + curInfo->name);
 			}
-			leafPtr = JamLLVMBuildStructGEP(
-			    ctx.getBuilder(), leafLLVMType, leafPtr,
-			    static_cast<unsigned>(idx), fieldName.c_str());
+			leafPtr = JamLLVMBuildStructGEP(ctx.getBuilder(), leafLLVMType,
+			                                leafPtr, static_cast<unsigned>(idx),
+			                                fieldName.c_str());
 			typeAtLevel = curInfo->fields[idx].second;
 			leafLLVMType = ctx.getLLVMType(typeAtLevel);
-			if (i + 1 == path.size()) {
-				leafFieldType = typeAtLevel;
-			}
+			if (i + 1 == path.size()) { leafFieldType = typeAtLevel; }
 		}
 
 		JamTypeRef expected = ctx.getLLVMType(leafFieldType);
@@ -1581,18 +1529,16 @@ static JamValueRef codegenDeref(JamCodegenContext &ctx, const AstNode &n) {
 	const std::string &name =
 	    ctx.getStringPool().get(static_cast<StringIdx>(op.lhs));
 	JamValueRef alloca = ctx.getVariable(name);
-	if (!alloca) {
-		throw std::runtime_error("Unknown variable: " + name);
-	}
-	TypeIdx pointee = pointeeTypeOf(ctx.getTypePool(),
-	                                ctx.getVariableType(name));
+	if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
+	TypeIdx pointee =
+	    pointeeTypeOf(ctx.getTypePool(), ctx.getVariableType(name));
 	if (pointee == kNoType) {
 		throw std::runtime_error("Cannot dereference non-pointer: " + name);
 	}
 	JamTypeRef pointeeType = ctx.getLLVMType(pointee);
 	JamTypeRef ptrType = ctx.getLLVMType(ctx.getVariableType(name));
-	JamValueRef ptrVal = JamLLVMBuildLoad(ctx.getBuilder(), ptrType, alloca,
-	                                      name.c_str());
+	JamValueRef ptrVal =
+	    JamLLVMBuildLoad(ctx.getBuilder(), ptrType, alloca, name.c_str());
 	return JamLLVMBuildLoad(ctx.getBuilder(), pointeeType, ptrVal, "deref");
 }
 
@@ -1605,9 +1551,7 @@ static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n) {
 	if (op.tag == AstTag::Variable) {
 		const std::string &name = sp.get(static_cast<StringIdx>(op.lhs));
 		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + name);
-		}
+		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
 		return alloca;
 	}
 
@@ -1669,15 +1613,14 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	const std::string &name = sp.get(nameId);
 
 	JamTypeRef VarType = ctx.getLLVMType(type);
-	JamValueRef Alloca = JamLLVMBuildAlloca(
-	    ctx.getBuilder(), VarType, ctx.typeAlign(type), name.c_str());
+	JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), VarType,
+	                                        ctx.typeAlign(type), name.c_str());
 
 	// Every var declaration carries an initializer (the parser rejects
 	// the no-init form). Patch nested literals with the declared target
 	// type so they can resolve fields and coerce values during codegen.
 	const AstNode &initNode = ns.get(initIdx);
-	if (initNode.tag == AstTag::StructLit ||
-	    initNode.tag == AstTag::ArrayLit ||
+	if (initNode.tag == AstTag::StructLit || initNode.tag == AstTag::ArrayLit ||
 	    initNode.tag == AstTag::ArrayRepeat) {
 		ctx.getNodeStore().getMut(initIdx).lhs = type;
 	}
@@ -1708,8 +1651,7 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 		const auto *sinfo = ctx.lookupStruct(type);
 		if (sinfo) {
 			const std::string &structName = sinfo->name;
-			if (const FunctionAST *dropFn =
-			        ctx.lookupDropFn(structName)) {
+			if (const FunctionAST *dropFn = ctx.lookupDropFn(structName)) {
 				ctx.registerLocalDrop(name, Alloca, VarType, dropFn);
 			}
 		}
@@ -1728,8 +1670,8 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 // at every exit reaching this drop point, so the call fires unconditionally.
 static void emitOneDrop(JamCodegenContext &ctx,
                         const JamCodegenContext::DropEntry &e) {
-	std::string mangled = mangledFunctionName(*e.dropFn, ctx.getTypePool(),
-	                                          ctx.getStringPool());
+	std::string mangled =
+	    mangledFunctionName(*e.dropFn, ctx.getTypePool(), ctx.getStringPool());
 	JamFunctionRef dropFn =
 	    JamLLVMGetFunction(ctx.getModule(), mangled.c_str());
 	if (!dropFn) return;
@@ -1836,10 +1778,8 @@ static JamValueRef codegenWhile(JamCodegenContext &ctx, const AstNode &n) {
 
 	JamBasicBlockRef CurrentBB = JamLLVMGetInsertBlock(ctx.getBuilder());
 	JamFunctionRef TheFunction = JamLLVMGetBasicBlockParent(CurrentBB);
-	JamBasicBlockRef CondBB =
-	    JamLLVMAppendBasicBlock(TheFunction, "whilecond");
-	JamBasicBlockRef LoopBB =
-	    JamLLVMAppendBasicBlock(TheFunction, "whileloop");
+	JamBasicBlockRef CondBB = JamLLVMAppendBasicBlock(TheFunction, "whilecond");
+	JamBasicBlockRef LoopBB = JamLLVMAppendBasicBlock(TheFunction, "whileloop");
 	JamBasicBlockRef AfterBB =
 	    JamLLVMAppendBasicBlock(TheFunction, "afterloop");
 
@@ -1948,10 +1888,10 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	JamLLVMBuildBr(ctx.getBuilder(), CondBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), CondBB);
-	JamValueRef CurVar = JamLLVMBuildLoad(ctx.getBuilder(), VarType, Alloca,
-	                                      varName.c_str());
-	JamValueRef CondV = JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_SLT,
-	                                     CurVar, EndVal, "forcond");
+	JamValueRef CurVar =
+	    JamLLVMBuildLoad(ctx.getBuilder(), VarType, Alloca, varName.c_str());
+	JamValueRef CondV = JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_SLT, CurVar,
+	                                     EndVal, "forcond");
 	JamLLVMBuildCondBr(ctx.getBuilder(), CondV, LoopBB, AfterBB);
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), LoopBB);
@@ -1968,11 +1908,11 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	ctx.popDropScope();
 
 	JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), IncrBB);
-	JamValueRef CurVarForInc = JamLLVMBuildLoad(ctx.getBuilder(), VarType,
-	                                            Alloca, varName.c_str());
+	JamValueRef CurVarForInc =
+	    JamLLVMBuildLoad(ctx.getBuilder(), VarType, Alloca, varName.c_str());
 	JamValueRef StepVal = JamLLVMConstInt(VarType, 1, false);
-	JamValueRef NextVar = JamLLVMBuildAdd(ctx.getBuilder(), CurVarForInc,
-	                                      StepVal, "nextvar");
+	JamValueRef NextVar =
+	    JamLLVMBuildAdd(ctx.getBuilder(), CurVarForInc, StepVal, "nextvar");
 	JamLLVMBuildStore(ctx.getBuilder(), NextVar, Alloca);
 	JamLLVMBuildBr(ctx.getBuilder(), CondBB);
 
@@ -2004,9 +1944,8 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 // Build a boolean (i1) value that is true iff the scrutinee matches the
 // given pattern node. `scrut` is the already-loaded scrutinee value;
 // `scrutType` is its LLVM type, used to materialize comparison constants.
-static JamValueRef
-emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
-                JamTypeRef scrutType) {
+static JamValueRef emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx,
+                                   JamValueRef scrut, JamTypeRef scrutType) {
 	const NodeStore &ns = ctx.getNodeStore();
 	const AstNode &pn = ns.get(patIdx);
 	switch (pn.tag) {
@@ -2016,12 +1955,9 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		uint64_t val = static_cast<uint64_t>(pn.lhs) |
 		               (static_cast<uint64_t>(pn.rhs) << 32);
 		bool isNeg = (pn.flags & 1) != 0;
-		uint64_t materialized = isNeg
-		                            ? static_cast<uint64_t>(
-		                                  -static_cast<int64_t>(val))
-		                            : val;
-		JamValueRef k =
-		    JamLLVMConstInt(scrutType, materialized, isNeg);
+		uint64_t materialized =
+		    isNeg ? static_cast<uint64_t>(-static_cast<int64_t>(val)) : val;
+		JamValueRef k = JamLLVMConstInt(scrutType, materialized, isNeg);
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, scrut, k,
 		                        "pat.eq");
 	}
@@ -2040,8 +1976,7 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		uint32_t count = ns.getExtra(extra);
 		JamValueRef acc = nullptr;
 		for (uint32_t i = 0; i < count; i++) {
-			NodeIdx sub =
-			    static_cast<NodeIdx>(ns.getExtra(extra + 1 + i));
+			NodeIdx sub = static_cast<NodeIdx>(ns.getExtra(extra + 1 + i));
 			JamValueRef one = emitPatternTest(ctx, sub, scrut, scrutType);
 			if (!acc) {
 				acc = one;
@@ -2049,8 +1984,7 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 				acc = JamLLVMBuildOr(ctx.getBuilder(), acc, one, "pat.or");
 			}
 		}
-		return acc ? acc
-		           : JamLLVMConstInt(ctx.getInt1Type(), 0, false);
+		return acc ? acc : JamLLVMConstInt(ctx.getInt1Type(), 0, false);
 	}
 	case AstTag::PatEnumVariant: {
 		// Encoded via PatEnumVariant flags — see decodePatEnumVariant
@@ -2072,18 +2006,17 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		JamValueRef tagVal = scrut;
 		JamTypeRef tagType = scrutType;
 		if (JamLLVMTypeIsStruct(scrutType)) {
-			tagVal = JamLLVMBuildExtractValue(ctx.getBuilder(), scrut, 0,
-			                                   "pat.tag");
+			tagVal =
+			    JamLLVMBuildExtractValue(ctx.getBuilder(), scrut, 0, "pat.tag");
 			tagType = ctx.getInt8Type();
 		}
-		JamValueRef k = JamLLVMConstInt(
-		    tagType, static_cast<uint64_t>(discrim), false);
+		JamValueRef k =
+		    JamLLVMConstInt(tagType, static_cast<uint64_t>(discrim), false);
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, tagVal, k,
 		                        "pat.variant");
 	}
 	default:
-		throw std::runtime_error(
-		    "Unsupported pattern node kind in codegen");
+		throw std::runtime_error("Unsupported pattern node kind in codegen");
 	}
 }
 
@@ -2120,8 +2053,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			case AstTag::PatWildcard:
 				return true;
 			case AstTag::PatEnumVariant: {
-				DecodedPatEnumVariant d =
-				    decodePatEnumVariant(ctx, pp);
+				DecodedPatEnumVariant d = decodePatEnumVariant(ctx, pp);
 				if (foundEnum.empty()) foundEnum = d.enumName;
 				if (foundEnum == d.enumName) {
 					coveredVariants.push_back(d.variantName);
@@ -2133,8 +2065,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 				uint32_t cnt = ns.getExtra(ex);
 				bool catchAll = false;
 				for (uint32_t i = 0; i < cnt; i++) {
-					NodeIdx sub =
-					    static_cast<NodeIdx>(ns.getExtra(ex + 1 + i));
+					NodeIdx sub = static_cast<NodeIdx>(ns.getExtra(ex + 1 + i));
 					if (walkPattern(sub)) catchAll = true;
 				}
 				return catchAll;
@@ -2147,8 +2078,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		};
 		uint32_t scanPos = armsOff;
 		for (uint32_t i = 0; i < armCount; i++) {
-			NodeIdx patIdx =
-			    static_cast<NodeIdx>(ns.getExtra(extra + scanPos));
+			NodeIdx patIdx = static_cast<NodeIdx>(ns.getExtra(extra + scanPos));
 			uint32_t bodyCount = ns.getExtra(extra + scanPos + 1);
 			if (walkPattern(patIdx)) sawCatchAll = true;
 			scanPos = scanPos + 2 + bodyCount;
@@ -2162,8 +2092,8 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			for (size_t j = i + 1; j < coveredVariants.size(); j++) {
 				if (coveredVariants[i] == coveredVariants[j]) {
 					throw std::runtime_error(
-					    "Unreachable match arm: variant `" + foundEnum +
-					    "." + coveredVariants[j] +
+					    "Unreachable match arm: variant `" + foundEnum + "." +
+					    coveredVariants[j] +
 					    "` is already covered by an earlier arm");
 				}
 			}
@@ -2177,14 +2107,16 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 				for (const auto &v : einfo->variants) {
 					bool covered = false;
 					for (const auto &c : coveredVariants) {
-						if (c == v.name) { covered = true; break; }
+						if (c == v.name) {
+							covered = true;
+							break;
+						}
 					}
 					if (!covered) missing.push_back(v.name);
 				}
 				if (!missing.empty()) {
-					std::string msg =
-					    "Non-exhaustive match on enum `" + foundEnum +
-					    "`; missing variant(s): ";
+					std::string msg = "Non-exhaustive match on enum `" +
+					                  foundEnum + "`; missing variant(s): ";
 					for (size_t i = 0; i < missing.size(); i++) {
 						if (i > 0) msg += ", ";
 						msg += missing[i];
@@ -2226,15 +2158,14 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		const auto *einfo = ctx.findEnumByLLVMType(scrutType);
 		uint64_t scrutAlign =
 		    einfo && einfo->maxPayloadAlign > 1 ? einfo->maxPayloadAlign : 1;
-		scrutPtr = JamLLVMBuildAlloca(ctx.getBuilder(), scrutType,
-		                              scrutAlign, "match.scrut");
+		scrutPtr = JamLLVMBuildAlloca(ctx.getBuilder(), scrutType, scrutAlign,
+		                              "match.scrut");
 		JamLLVMBuildStore(ctx.getBuilder(), scrut, scrutPtr);
 	}
 
 	JamBasicBlockRef curBB = JamLLVMGetInsertBlock(ctx.getBuilder());
 	JamFunctionRef func = JamLLVMGetBasicBlockParent(curBB);
-	JamBasicBlockRef mergeBB =
-	    JamLLVMAppendBasicBlock(func, "match.end");
+	JamBasicBlockRef mergeBB = JamLLVMAppendBasicBlock(func, "match.end");
 
 	// Per-arm result for the phi: pairs (basicBlock, value) where
 	// the arm's body ended without terminating control flow. The
@@ -2252,8 +2183,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		if (i == 0) {
 			testBBs.push_back(curBB);
 		} else {
-			testBBs.push_back(
-			    JamLLVMAppendBasicBlock(func, "match.test"));
+			testBBs.push_back(JamLLVMAppendBasicBlock(func, "match.test"));
 		}
 		bodyBBs.push_back(JamLLVMAppendBasicBlock(func, "match.arm"));
 	}
@@ -2273,8 +2203,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		JamValueRef matched = emitPatternTest(ctx, patIdx, scrut, scrutType);
 		JamBasicBlockRef nextTest =
 		    (i + 1 < armCount) ? testBBs[i + 1] : fallBB;
-		JamLLVMBuildCondBr(ctx.getBuilder(), matched, bodyBBs[i],
-		                   nextTest);
+		JamLLVMBuildCondBr(ctx.getBuilder(), matched, bodyBBs[i], nextTest);
 
 		// Emit the arm body.
 		JamLLVMPositionBuilderAtEnd(ctx.getBuilder(), bodyBBs[i]);
@@ -2288,8 +2217,8 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			DecodedPatEnumVariant d = decodePatEnumVariant(ctx, pn);
 			if (!d.einfo || d.variantIndex < 0) {
 				throw std::runtime_error(
-				    "Pattern references unknown variant `" + d.enumName +
-				    "." + d.variantName + "`");
+				    "Pattern references unknown variant `" + d.enumName + "." +
+				    d.variantName + "`");
 			}
 			const auto *einfo = d.einfo;
 			const std::string &enumName = d.enumName;
@@ -2298,41 +2227,40 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 			ExtraIdx ex = d.bindingsStart - 3;  // anchor for backward-compat
 			const auto &v = einfo->variants[d.variantIndex];
 			if (bcount != v.payloadTypes.size()) {
-				throw std::runtime_error(
-				    "Pattern for `" + enumName + "." + variantName +
-				    "` binds " + std::to_string(bcount) +
-				    " payload field(s); variant has " +
-				    std::to_string(v.payloadTypes.size()));
+				throw std::runtime_error("Pattern for `" + enumName + "." +
+				                         variantName + "` binds " +
+				                         std::to_string(bcount) +
+				                         " payload field(s); variant has " +
+				                         std::to_string(v.payloadTypes.size()));
 			}
 			// Payload area always starts at struct field 1 (the
 			// alignment-driving scalar; larger payloads spill into
 			// field 2 via byte-offset GEP from there).
 			unsigned payloadFieldIdx = 1;
-			JamValueRef payloadAreaPtr = JamLLVMBuildStructGEP(
-			    ctx.getBuilder(), scrutType, scrutPtr,
-			    payloadFieldIdx, "match.payload");
+			JamValueRef payloadAreaPtr =
+			    JamLLVMBuildStructGEP(ctx.getBuilder(), scrutType, scrutPtr,
+			                          payloadFieldIdx, "match.payload");
 			(void)einfo;
 			uint64_t off = 0;
 			for (uint32_t b = 0; b < bcount; b++) {
 				StringIdx nameId =
 				    static_cast<StringIdx>(ns.getExtra(ex + 3 + b));
-				const std::string &name =
-				    ctx.getStringPool().get(nameId);
+				const std::string &name = ctx.getStringPool().get(nameId);
 				TypeIdx ty = v.payloadTypes[b];
 				uint64_t s = ctx.typeSize(ty);
 				uint64_t a = ctx.typeAlign(ty);
 				off = (off + a - 1) / a * a;
-				JamValueRef i64Off = JamLLVMConstInt(
-				    ctx.getInt64Type(), off, false);
+				JamValueRef i64Off =
+				    JamLLVMConstInt(ctx.getInt64Type(), off, false);
 				JamValueRef fieldPtr = JamLLVMBuildPtrGEP(
-				    ctx.getBuilder(), ctx.getInt8Type(),
-				    payloadAreaPtr, i64Off, "match.field.ptr");
+				    ctx.getBuilder(), ctx.getInt8Type(), payloadAreaPtr, i64Off,
+				    "match.field.ptr");
 				JamTypeRef fieldLLVM = ctx.getLLVMType(ty);
 				JamValueRef fieldVal = JamLLVMBuildLoad(
 				    ctx.getBuilder(), fieldLLVM, fieldPtr, name.c_str());
-				JamValueRef bindAlloca = JamLLVMBuildAlloca(
-				    ctx.getBuilder(), fieldLLVM, ctx.typeAlign(ty),
-				    name.c_str());
+				JamValueRef bindAlloca =
+				    JamLLVMBuildAlloca(ctx.getBuilder(), fieldLLVM,
+				                       ctx.typeAlign(ty), name.c_str());
 				JamLLVMBuildStore(ctx.getBuilder(), fieldVal, bindAlloca);
 				ctx.setVariable(name, bindAlloca);
 				ctx.setVariableType(name, ty);
@@ -2346,11 +2274,9 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		JamValueRef lastValue = nullptr;
 		ctx.pushDropScope();
 		for (uint32_t b = 0; b < bodyCount; b++) {
-			lastValue = codegenNode(ctx,
-			                         ns.getExtra(extra + bodyStart + b));
+			lastValue = codegenNode(ctx, ns.getExtra(extra + bodyStart + b));
 		}
-		JamBasicBlockRef armEndBB =
-		    JamLLVMGetInsertBlock(ctx.getBuilder());
+		JamBasicBlockRef armEndBB = JamLLVMGetInsertBlock(ctx.getBuilder());
 		if (!JamLLVMGetBasicBlockTerminator(armEndBB)) {
 			emitTopScopeDrops(ctx);
 			armResults.push_back({armEndBB, lastValue});
@@ -2442,10 +2368,9 @@ static JamValueRef codegenArrayLit(JamCodegenContext &ctx, const AstNode &n) {
 		JamValueRef nullPtrVal = JamLLVMConstNull(nullPtr);
 		sliceVal = JamLLVMBuildInsertValue(ctx.getBuilder(), sliceVal,
 		                                   nullPtrVal, 0, "slice.ptr");
-		JamValueRef zeroLen =
-		    JamLLVMConstInt(ctx.getInt64Type(), 0, false);
-		sliceVal = JamLLVMBuildInsertValue(ctx.getBuilder(), sliceVal,
-		                                   zeroLen, 1, "slice.len");
+		JamValueRef zeroLen = JamLLVMConstInt(ctx.getInt64Type(), 0, false);
+		sliceVal = JamLLVMBuildInsertValue(ctx.getBuilder(), sliceVal, zeroLen,
+		                                   1, "slice.len");
 		return sliceVal;
 	}
 
@@ -2459,9 +2384,9 @@ static JamValueRef codegenArrayLit(JamCodegenContext &ctx, const AstNode &n) {
 	JamTypeRef elemLLVM = ctx.getLLVMType(elemTy);
 
 	if (count != expectedLen) {
-		throw std::runtime_error(
-		    "Array literal has " + std::to_string(count) +
-		    " elements but type expects " + std::to_string(expectedLen));
+		throw std::runtime_error("Array literal has " + std::to_string(count) +
+		                         " elements but type expects " +
+		                         std::to_string(expectedLen));
 	}
 
 	JamValueRef arrVal = JamLLVMGetUndef(arrLLVM);
@@ -2519,8 +2444,7 @@ static JamValueRef codegenArrayRepeat(JamCodegenContext &ctx,
 	if (countVal != static_cast<uint64_t>(expectedLen)) {
 		throw std::runtime_error(
 		    "Array repeat count " + std::to_string(countVal) +
-		    " does not match declared length " +
-		    std::to_string(expectedLen));
+		    " does not match declared length " + std::to_string(expectedLen));
 	}
 
 	const AstNode &valNode = ns.get(valueIdx);
@@ -2567,19 +2491,15 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 			}
 			StringIdx fldNameId =
 			    static_cast<StringIdx>(ns.getExtra(extra + 1));
-			NodeIdx fldExprIdx =
-			    static_cast<NodeIdx>(ns.getExtra(extra + 2));
+			NodeIdx fldExprIdx = static_cast<NodeIdx>(ns.getExtra(extra + 2));
 			const std::string &fieldName = sp.get(fldNameId);
-			TypeIdx fieldTy =
-			    ctx.getUnionFieldType(uinfo->name, fieldName);
+			TypeIdx fieldTy = ctx.getUnionFieldType(uinfo->name, fieldName);
 			if (fieldTy == kNoType) {
 				throw std::runtime_error("Union `" + uinfo->name +
-				                         "` has no field `" + fieldName +
-				                         "`");
+				                         "` has no field `" + fieldName + "`");
 			}
 			JamTypeRef fieldLLVM = ctx.getLLVMType(fieldTy);
-			JamValueRef fieldVal =
-			    codegenNode(ctx, fldExprIdx, fieldLLVM);
+			JamValueRef fieldVal = codegenNode(ctx, fldExprIdx, fieldLLVM);
 			if (!fieldVal) return nullptr;
 			fieldVal = coerceTo(ctx, fieldVal, fieldLLVM);
 			// Alloca the union, write the chosen field, load the union back
@@ -2601,10 +2521,10 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 
 	JamValueRef structVal = JamLLVMGetUndef(info->type);
 	for (uint32_t i = 0; i < fieldCount; i++) {
-		StringIdx fldNameId = static_cast<StringIdx>(
-		    ns.getExtra(extra + 1 + i * 2));
-		NodeIdx fldExprIdx = static_cast<NodeIdx>(
-		    ns.getExtra(extra + 2 + i * 2));
+		StringIdx fldNameId =
+		    static_cast<StringIdx>(ns.getExtra(extra + 1 + i * 2));
+		NodeIdx fldExprIdx =
+		    static_cast<NodeIdx>(ns.getExtra(extra + 2 + i * 2));
 		const std::string &fieldName = sp.get(fldNameId);
 		int idx = ctx.getFieldIndex(info->name, fieldName);
 		if (idx < 0) {
@@ -2624,8 +2544,7 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 		    static_cast<TypeIdx>(fldNode.lhs) == kNoType) {
 			const TypeKey &fk = ctx.getTypePool().get(declaredFieldType);
 			if (fk.kind == TypeKind::Array) {
-				ctx.getNodeStore().getMut(fldExprIdx).lhs =
-				    declaredFieldType;
+				ctx.getNodeStore().getMut(fldExprIdx).lhs = declaredFieldType;
 			}
 		}
 
@@ -2645,22 +2564,21 @@ static JamValueRef codegenStructLit(JamCodegenContext &ctx, const AstNode &n) {
 				                              expectedType, "fld_fpcast");
 			} else if (JamLLVMTypeIsInteger(expectedType) &&
 			           JamLLVMTypeIsInteger(actualType)) {
-				fieldVal = JamLLVMBuildIntCast(ctx.getBuilder(), fieldVal,
-				                               expectedType, false,
-				                               "fld_icast");
+				fieldVal =
+				    JamLLVMBuildIntCast(ctx.getBuilder(), fieldVal,
+				                        expectedType, false, "fld_icast");
 			}
 		}
 
-		structVal = JamLLVMBuildInsertValue(ctx.getBuilder(), structVal,
-		                                    fieldVal,
-		                                    static_cast<unsigned>(idx),
-		                                    "fld_set");
+		structVal =
+		    JamLLVMBuildInsertValue(ctx.getBuilder(), structVal, fieldVal,
+		                            static_cast<unsigned>(idx), "fld_set");
 	}
 	return structVal;
 }
 
-static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
-                                       const AstNode &n, NodeIdx selfIdx) {
+static JamValueRef codegenMemberAccess(JamCodegenContext &ctx, const AstNode &n,
+                                       NodeIdx selfIdx) {
 	const NodeStore &ns = ctx.getNodeStore();
 	const StringPool &sp = ctx.getStringPool();
 
@@ -2699,9 +2617,9 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 				                         "`");
 			}
 			const auto &v = einfo->variants[idx];
-			JamValueRef tagConst = JamLLVMConstInt(
-			    ctx.getInt8Type(),
-			    static_cast<uint64_t>(v.discriminant), false);
+			JamValueRef tagConst =
+			    JamLLVMConstInt(ctx.getInt8Type(),
+			                    static_cast<uint64_t>(v.discriminant), false);
 			if (!einfo->hasPayloadVariant) {
 				// path: enum is just i8.
 				return tagConst;
@@ -2721,8 +2639,8 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 			JamValueRef tagPtr = JamLLVMBuildStructGEP(
 			    ctx.getBuilder(), enumLLVMType, alloca, 0, "enum.tag");
 			JamLLVMBuildStore(ctx.getBuilder(), tagConst, tagPtr);
-			return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType,
-			                        alloca, "enum.val");
+			return JamLLVMBuildLoad(ctx.getBuilder(), enumLLVMType, alloca,
+			                        "enum.val");
 		}
 	}
 
@@ -2762,20 +2680,18 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 	if (path.size() == 1) {
 		if (const auto *uinfo = ctx.lookupUnion(varTy)) {
 			const std::string &member = sp.get(path[0]);
-			TypeIdx fieldTy =
-			    ctx.getUnionFieldType(uinfo->name, member);
+			TypeIdx fieldTy = ctx.getUnionFieldType(uinfo->name, member);
 			if (fieldTy == kNoType) {
 				throw std::runtime_error("Union `" + uinfo->name +
-				                         "` has no field `" + member +
-				                         "`");
+				                         "` has no field `" + member + "`");
 			}
 			JamValueRef alloca = ctx.getVariable(varName);
 			JamTypeRef fieldLLVMType = ctx.getLLVMType(fieldTy);
 			// Opaque-pointer LLVM: the alloca is just `ptr`; we load
 			// the requested field type from it directly. No bitcast
 			// required.
-			return JamLLVMBuildLoad(ctx.getBuilder(), fieldLLVMType,
-			                        alloca, member.c_str());
+			return JamLLVMBuildLoad(ctx.getBuilder(), fieldLLVMType, alloca,
+			                        member.c_str());
 		}
 	}
 
@@ -2805,8 +2721,8 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 			throw std::runtime_error("Unknown field '" + fieldName +
 			                         "' in struct " + curInfo->name);
 		}
-		leafPtr = JamLLVMBuildStructGEP(ctx.getBuilder(), leafLLVMType,
-		                                leafPtr, static_cast<unsigned>(idx),
+		leafPtr = JamLLVMBuildStructGEP(ctx.getBuilder(), leafLLVMType, leafPtr,
+		                                static_cast<unsigned>(idx),
 		                                fieldName.c_str());
 		currentType = curInfo->fields[idx].second;
 		leafLLVMType = ctx.getLLVMType(currentType);
@@ -2848,8 +2764,7 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		    ctx.getStringPool().get(static_cast<StringIdx>(n.lhs));
 		JamValueRef V = ctx.getVariable(name);
 		if (V) {
-			JamTypeRef LoadType =
-			    ctx.getLLVMType(ctx.getVariableType(name));
+			JamTypeRef LoadType = ctx.getLLVMType(ctx.getVariableType(name));
 			return JamLLVMBuildLoad(ctx.getBuilder(), LoadType, V,
 			                        name.c_str());
 		}
@@ -2942,34 +2857,29 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		if (JamLLVMTypeIsStruct(srcLLVM) &&
 		    ctx.findEnumByLLVMType(srcLLVM) != nullptr &&
 		    JamLLVMTypeIsInteger(targetLLVM)) {
-			JamValueRef tag = JamLLVMBuildExtractValue(
-			    ctx.getBuilder(), val, 0, "as.tag");
+			JamValueRef tag =
+			    JamLLVMBuildExtractValue(ctx.getBuilder(), val, 0, "as.tag");
 			if (JamLLVMTypeOf(tag) == targetLLVM) return tag;
-			return JamLLVMBuildIntCast(ctx.getBuilder(), tag, targetLLVM,
-			                           false, "as.tag.cast");
+			return JamLLVMBuildIntCast(ctx.getBuilder(), tag, targetLLVM, false,
+			                           "as.tag.cast");
 		}
-		if (JamLLVMTypeIsInteger(srcLLVM) &&
-		    JamLLVMTypeIsInteger(targetLLVM)) {
-			return JamLLVMBuildIntCast(ctx.getBuilder(), val, targetLLVM,
-			                           false, "as.icast");
+		if (JamLLVMTypeIsInteger(srcLLVM) && JamLLVMTypeIsInteger(targetLLVM)) {
+			return JamLLVMBuildIntCast(ctx.getBuilder(), val, targetLLVM, false,
+			                           "as.icast");
 		}
-		if (JamLLVMTypeIsInteger(srcLLVM) &&
-		    JamLLVMTypeIsFloat(targetLLVM)) {
+		if (JamLLVMTypeIsInteger(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
 			return JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,
-			                           "as.si2fp");
+			                          "as.si2fp");
 		}
-		if (JamLLVMTypeIsFloat(srcLLVM) &&
-		    JamLLVMTypeIsInteger(targetLLVM)) {
+		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsInteger(targetLLVM)) {
 			throw std::runtime_error(
 			    "`as` from float to integer is not yet supported");
 		}
-		if (JamLLVMTypeIsFloat(srcLLVM) &&
-		    JamLLVMTypeIsFloat(targetLLVM)) {
+		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
 			return JamLLVMBuildFPCast(ctx.getBuilder(), val, targetLLVM,
-			                           "as.fpcast");
+			                          "as.fpcast");
 		}
-		throw std::runtime_error(
-		    "Unsupported `as` cast between these types");
+		throw std::runtime_error("Unsupported `as` cast between these types");
 	}
 	case AstTag::PatLit:
 	case AstTag::PatRange:
@@ -3015,9 +2925,7 @@ static std::string mangledFunctionName(const FunctionAST &fn,
 			const TypeKey &k = types.get(p.Type);
 			if (k.kind == TypeKind::Struct || k.kind == TypeKind::Named) {
 				StringIdx ni = static_cast<StringIdx>(k.a);
-				if (ni != kNoString) {
-					return "__drop_" + strings.get(ni);
-				}
+				if (ni != kNoString) { return "__drop_" + strings.get(ni); }
 			}
 		}
 	}
@@ -3044,8 +2952,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	std::vector<JamTypeRef> ArgTypes;
 	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
 		// sret slot leads the LLVM arg list.
-		ArgTypes.push_back(
-		    JamLLVMPointerType(ctx.getLLVMType(ReturnType), 0));
+		ArgTypes.push_back(JamLLVMPointerType(ctx.getLLVMType(ReturnType), 0));
 	}
 	if (!isTest) {
 		for (const auto &arg : Args) {
@@ -3066,18 +2973,17 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 			jam::abi::ParamABI pabi =
 			    jam::abi::classifyParam(arg.Mode, arg.Type, ctx);
 			if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {
-				ArgTypes.push_back(JamLLVMPointerType(
-				    ctx.getLLVMType(arg.Type), 0));
+				ArgTypes.push_back(
+				    JamLLVMPointerType(ctx.getLLVMType(arg.Type), 0));
 			} else {
 				ArgTypes.push_back(pabi.llvmType);
 			}
 		}
 	}
 
-	JamTypeRef RetType =
-	    (rabi.kind == jam::abi::ReturnABI::Kind::Indirect)
-	        ? ctx.getVoidType()
-	        : rabi.directType;
+	JamTypeRef RetType = (rabi.kind == jam::abi::ReturnABI::Kind::Indirect)
+	                         ? ctx.getVoidType()
+	                         : rabi.directType;
 
 	JamTypeRef FT = JamLLVMFunctionType(RetType, ArgTypes.data(),
 	                                    ArgTypes.size(), isVarArgs);
@@ -3128,8 +3034,8 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	    mangledFunctionName(*this, ctx.getTypePool(), ctx.getStringPool());
 	JamFunctionRef F = JamLLVMGetFunction(ctx.getModule(), funcName.c_str());
 	if (!F) {
-		throw std::runtime_error(
-		    "defineBody: prototype not declared for " + funcName);
+		throw std::runtime_error("defineBody: prototype not declared for " +
+		                         funcName);
 	}
 
 	JamBasicBlockRef BB = JamLLVMAppendBasicBlock(F, "entry");
@@ -3143,13 +3049,12 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	// caller-provided result slot. Record it so codegenReturn writes
 	// through it; user parameters shift one slot to the right.
 	jam::abi::ReturnABI rabi =
-	    isExtern
-	        ? jam::abi::ReturnABI{jam::abi::ReturnABI::Kind::Direct,
-	                              ReturnType == kNoType
-	                                  ? ctx.getVoidType()
-	                                  : ctx.getLLVMType(ReturnType),
-	                              0}
-	        : jam::abi::classifyReturn(ReturnType, ctx);
+	    isExtern ? jam::abi::ReturnABI{jam::abi::ReturnABI::Kind::Direct,
+	                                   ReturnType == kNoType
+	                                       ? ctx.getVoidType()
+	                                       : ctx.getLLVMType(ReturnType),
+	                                   0}
+	             : jam::abi::classifyReturn(ReturnType, ctx);
 	unsigned argOffset = 0;
 	if (rabi.kind == jam::abi::ReturnABI::Kind::Indirect) {
 		ctx.setSretSlot(JamLLVMGetParam(F, 0));
@@ -3177,9 +3082,9 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 			ctx.setVariable(Args[i].Name, param);
 		} else {
 			JamTypeRef ArgType = ctx.getLLVMType(Args[i].Type);
-			JamValueRef Alloca = JamLLVMBuildAlloca(
-			    ctx.getBuilder(), ArgType, ctx.typeAlign(Args[i].Type),
-			    Args[i].Name.c_str());
+			JamValueRef Alloca = JamLLVMBuildAlloca(ctx.getBuilder(), ArgType,
+			                                        ctx.typeAlign(Args[i].Type),
+			                                        Args[i].Name.c_str());
 			JamLLVMBuildStore(ctx.getBuilder(), param, Alloca);
 			ctx.setVariable(Args[i].Name, Alloca);
 		}
@@ -3194,9 +3099,7 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 		// function-level scope (the only active scope at this point) and
 		// then the implicit terminator.
 		emitTopScopeDrops(ctx);
-		if (ReturnType == kNoType) {
-			JamLLVMBuildRetVoid(ctx.getBuilder());
-		}
+		if (ReturnType == kNoType) { JamLLVMBuildRetVoid(ctx.getBuilder()); }
 	}
 	ctx.popDropScope();
 	ctx.clearDrops();

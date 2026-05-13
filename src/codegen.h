@@ -83,9 +83,9 @@ class JamCodegenContext {
 		JamTypeRef type;
 		std::vector<std::pair<std::string, TypeIdx>> fields;
 	};
-	void registerStruct(const std::string &name, JamTypeRef type,
-	                    std::vector<std::pair<std::string, TypeIdx>> fields)
-	    const;
+	void
+	registerStruct(const std::string &name, JamTypeRef type,
+	               std::vector<std::pair<std::string, TypeIdx>> fields) const;
 	const StructInfo *getStruct(const std::string &name) const;
 	// Convenience: resolve a TypeIdx of kind Struct back to its StructInfo.
 	const StructInfo *lookupStruct(TypeIdx ty) const;
@@ -120,7 +120,7 @@ class JamCodegenContext {
 	};
 	struct EnumInfo {
 		std::string name;
-		JamTypeRef type = nullptr;          // LLVM type (i8 or {i8, [N x i8]})
+		JamTypeRef type = nullptr;  // LLVM type (i8 or {i8, [N x i8]})
 		std::vector<EnumVariantInfo> variants;
 		// True if at least one variant carries a payload. Determines
 		// whether construction / pattern-matching follow the unit-only
@@ -178,10 +178,12 @@ class JamCodegenContext {
 	struct DropEntry {
 		std::string name;
 		JamValueRef alloca;
-		JamTypeRef llvmType;          // LLVM type of the binding's storage
-		const FunctionAST *dropFn;    // borrowed; lives on the ModuleAST
+		JamTypeRef llvmType;        // LLVM type of the binding's storage
+		const FunctionAST *dropFn;  // borrowed; lives on the ModuleAST
 	};
-	void setDropRegistry(const jam::drops::DropRegistry *r) { dropRegistry = r; }
+	void setDropRegistry(const jam::drops::DropRegistry *r) {
+		dropRegistry = r;
+	}
 	const jam::drops::DropRegistry *getDropRegistry() const {
 		return dropRegistry;
 	}
@@ -240,8 +242,7 @@ class JamCodegenContext {
 	// the FunctionAST here. Populated by main.cpp during prototype
 	// declaration; lifetime tied to the parsed module.
   public:
-	void registerFunctionAST(const std::string &name,
-	                         const FunctionAST *fn);
+	void registerFunctionAST(const std::string &name, const FunctionAST *fn);
 	const FunctionAST *getFunctionAST(const std::string &name) const;
 
 	// sret state: when the current function returns a large
@@ -275,13 +276,11 @@ class JamCodegenContext {
 	// Set by main.cpp before any codegen runs. The substitution engine
 	// reads from here when resolving generic calls whose bodies contain
 	// `return struct {...};`.
-	const std::vector<std::unique_ptr<StructDeclAST>> *anonStructs_ =
-	    nullptr;
+	const std::vector<std::unique_ptr<StructDeclAST>> *anonStructs_ = nullptr;
 
 	// Mirror of anonStructs_ for `enum { ... }` expressions. Read by
 	// instantiateEnumExpr to materialize generic sum types.
-	const std::vector<std::unique_ptr<EnumDeclAST>> *anonEnums_ =
-	    nullptr;
+	const std::vector<std::unique_ptr<EnumDeclAST>> *anonEnums_ = nullptr;
 
 	// type alias table. `const BoxI32 = Box(i32);` registers
 	// `BoxI32 → resolved-TypeIdx-of-Box(i32)`. Consulted by lookupStruct
@@ -349,13 +348,11 @@ class JamCodegenContext {
 	// register the anonymous-struct table for the current
 	// module so the substitution engine can find struct expression
 	// bodies by their AnonStructs index.
-	void setAnonStructs(
-	    const std::vector<std::unique_ptr<StructDeclAST>> *as) {
+	void setAnonStructs(const std::vector<std::unique_ptr<StructDeclAST>> *as) {
 		anonStructs_ = as;
 	}
 
-	void setAnonEnums(
-	    const std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
+	void setAnonEnums(const std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
 		anonEnums_ = ae;
 	}
 
@@ -374,8 +371,7 @@ class JamCodegenContext {
 	// substitution context manipulators. The map is active
 	// only during codegen of an instantiated method's body — set right
 	// before declarePrototype/defineBody, cleared right after.
-	void setCurrentSubst(
-	    std::unordered_map<std::string, TypeIdx> s) const {
+	void setCurrentSubst(std::unordered_map<std::string, TypeIdx> s) const {
 		currentSubst_ = std::move(s);
 	}
 	void clearCurrentSubst() const { currentSubst_.clear(); }

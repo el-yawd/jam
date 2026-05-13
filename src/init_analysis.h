@@ -83,11 +83,12 @@ using FunctionRegistry = std::unordered_map<std::string, const FunctionAST *>;
 //     the pre-loop state, and the post state merges body output with
 //     pre-loop. For-loops over a range additionally assume the body runs
 //     at least once. May replace with fixed-point iteration later.
-std::vector<Diagnostic> analyze(
-    const FunctionAST &fn, const NodeStore &nodes, const StringPool &strings,
-    const std::vector<Token> &tokens, const FunctionRegistry *registry = nullptr,
-    const drops::DropRegistry *drops = nullptr,
-    const TypePool *types = nullptr);
+std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
+                                const StringPool &strings,
+                                const std::vector<Token> &tokens,
+                                const FunctionRegistry *registry = nullptr,
+                                const drops::DropRegistry *drops = nullptr,
+                                const TypePool *types = nullptr);
 
 }  // namespace init_analysis
 }  // namespace jam

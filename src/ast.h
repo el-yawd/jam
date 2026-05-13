@@ -126,8 +126,8 @@ struct EnumVariantAST {
 };
 
 // Top-level enum declaration:
-//   const Direction = enum { Up, Down, Left, Right };         
-//   const Op = enum { Nop, LdR8R8(u8, u8), Jp(u16) };          
+//   const Direction = enum { Up, Down, Left, Right };
+//   const Op = enum { Nop, LdR8R8(u8, u8), Jp(u16) };
 //
 // Variants get sequential discriminants assigned in declaration order
 // (Up=0, Down=1, …). Unit variants have no payload; tagged variants

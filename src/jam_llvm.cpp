@@ -69,7 +69,7 @@ struct JamTargetMachineImpl {
 };
 }  // namespace
 #define WRAP_TARGET_MACHINE(impl) reinterpret_cast<JamTargetMachineRef>(impl)
-#define UNWRAP_TARGET_MACHINE_IMPL(tm) \
+#define UNWRAP_TARGET_MACHINE_IMPL(tm)                                         \
 	reinterpret_cast<JamTargetMachineImpl *>(tm)
 #define UNWRAP_TARGET_MACHINE(tm) (UNWRAP_TARGET_MACHINE_IMPL(tm)->tm)
 
@@ -222,7 +222,8 @@ void JamLLVMStructSetBody(JamTypeRef structType, JamTypeRef *elementTypes,
 	for (unsigned i = 0; i < elementCount; i++) {
 		types.push_back(UNWRAP_TYPE(elementTypes[i]));
 	}
-	llvm::cast<llvm::StructType>(UNWRAP_TYPE(structType))->setBody(types, packed);
+	llvm::cast<llvm::StructType>(UNWRAP_TYPE(structType))
+	    ->setBody(types, packed);
 }
 
 JamTypeRef JamLLVMFunctionType(JamTypeRef returnType, JamTypeRef *paramTypes,
@@ -449,12 +450,10 @@ void JamLLVMAddParamAttrSret(JamFunctionRef func, unsigned argIdx,
 	llvm::Function *F = UNWRAP_FUNCTION(func);
 	llvm::LLVMContext &ctx = F->getContext();
 	llvm::Type *ty = UNWRAP_TYPE(pointeeType);
-	F->addParamAttr(argIdx,
-	                llvm::Attribute::getWithStructRetType(ctx, ty));
+	F->addParamAttr(argIdx, llvm::Attribute::getWithStructRetType(ctx, ty));
 	F->addParamAttr(argIdx, llvm::Attribute::NoAlias);
 	F->addParamAttr(argIdx,
-	                llvm::Attribute::getWithAlignment(
-	                    ctx, llvm::Align(align)));
+	                llvm::Attribute::getWithAlignment(ctx, llvm::Align(align)));
 }
 
 void JamLLVMSetValueName(JamValueRef val, const char *name) {
@@ -525,9 +524,7 @@ JamValueRef JamLLVMBuildAlloca(JamBuilderRef builder, JamTypeRef type,
 			b->restoreIP(savedIP);
 		}
 	}
-	if (alignBytes != 0) {
-		inst->setAlignment(llvm::Align(alignBytes));
-	}
+	if (alignBytes != 0) { inst->setAlignment(llvm::Align(alignBytes)); }
 	return WRAP_VALUE(inst);
 }
 
@@ -550,10 +547,9 @@ JamValueRef JamLLVMBuildArrayGEP(JamBuilderRef builder, JamTypeRef arrayType,
 	llvm::Value *zero =
 	    llvm::ConstantInt::get(llvm::Type::getInt32Ty(b->getContext()), 0);
 	llvm::Value *indices[2] = {zero, UNWRAP_VALUE(idx)};
-	return WRAP_VALUE(b->CreateInBoundsGEP(UNWRAP_TYPE(arrayType),
-	                                       UNWRAP_VALUE(ptr),
-	                                       llvm::ArrayRef<llvm::Value *>(indices, 2),
-	                                       name));
+	return WRAP_VALUE(
+	    b->CreateInBoundsGEP(UNWRAP_TYPE(arrayType), UNWRAP_VALUE(ptr),
+	                         llvm::ArrayRef<llvm::Value *>(indices, 2), name));
 }
 
 JamValueRef JamLLVMBuildStructGEP(JamBuilderRef builder, JamTypeRef structType,
@@ -568,10 +564,9 @@ JamValueRef JamLLVMBuildPtrGEP(JamBuilderRef builder, JamTypeRef elemType,
                                const char *name) {
 	auto *b = UNWRAP_BUILDER(builder);
 	llvm::Value *indices[1] = {UNWRAP_VALUE(idx)};
-	return WRAP_VALUE(b->CreateInBoundsGEP(UNWRAP_TYPE(elemType),
-	                                       UNWRAP_VALUE(ptr),
-	                                       llvm::ArrayRef<llvm::Value *>(indices, 1),
-	                                       name));
+	return WRAP_VALUE(
+	    b->CreateInBoundsGEP(UNWRAP_TYPE(elemType), UNWRAP_VALUE(ptr),
+	                         llvm::ArrayRef<llvm::Value *>(indices, 1), name));
 }
 
 JamValueRef JamLLVMBuildAdd(JamBuilderRef builder, JamValueRef lhs,
@@ -791,12 +786,10 @@ char *JamLLVMGetHostCPUFeatures(void) {
 	return strdup(features.c_str());
 }
 
-JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
-                                               const char *cpu,
-                                               const char *features,
-                                               bool isRelocationPIC,
-                                               JamOptLevel optLevel,
-                                               JamLTO lto) {
+JamTargetMachineRef
+JamLLVMCreateTargetMachine(const char *triple, const char *cpu,
+                           const char *features, bool isRelocationPIC,
+                           JamOptLevel optLevel, JamLTO lto) {
 	std::string error;
 	const llvm::Target *target =
 	    llvm::TargetRegistry::lookupTarget(triple, error);
@@ -816,15 +809,29 @@ JamTargetMachineRef JamLLVMCreateTargetMachine(const char *triple,
 
 	llvm::CodeGenOptLevel cgOpt;
 	switch (optLevel) {
-	case JAM_OPT_NONE:       cgOpt = llvm::CodeGenOptLevel::None; break;
-	case JAM_OPT_LESS:       cgOpt = llvm::CodeGenOptLevel::Less; break;
-	case JAM_OPT_DEFAULT:    cgOpt = llvm::CodeGenOptLevel::Default; break;
-	case JAM_OPT_AGGRESSIVE: cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
+	case JAM_OPT_NONE:
+		cgOpt = llvm::CodeGenOptLevel::None;
+		break;
+	case JAM_OPT_LESS:
+		cgOpt = llvm::CodeGenOptLevel::Less;
+		break;
+	case JAM_OPT_DEFAULT:
+		cgOpt = llvm::CodeGenOptLevel::Default;
+		break;
+	case JAM_OPT_AGGRESSIVE:
+		cgOpt = llvm::CodeGenOptLevel::Aggressive;
+		break;
 	// Codegen-level has no "size" tier — Zig also uses Aggressive for
 	// ReleaseSmall (zig-0.10.1/src/codegen/llvm.zig opt_level branch).
-	case JAM_OPT_SIZE:       cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
-	case JAM_OPT_SMALL:      cgOpt = llvm::CodeGenOptLevel::Aggressive; break;
-	default:                 cgOpt = llvm::CodeGenOptLevel::None; break;
+	case JAM_OPT_SIZE:
+		cgOpt = llvm::CodeGenOptLevel::Aggressive;
+		break;
+	case JAM_OPT_SMALL:
+		cgOpt = llvm::CodeGenOptLevel::Aggressive;
+		break;
+	default:
+		cgOpt = llvm::CodeGenOptLevel::None;
+		break;
 	}
 
 	llvm::TargetMachine *tm = target->createTargetMachine(
@@ -882,7 +889,8 @@ bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
 	// `--release` little better than `-O0` for real programs.
 	//
 	// Mirrors Zig's release pipeline (see
-	// misc/references/zig-0.10.1/src/zig_llvm.cpp ZigLLVMTargetMachineEmitToFile).
+	// misc/references/zig-0.10.1/src/zig_llvm.cpp
+	// ZigLLVMTargetMachineEmitToFile).
 	llvm::PipelineTuningOptions pto;
 	pto.LoopUnrolling = !isDebug;
 	pto.SLPVectorization = !isDebug;
@@ -916,13 +924,27 @@ bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
 
 	llvm::OptimizationLevel level;
 	switch (optLevel) {
-	case JAM_OPT_NONE:       level = llvm::OptimizationLevel::O0; break;
-	case JAM_OPT_LESS:       level = llvm::OptimizationLevel::O1; break;
-	case JAM_OPT_DEFAULT:    level = llvm::OptimizationLevel::O2; break;
-	case JAM_OPT_AGGRESSIVE: level = llvm::OptimizationLevel::O3; break;
-	case JAM_OPT_SIZE:       level = llvm::OptimizationLevel::Os; break;
-	case JAM_OPT_SMALL:      level = llvm::OptimizationLevel::Oz; break;
-	default:                 level = llvm::OptimizationLevel::O0; break;
+	case JAM_OPT_NONE:
+		level = llvm::OptimizationLevel::O0;
+		break;
+	case JAM_OPT_LESS:
+		level = llvm::OptimizationLevel::O1;
+		break;
+	case JAM_OPT_DEFAULT:
+		level = llvm::OptimizationLevel::O2;
+		break;
+	case JAM_OPT_AGGRESSIVE:
+		level = llvm::OptimizationLevel::O3;
+		break;
+	case JAM_OPT_SIZE:
+		level = llvm::OptimizationLevel::Os;
+		break;
+	case JAM_OPT_SMALL:
+		level = llvm::OptimizationLevel::Oz;
+		break;
+	default:
+		level = llvm::OptimizationLevel::O0;
+		break;
 	}
 
 	// LTO mode swaps in the LTO pre-link pipeline. The actual cross-module
@@ -949,8 +971,8 @@ bool JamLLVMEmitObjectFile(JamModuleRef mod, JamTargetMachineRef tm,
 	}
 
 	llvm::legacy::PassManager pass;
-	if (targetMachine->addPassesToEmitFile(
-	        pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+	if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
+	                                       llvm::CodeGenFileType::ObjectFile)) {
 		if (errorMessage) {
 			*errorMessage = strdup("Target machine cannot emit object file");
 		}

@@ -30,7 +30,7 @@ struct CompileResult {
 // built (the Makefile target depends on `build`). We invoke from the
 // project root so jam.out's relative paths resolve correctly.
 CompileResult compileSource(const std::string &name,
-                             const std::string &source) {
+                            const std::string &source) {
 	std::string path = "/tmp/" + name + ".jam";
 	{
 		std::ofstream out(path);
@@ -43,9 +43,7 @@ CompileResult compileSource(const std::string &name,
 
 	std::string output;
 	FILE *pipe = popen(cmd.c_str(), "r");
-	if (!pipe) {
-		throw std::runtime_error("popen failed: " + cmd);
-	}
+	if (!pipe) { throw std::runtime_error("popen failed: " + cmd); }
 	char buf[256];
 	while (fgets(buf, sizeof(buf), pipe) != nullptr) output += buf;
 	int status = pclose(pipe);

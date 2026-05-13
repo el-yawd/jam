@@ -32,9 +32,9 @@ class ModuleResolver {
 
 	const std::string &getBaseDir() const { return baseDir; }
 
-	void setSharedAnonRegistries(
-	    std::vector<std::unique_ptr<StructDeclAST>> *as,
-	    std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
+	void
+	setSharedAnonRegistries(std::vector<std::unique_ptr<StructDeclAST>> *as,
+	                        std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
 		sharedAnonStructs_ = as;
 		sharedAnonEnums_ = ae;
 	}
@@ -44,8 +44,7 @@ class ModuleResolver {
 	TypePool *typePool;
 	StringPool *stringPool;
 	NodeStore *nodeStore;
-	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs_ =
-	    nullptr;
+	std::vector<std::unique_ptr<StructDeclAST>> *sharedAnonStructs_ = nullptr;
 	std::vector<std::unique_ptr<EnumDeclAST>> *sharedAnonEnums_ = nullptr;
 	std::unordered_map<std::string, std::unique_ptr<ModuleAST>> loadedModules;
 	std::unordered_set<std::string>

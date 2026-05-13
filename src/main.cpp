@@ -95,8 +95,8 @@ static int compileAndRun(const std::string &filename,
 	std::vector<std::unique_ptr<StructDeclAST>> sharedAnonStructs;
 	std::vector<std::unique_ptr<EnumDeclAST>> sharedAnonEnums;
 
-	Parser parser(tokens, codegenCtx.getTypePool(),
-	              codegenCtx.getStringPool(), codegenCtx.getNodeStore());
+	Parser parser(tokens, codegenCtx.getTypePool(), codegenCtx.getStringPool(),
+	              codegenCtx.getNodeStore());
 	parser.sharedAnonStructs = &sharedAnonStructs;
 	parser.sharedAnonEnums = &sharedAnonEnums;
 	std::unique_ptr<ModuleAST> module = parser.parse();
@@ -112,9 +112,7 @@ static int compileAndRun(const std::string &filename,
 
 	symbolTable.registerBuiltinSymbol("test", "assert");
 	for (auto &import : module->Imports) {
-		if (import->Path == "std" || import->Path == "test") {
-			continue;
-		}
+		if (import->Path == "std" || import->Path == "test") { continue; }
 
 		ModuleAST *importedModule = resolver.getOrLoadModule(import->Path);
 		if (!importedModule) {
@@ -183,8 +181,8 @@ static int compileAndRun(const std::string &filename,
 	auto fillUnionBodies = [&](ModuleAST *m) {
 		for (auto &u : m->Unions) {
 			if (u->Fields.empty()) {
-				throw std::runtime_error(
-				    "Union `" + u->Name + "` must have at least one field");
+				throw std::runtime_error("Union `" + u->Name +
+				                         "` must have at least one field");
 			}
 			uint64_t maxSize = 0, maxAlign = 1;
 			size_t alignFieldIdx = 0;
@@ -199,8 +197,7 @@ static int compileAndRun(const std::string &filename,
 			}
 			// Round size up to a multiple of alignment so writes through
 			// the most-aligned field don't run off the end.
-			uint64_t allocSize =
-			    (maxSize + maxAlign - 1) / maxAlign * maxAlign;
+			uint64_t allocSize = (maxSize + maxAlign - 1) / maxAlign * maxAlign;
 			JamTypeRef alignedTy =
 			    codegenCtx.getLLVMType(u->Fields[alignFieldIdx].second);
 			uint64_t alignedSz =
@@ -211,9 +208,9 @@ static int compileAndRun(const std::string &filename,
 			std::vector<JamTypeRef> bodyTypes;
 			bodyTypes.push_back(alignedTy);
 			if (paddingBytes > 0) {
-				bodyTypes.push_back(JamLLVMArrayType(
-				    codegenCtx.getInt8Type(),
-				    static_cast<unsigned>(paddingBytes)));
+				bodyTypes.push_back(
+				    JamLLVMArrayType(codegenCtx.getInt8Type(),
+				                     static_cast<unsigned>(paddingBytes)));
 			}
 			const auto *info = codegenCtx.getUnion(u->Name);
 			JamLLVMStructSetBody(info->type, bodyTypes.data(),
@@ -309,16 +306,16 @@ static int compileAndRun(const std::string &filename,
 			bodyTypes.push_back(codegenCtx.getInt8Type());  // tag
 			bodyTypes.push_back(alignDriver);
 			if (extraBytes > 0) {
-				bodyTypes.push_back(JamLLVMArrayType(
-				    codegenCtx.getInt8Type(),
-				    static_cast<unsigned>(extraBytes)));
+				bodyTypes.push_back(
+				    JamLLVMArrayType(codegenCtx.getInt8Type(),
+				                     static_cast<unsigned>(extraBytes)));
 			}
 
 			JamLLVMStructSetBody(info->type, bodyTypes.data(),
 			                     static_cast<unsigned>(bodyTypes.size()),
 			                     false);
-			codegenCtx.setEnumLLVMType(e->Name, info->type, maxSize,
-			                           maxAlign, true);
+			codegenCtx.setEnumLLVMType(e->Name, info->type, maxSize, maxAlign,
+			                           true);
 		}
 	};
 	// Enums that need a named struct type (i.e. those with payload
@@ -328,8 +325,8 @@ static int compileAndRun(const std::string &filename,
 		for (auto &e : m->Enums) {
 			const auto *info = codegenCtx.getEnum(e->Name);
 			if (!info || !info->hasPayloadVariant) continue;
-			JamTypeRef ty = JamLLVMStructCreateNamed(
-			    codegenCtx.getContext(), e->Name.c_str());
+			JamTypeRef ty = JamLLVMStructCreateNamed(codegenCtx.getContext(),
+			                                         e->Name.c_str());
 			codegenCtx.setEnumLLVMType(e->Name, ty, 0, 1, true);
 		}
 	};
@@ -436,12 +433,10 @@ static int compileAndRun(const std::string &filename,
 	// don't commit to method mangling yet. See docs/STRUCT_METHODS.md.
 	auto resolveStructName = [&](TypeIdx ty) -> std::string {
 		const auto &key = codegenCtx.getTypePool().get(ty);
-		if (key.kind != TypeKind::Struct &&
-		    key.kind != TypeKind::Named) {
+		if (key.kind != TypeKind::Struct && key.kind != TypeKind::Named) {
 			return "";
 		}
-		return codegenCtx.getStringPool().get(
-		    static_cast<StringIdx>(key.a));
+		return codegenCtx.getStringPool().get(static_cast<StringIdx>(key.a));
 	};
 	for (auto &s : module->Structs) {
 		for (auto &m : s->Methods) {
@@ -457,40 +452,32 @@ static int compileAndRun(const std::string &filename,
 			// level structs in v1.
 			if (m->Name == "default") {
 				if (!m->Args.empty()) {
-					std::cerr
-					    << filename
-					    << ": error: method `default` on struct `"
-					    << s->Name
-					    << "` must take no parameters\n";
+					std::cerr << filename
+					          << ": error: method `default` on struct `"
+					          << s->Name << "` must take no parameters\n";
 					return 1;
 				}
-				std::string retStruct =
-				    resolveStructName(m->ReturnType);
+				std::string retStruct = resolveStructName(m->ReturnType);
 				if (retStruct != s->Name) {
 					std::cerr
-					    << filename
-					    << ": error: method `default` on struct `"
-					    << s->Name
-					    << "` must return `Self` (got `"
-					    << retStruct << "`)\n";
+					    << filename << ": error: method `default` on struct `"
+					    << s->Name << "` must return `Self` (got `" << retStruct
+					    << "`)\n";
 					return 1;
 				}
 			} else if (m->Name == "drop") {
 				if (m->Args.empty() || m->Args[0].Name != "self") {
-					std::cerr
-					    << filename << ": error: method `" << m->Name
-					    << "` on struct `" << s->Name
-					    << "` must take `self` as its first parameter\n";
+					std::cerr << filename << ": error: method `" << m->Name
+					          << "` on struct `" << s->Name
+					          << "` must take `self` as its first parameter\n";
 					return 1;
 				}
-				std::string selfStruct =
-				    resolveStructName(m->Args[0].Type);
+				std::string selfStruct = resolveStructName(m->Args[0].Type);
 				if (selfStruct != s->Name) {
-					std::cerr
-					    << filename << ": error: method `" << m->Name
-					    << "` on struct `" << s->Name
-					    << "` has self type `" << selfStruct
-					    << "`; expected `" << s->Name << "`\n";
+					std::cerr << filename << ": error: method `" << m->Name
+					          << "` on struct `" << s->Name
+					          << "` has self type `" << selfStruct
+					          << "`; expected `" << s->Name << "`\n";
 					return 1;
 				}
 			} else {
@@ -502,8 +489,7 @@ static int compileAndRun(const std::string &filename,
 				return 1;
 			}
 			m->declarePrototype(codegenCtx);
-			codegenCtx.registerFunctionAST(
-			    s->Name + "." + m->Name, m.get());
+			codegenCtx.registerFunctionAST(s->Name + "." + m->Name, m.get());
 			mainModuleEmits.push_back(m.get());
 		}
 	}
@@ -548,8 +534,8 @@ static int compileAndRun(const std::string &filename,
 			if (function->isExtern) continue;
 			auto diags = jam::init_analysis::analyze(
 			    *function, codegenCtx.getNodeStore(),
-			    codegenCtx.getStringPool(), tokens, &fnRegistry,
-			    &dropRegistry, &codegenCtx.getTypePool());
+			    codegenCtx.getStringPool(), tokens, &fnRegistry, &dropRegistry,
+			    &codegenCtx.getTypePool());
 			for (auto &d : diags) {
 				std::cerr << filename << ":" << d.line
 				          << ": error: " << d.message << "\n";
@@ -658,8 +644,8 @@ static int compileAndRun(const std::string &filename,
 		jam::Target t = jam::Target::getHostTarget();
 		return t.requiresPIE() || t.requiresPIC();
 	}();
-	JamTargetMachineRef tm = JamLLVMCreateTargetMachine(
-	    tripleStr, "generic", "", pic, optLevel, lto);
+	JamTargetMachineRef tm = JamLLVMCreateTargetMachine(tripleStr, "generic",
+	                                                    "", pic, optLevel, lto);
 	JamLLVMDisposeMessage(tripleStr);
 
 	if (!tm) {
@@ -695,9 +681,7 @@ static int compileAndRun(const std::string &filename,
 	std::string linkCmd = "clang " + intermediate + " -o " + outputName;
 	if (lto == JAM_LTO_THIN) linkCmd += " -flto=thin";
 	else if (lto == JAM_LTO_FAT) linkCmd += " -flto=full";
-	for (const auto &lib : linkLibs) {
-		linkCmd += " -l" + lib;
-	}
+	for (const auto &lib : linkLibs) { linkCmd += " -l" + lib; }
 
 	jam::Target host = jam::Target::getHostTarget();
 
@@ -736,8 +720,8 @@ static int compileAndRun(const std::string &filename,
 			break;
 		case jam::OS::Linux:
 		case jam::OS::FreeBSD:
-			linkCmd += (strip == JAM_STRIP_SYMBOLS) ? " -Wl,-s"
-			                                       : " -Wl,--strip-debug";
+			linkCmd +=
+			    (strip == JAM_STRIP_SYMBOLS) ? " -Wl,-s" : " -Wl,--strip-debug";
 			break;
 		case jam::OS::Windows:
 		case jam::OS::Unknown:
@@ -794,75 +778,75 @@ static std::vector<std::string> collectJamFiles(const std::string &dir) {
 }
 
 static void printHelp(const char *prog) {
-	std::cout << "Usage: " << prog
-	          << " [OPTIONS] <file|directory>\n"
-	             "       "
-	          << prog
-	          << " run [LINKER-FLAGS] <file>\n"
-	             "       "
-	          << prog
-	          << " test [<file|directory>]\n"
-	             "\n"
-	             "Subcommands:\n"
-	             "  run             Compile, run, and clean up the executable. "
-	             "Only linker\n"
-	             "                  flags (-l<name>) may accompany it.\n"
-	             "  test            Test mode: compile test functions and "
-	             "run them\n"
-	             "\n"
-	             "Options:\n"
-	             "  -C opt-level=N  Optimization level, rustc-style. Default "
-	             "is `0` (debug,\n"
-	             "                  ~30× faster compile). Accepts:\n"
-	             "                    0  no optimizations\n"
-	             "                    1  basic optimizations\n"
-	             "                    2  LLVM default (-O2)\n"
-	             "                    3  aggressive (-O3)\n"
-	             "                    s  optimize for size (-Os)\n"
-	             "                    z  aggressively optimize for size "
-	             "(-Oz)\n"
-	             "  -C lto=MODE     Link-time optimization. Default is "
-	             "`off`. Accepts:\n"
-	             "                    off   regular object file (no LTO)\n"
-	             "                    thin  ThinLTO bitcode — fast, "
-	             "parallel link\n"
-	             "                    fat   full LTO bitcode — slowest "
-	             "link, most opt\n"
-	             "  -C strip=MODE   Symbol / debug-info stripping. Default "
-	             "is `none`.\n"
-	             "                    none       keep all symbols & debug "
-	             "info\n"
-	             "                    debuginfo  strip DWARF / debug "
-	             "sections only\n"
-	             "                    symbols    strip debug + local "
-	             "symbols\n"
-	             "  --emit-ir       Print LLVM IR to stdout\n"
-	             "  --target-info   Show host target info (arch, triple, "
-	             "pointer size, ...)\n"
-	             "  -o <name>       Output binary name (default: output)\n"
-	             "  -l<name>, --library <name>\n"
-	             "                  Link against system library <name>\n"
-	             "  -h, --help      Show this help and exit\n"
-	             "\n"
-	             "Examples:\n"
-	             "  "
-	          << prog
-	          << " hello.jam                 # compile to ./output\n"
-	             "  "
-	          << prog
-	          << " run hello.jam             # compile and run\n"
-	             "  "
-	          << prog
-	          << " run -lncurses tetris.jam  # compile, link with ncurses, run\n"
-	             "  "
-	          << prog
-	          << " test                      # run tests in cwd (recursive)\n"
-	             "  "
-	          << prog
-	          << " test tests/unit           # run tests under tests/unit\n"
-	             "  "
-	          << prog
-	          << " test tests/unit/foo.jam   # run tests in a single file\n";
+	std::cout
+	    << "Usage: " << prog
+	    << " [OPTIONS] <file|directory>\n"
+	       "       "
+	    << prog
+	    << " run [LINKER-FLAGS] <file>\n"
+	       "       "
+	    << prog
+	    << " test [<file|directory>]\n"
+	       "\n"
+	       "Subcommands:\n"
+	       "  run             Compile, run, and clean up the executable. "
+	       "Only linker\n"
+	       "                  flags (-l<name>) may accompany it.\n"
+	       "  test            Test mode: compile test functions and "
+	       "run them\n"
+	       "\n"
+	       "Options:\n"
+	       "  -C opt-level=N  Optimization level, rustc-style. Default "
+	       "is `0` (debug,\n"
+	       "                  ~30× faster compile). Accepts:\n"
+	       "                    0  no optimizations\n"
+	       "                    1  basic optimizations\n"
+	       "                    2  LLVM default (-O2)\n"
+	       "                    3  aggressive (-O3)\n"
+	       "                    s  optimize for size (-Os)\n"
+	       "                    z  aggressively optimize for size "
+	       "(-Oz)\n"
+	       "  -C lto=MODE     Link-time optimization. Default is "
+	       "`off`. Accepts:\n"
+	       "                    off   regular object file (no LTO)\n"
+	       "                    thin  ThinLTO bitcode — fast, "
+	       "parallel link\n"
+	       "                    fat   full LTO bitcode — slowest "
+	       "link, most opt\n"
+	       "  -C strip=MODE   Symbol / debug-info stripping. Default "
+	       "is `none`.\n"
+	       "                    none       keep all symbols & debug "
+	       "info\n"
+	       "                    debuginfo  strip DWARF / debug "
+	       "sections only\n"
+	       "                    symbols    strip debug + local "
+	       "symbols\n"
+	       "  --emit-ir       Print LLVM IR to stdout\n"
+	       "  --target-info   Show host target info (arch, triple, "
+	       "pointer size, ...)\n"
+	       "  -o <name>       Output binary name (default: output)\n"
+	       "  -l<name>, --library <name>\n"
+	       "                  Link against system library <name>\n"
+	       "  -h, --help      Show this help and exit\n"
+	       "\n"
+	       "Examples:\n"
+	       "  "
+	    << prog
+	    << " hello.jam                 # compile to ./output\n"
+	       "  "
+	    << prog
+	    << " run hello.jam             # compile and run\n"
+	       "  "
+	    << prog
+	    << " run -lncurses tetris.jam  # compile, link with ncurses, run\n"
+	       "  "
+	    << prog
+	    << " test                      # run tests in cwd (recursive)\n"
+	       "  "
+	    << prog
+	    << " test tests/unit           # run tests under tests/unit\n"
+	       "  "
+	    << prog << " test tests/unit/foo.jam   # run tests in a single file\n";
 }
 
 static bool fileHasTests(const std::string &path) {
@@ -980,8 +964,7 @@ int main(int argc, char *argv[]) {
 						return 1;
 					}
 				} else if (key == "lto") {
-					if (value == "off" || value == "false" ||
-					    value == "no") {
+					if (value == "off" || value == "false" || value == "no") {
 						lto = JAM_LTO_OFF;
 					} else if (value == "thin") {
 						lto = JAM_LTO_THIN;
@@ -995,8 +978,8 @@ int main(int argc, char *argv[]) {
 						return 1;
 					}
 				} else if (key == "strip") {
-					if (value == "none" || value == "off" ||
-					    value == "false" || value == "no") {
+					if (value == "none" || value == "off" || value == "false" ||
+					    value == "no") {
 						strip = JAM_STRIP_NONE;
 					} else if (value == "debuginfo") {
 						strip = JAM_STRIP_DEBUGINFO;
@@ -1020,10 +1003,9 @@ int main(int argc, char *argv[]) {
 		// Inside `run`, anything else flag-shaped is an error.
 		if (runFlag) {
 			if (!arg.empty() && arg[0] == '-') {
-				std::cerr
-				    << "Error: `run` only accepts linker flags "
-				       "(-l<name>, -l <name>, --library <name>); got `"
-				    << arg << "`" << std::endl;
+				std::cerr << "Error: `run` only accepts linker flags "
+				             "(-l<name>, -l <name>, --library <name>); got `"
+				          << arg << "`" << std::endl;
 				return 1;
 			}
 			filename = arg;
@@ -1130,8 +1112,8 @@ int main(int argc, char *argv[]) {
 	// codegen paths that detect impossible inputs (e.g. a generic
 	// instantiation referencing a method the concrete type doesn't have).
 	try {
-		return compileAndRun(filename, outputName, runFlag, emitIR,
-		                     testMode, optLevel, lto, strip, linkLibs);
+		return compileAndRun(filename, outputName, runFlag, emitIR, testMode,
+		                     optLevel, lto, strip, linkLibs);
 	} catch (const std::exception &e) {
 		std::cerr << filename << ": error: " << e.what() << std::endl;
 		return 1;
