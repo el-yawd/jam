@@ -13,8 +13,6 @@ extern int32_t jam_square(int32_t x);
 extern void jam_greet(const char* name);
 
 int main() {
-    printf("=== C Calling Jam Functions ===\n\n");
-    
     // Test 1: Simple arithmetic
     printf("Test 1: Calling jam_multiply(6, 7)\n");
     int32_t result1 = jam_multiply(6, 7);
@@ -34,6 +32,5 @@ int main() {
     jam_greet("C World");
     printf("\n");
     
-    printf("=== All Tests Complete ===\n");
     return 0;
 }
