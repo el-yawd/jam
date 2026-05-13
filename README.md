@@ -5,8 +5,6 @@
   <br>Jam Programming Language
 </h1>
   <p align="center">
-    <a href="#about">About</a>
-    ·
     <a href="https://jamlang.org">Reference</a>
     ·
     <a href="https://github.com/sponsors/raphamorim">Sponsor</a>
