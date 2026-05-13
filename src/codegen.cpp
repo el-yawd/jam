@@ -160,7 +160,7 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		} else if (const auto *uinfo = getUnion(name)) {
 			result = uinfo->type;
 		} else if (const auto *einfo = getEnum(name)) {
-			// (unit-only): lowers to i8. E2 (with payloads): lowers
+			// Unit-only enums lower to i8. Payloaded enums lower
 			// to {i8, [N x i8]} via the named struct type set during
 			// declaration.
 			result = einfo->hasPayloadVariant ? einfo->type : getInt8Type();
@@ -598,7 +598,7 @@ uint64_t JamCodegenContext::typeSize(TypeIdx ty) const {
 		return alignUp(maxSize, maxAlign);
 	}
 	case TypeKind::Enum:
-		return 1;  // M2 E1 enums lower to u8
+		return 1;  // Unit-only enums lower to u8
 	case TypeKind::Type:
 		// Meta-type has no runtime size.
 		return 0;

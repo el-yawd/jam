@@ -70,7 +70,7 @@ sidebar:
 ## Variables & Constants {#variables}
 
 Jam has two binding forms inside functions: `var` for mutable storage and `const` for
-single-assignment values. Every binding must be initialized at its declaration — Jam has
+single-assignment values. Every binding must be initialized at its declaration, Jam has
 no `undefined` placeholder.
 
 ```jam
@@ -84,7 +84,7 @@ fn example() {
 ```
 
 At module scope, `const` declarations bind a name to a compile-time value. They are
-*inlined* at every use site — referring to one costs the same as a literal. The type may
+*inlined* at every use site, referring to one costs the same as a literal. The type may
 be inferred when an initializer alone determines it.
 
 ```jam
@@ -98,7 +98,7 @@ fn isZSet(f: u8) bool {
 ```
 
 Module-scope `const` is also how top-level types, imports, and function pointers are
-named — Jam funnels every top-level declaration through the same form.
+named, Jam funnels every top-level declaration through the same form.
 
 ---
 
@@ -136,7 +136,7 @@ the standard `0x`, `0o`, `0b` prefixes.
     <div>
         <h4 class="font-bold text-purple-800 text-sm">Choosing Integer Types</h4>
         <p class="text-sm text-purple-700 mt-1">
-            Use unsigned types (<code class="font-mono">u8</code>, <code class="font-mono">u16</code>, etc.) for values that are never negative — indices, counts, byte sizes.
+            Use unsigned types (<code class="font-mono">u8</code>, <code class="font-mono">u16</code>, etc.) for values that are never negative, indices, counts, byte sizes.
             Use signed types (<code class="font-mono">i8</code>, <code class="font-mono">i16</code>, etc.) when you need to represent negative values.
         </p>
     </div>
@@ -234,7 +234,7 @@ const earth:   str = "\u{1F30D}";              // 🌍
 
 Jam distinguishes three reference families. Pointer types take a *required* `const` or
 `mut` qualifier marking whether the pointee may be written. Slices and fixed arrays carry
-no qualifier — their element mutability follows the binding.
+no qualifier, their element mutability follows the binding.
 
 | Type          | Description                                                                      |
 |---------------|----------------------------------------------------------------------------------|
@@ -269,7 +269,7 @@ fn indexThroughMany() u8 {
     <div>
         <h4 class="font-bold text-pink-800 text-sm">No bare <code class="font-mono">*T</code></h4>
         <p class="text-sm text-pink-700 mt-1">
-            The mutability qualifier is part of the pointer type — there is no shorthand
+            The mutability qualifier is part of the pointer type, there is no shorthand
             <code class="font-mono">*T</code>. Writing <code class="font-mono">*const u8</code>
             vs <code class="font-mono">*mut u8</code> documents intent at every signature.
         </p>
@@ -285,7 +285,7 @@ comma-separated, fill-with-count, and empty (which produces a zero-length slice)
 
 ```jam
 var a: [4]u8  = [10, 20, 30, 40];     // [a, b, c, d]
-var b: [16]u8 = [0; 16];              // [expr; N] — fill 16 slots with 0
+var b: [16]u8 = [0; 16];              // [expr; N], fill 16 slots with 0
 const empty: []u8 = [];               // empty slice
 
 // Index with []. Out-of-bounds is undefined at runtime —
@@ -333,7 +333,7 @@ fn fillIndices() [16]u8 {
 }
 ```
 
-The `for` loop iterates a half-open integer range — `for i in 0:N` binds `i = 0, 1, …, N-1`.
+The `for` loop iterates a half-open integer range, `for i in 0:N` binds `i = 0, 1, …, N-1`.
 
 ---
 
@@ -349,14 +349,14 @@ fn mixIngredients(sugar: i32, fruit: i32) i32 {
     return sugar + fruit;
 }
 
-// No return value — omit the return type.
+// No return value, omit the return type.
 fn greet() {
     std.fmt.println("Hello!");
 }
 ```
 
 Functions can be prefixed with `pub` (visible outside the defining module) and `extern`
-(declared but defined elsewhere — typically libc).
+(declared but defined elsewhere, typically libc).
 
 ```jam
 pub fn add(a: i32, b: i32) i32 { return a + b; }
@@ -371,7 +371,7 @@ pub extern fn free(ptr: *mut[] u8);
         <h4 class="font-bold text-pink-800 text-sm">Void Functions</h4>
         <p class="text-sm text-pink-700 mt-1">
             A function with no declared return type returns nothing. Don't write
-            <code class="font-mono">void</code> — just omit the return-type slot.
+            <code class="font-mono">void</code>, just omit the return-type slot.
         </p>
     </div>
 </div>
@@ -445,19 +445,19 @@ fn observe() u32 {
     var hits: u32 = 0;
     var c: Counter = { value: 5, sink: &hits };
     return c.value;
-    // c.drop() fires automatically here — see Drop, below.
+    // c.drop() fires automatically here, see Drop, below.
 }
 ```
 
 A method can also be invoked by-name on the type: `Counter.drop(&c)` calls it
 explicitly while `c` is still in scope (and the automatic drop will still fire at scope
-exit — calling drop manually is currently a footgun).
+exit, calling drop manually is currently a footgun).
 
 ---
 
 ## Enums {#enums}
 
-Enums describe a closed set of named variants. The simplest form is *payload-less* — each
+Enums describe a closed set of named variants. The simplest form is *payload-less*, each
 variant is a u8 discriminant.
 
 ```jam
@@ -509,14 +509,14 @@ fn srcReg(op: Op) u8 {
 }
 ```
 
-Payload-carrying enums are how `Option(T)` and `Result(T, E)` are built — see
+Payload-carrying enums are how `Option(T)` and `Result(T, E)` are built, see
 [Generics](#generics).
 
 ---
 
 ## Unions {#unions}
 
-A `union` is *untagged* — every field shares the same storage. Use it for type punning
+A `union` is *untagged*, every field shares the same storage. Use it for type punning
 (read float bits as `u32`, etc.) and for matching C-side `union { … }` types at FFI
 boundaries.
 
@@ -533,7 +533,7 @@ fn floatBits(x: f32) u32 {
 ```
 
 Unions size to their largest field; alignment is the max of all fields'. Unlike enums,
-there is no discriminant — the compiler trusts the program to know which field is live.
+there is no discriminant, the compiler trusts the program to know which field is live.
 
 ---
 
@@ -554,7 +554,7 @@ fn dispatch(x: u8) u8 {
 }
 ```
 
-A `match` can also be used as an *expression* — each arm produces a value, and the result
+A `match` can also be used as an *expression*, each arm produces a value, and the result
 is the value of the matched arm.
 
 ```jam
@@ -596,7 +596,7 @@ fn main() {
 }
 ```
 
-A type alias `const Name = Generic(arg);` registers `Name` as a synonym — subsequent
+A type alias `const Name = Generic(arg);` registers `Name` as a synonym, subsequent
 uses resolve to the same instantiated struct.
 
 ```jam
@@ -620,7 +620,7 @@ fn Holder(T: type) type {
 }
 ```
 
-`Self` inside a struct body refers to the enclosing struct type — for a generic, that's
+`Self` inside a struct body refers to the enclosing struct type, for a generic, that's
 the specific instantiation in play.
 
 ### Generic Enums
@@ -644,7 +644,7 @@ Construct variants by qualifying with the instantiated type: `Option(i32).Some(4
 
 ## Modules & Imports {#imports}
 
-`import("name")` returns a *module value* — a compile-time record of the symbols another
+`import("name")` returns a *module value*, a compile-time record of the symbols another
 file exports. Bind it through `const` either whole or destructured.
 
 ```jam
@@ -655,7 +655,7 @@ fn show() {
     std.fmt.println("Hello!");
 }
 
-// Destructured binding — pulls specific names into the current scope.
+// Destructured binding, pulls specific names into the current scope.
 const { Vec, Option } = import("collections");
 const { assert }      = import("test");
 ```
@@ -678,7 +678,7 @@ results are substituted as constants before LLVM sees the code.
 
 ```jam
 fn bytesFor(n: u64) u64 {
-    return n * @sizeOf(u32);          // n * 4 — fully constant-folded
+    return n * @sizeOf(u32);          // n * 4, fully constant-folded
 }
 
 fn pointerSize() u64 {
@@ -686,7 +686,7 @@ fn pointerSize() u64 {
 }
 
 fn sliceSize() u64 {
-    return @sizeOf([]u8);             // 16 — {ptr, len}
+    return @sizeOf([]u8);             // 16, {ptr, len}
 }
 ```
 
@@ -713,7 +713,7 @@ fn allocOne() *mut[] u32 {
 ```
 
 Param types must match the C ABI. Slice arguments are passed as a `{ptr, len}` pair, and
-struct arguments larger than two words use sret-style return ABI — these match the
+struct arguments larger than two words use sret-style return ABI, these match the
 platform's C compiler.
 
 ---
@@ -724,8 +724,8 @@ Jam is a *mutable value semantics* language. Every binding owns its value; passi
 value to a function does not silently share storage with the caller. Functions opt into
 a specific borrowing or transfer behavior via a per-parameter **mode** keyword.
 
-The result is the same memory safety as Rust — no use-after-free, no double-free, no
-data races, no reads of uninitialized memory — with no lifetime annotations.
+The result is the same memory safety as Rust, no use-after-free, no double-free, no
+data races, no reads of uninitialized memory, with no lifetime annotations.
 
 The design is inspired by Hylo's parameter-mode system and Rust's drop semantics. The
 compiler enforces three rules: *definite initialization* (every binding is written
@@ -745,18 +745,18 @@ the type.
 | Consume ownership     | `move`      | read-write         | becomes uninitialized    |
 
 ```jam
-// Default read-only borrow — caller's value is unchanged.
+// Default read-only borrow, caller's value is unchanged.
 fn distance(a: Point, b: Point) f64 {
     return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
 }
 
-// Exclusive read-write — caller passes `&binding`.
+// Exclusive read-write, caller passes `&binding`.
 fn scale(p: mut Point, factor: f64) {
     p.x = p.x * factor;
     p.y = p.y * factor;
 }
 
-// Consume — caller's binding is uninitialized after the call.
+// Consume, caller's binding is uninitialized after the call.
 fn storeIn(buf: move []u8, db: mut Database) {
     db.append(buf);
 }
@@ -766,18 +766,18 @@ At the call site, a `mut` parameter is passed with `&` to make the borrow explic
 
 ```jam
 var p: Point = { x: 3.0, y: 4.0 };
-scale(&p, 2.0);                  // mut borrow — explicit &
-distance(p, otherPoint);          // read-only — no sigil
+scale(&p, 2.0);                  // mut borrow, explicit &
+distance(p, otherPoint);          // read-only, no sigil
 ```
 
-`move` parameters take a plain expression — the binding is dead in the caller after the
+`move` parameters take a plain expression, the binding is dead in the caller after the
 call.
 
 ## Exclusivity {#mvs-exclusivity}
 
 At any call boundary, at most one argument may be a `mut` borrow of a given binding,
 and a `mut` borrow cannot coexist with any other borrow of the same binding. The
-compiler rejects programs that violate this rule — the same "law of exclusivity"
+compiler rejects programs that violate this rule, the same "law of exclusivity"
 Rust's borrow checker enforces, applied locally at each call rather than across
 whole-program lifetimes.
 
@@ -797,7 +797,7 @@ fn caller() u32 {
 
 A struct may define a `drop` method that runs automatically when an owned instance goes
 out of scope. The drop method takes `self: mut Self` and runs exactly once per owned
-value — even on early returns, in match arms, and through nested control flow. There is
+value, even on early returns, in match arms, and through nested control flow. There is
 no manual `defer` ceremony.
 
 ```jam
@@ -817,4 +817,4 @@ fn readFile(path: []u8) i32 {
 ```
 
 A value *moved* into another function (via the `move` mode) becomes uninitialized in
-the caller, so the drop fires at the new owner's scope exit — never twice.
+the caller, so the drop fires at the new owner's scope exit, never twice.

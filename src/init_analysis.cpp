@@ -167,7 +167,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 		r = analyze(stmt, std::move(r.state));
 	}
 
-	// + P8.2: if control reaches the end of the body without an
+	// If control reaches the end of the body without an
 	// explicit return, every drop-bearing local must have been
 	// initialized. (Functions that always return on every path produce
 	// r.terminated == true and skip this check; the per-return checks
@@ -359,8 +359,8 @@ Result Analyzer::analyzeAssign(NodeIdx idx, NameMap state) {
 // trigger a read check. Sub-expressions like array indices *are* reads.
 //
 // In any write to a sub-path (`arr[i] = x`, `s.field = x`) marks the
-// whole base binding as Init. This is intentionally imprecise: P2 does
-// not track field-level init. A later phase can refine this to only mark
+// whole base binding as Init. This is intentionally imprecise: field-level
+// init isn't tracked. A later phase can refine this to only mark
 // the touched sub-path.
 Result Analyzer::analyzeAssignTarget(NodeIdx idx, NameMap state) {
 	if (idx == kNoNode) return Result{std::move(state), false};

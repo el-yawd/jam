@@ -66,7 +66,7 @@ using FunctionRegistry = std::unordered_map<std::string, const FunctionAST *>;
 // vector on success; on failure, the vector contains every detected
 // uninit-read with location info.
 //
-// Scope (cumulative through P4):
+// Scope:
 //   - Tracks per-binding init state for locals declared with
 //     `var name: T = ...`.
 //   - Parameter entry state: every parameter starts Init (the caller is

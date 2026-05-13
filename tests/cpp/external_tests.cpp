@@ -3,7 +3,6 @@
 #include <fstream>
 #include <sstream>
 
-// Forward declaration
 class PrintFunctionTests {
   public:
 	static void registerAllTests(TestFramework &framework);
@@ -308,12 +307,10 @@ class CompilerExternalTests {
 int main() {
 	TestFramework framework;
 
-	// Register all tests
 	CompilerExternalTests::registerAllTests(framework);
 	PrintFunctionTests::registerAllTests(framework);
 	LoopTests::registerAllTests(framework);
 
-	// Run all tests
 	framework.runAll();
 
 	return framework.allPassed() ? 0 : 1;

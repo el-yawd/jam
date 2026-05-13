@@ -396,7 +396,7 @@ static int compileAndRun(const std::string &filename,
 			}
 			// Generic functions are still registered so call sites can
 			// look them up for instantiation, but no LLVM is emitted
-			// until each instantiation is processed in G5.
+			// until each instantiation is processed.
 			if (func->isPub) {
 				codegenCtx.registerFunctionAST(func->Name, func.get());
 			}
@@ -519,7 +519,7 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
-	// MVS P2–P5.5 + P8 foundation/P8.1: definite-init + mode-aware
+	// Definite-init + mode-aware
 	// callsite analysis runs after every prototype is in scope but
 	// before any body is codegen'd. The drop registry is built here and
 	// kept alive for the whole codegen pass — codegen reads it via the

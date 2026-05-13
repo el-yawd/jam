@@ -116,7 +116,7 @@ enum class AstTag : uint8_t {
 	// d.lhs = u32 (index into ModuleAST::AnonEnums)
 	EnumExpr,
 
-	// Pattern match (M1: integer literals, ranges, or-patterns, wildcard).
+	// Pattern match (integer literals, ranges, or-patterns, wildcard).
 	// The catch-all is the wildcard pattern `_`; there is no `else` arm.
 	// d.lhs = NodeIdx (scrutinee expression)
 	// d.rhs = ExtraIdx → [armCount,
@@ -156,8 +156,8 @@ enum class AstTag : uint8_t {
 
 	// d.lhs = lo32 of value, d.rhs = hi32 of value, flags bit 0 = isNeg.
 	PatLit,
-	// d.lhs = lo32 of low bound, d.rhs = lo32 of high bound (M1 limits to
-	// values that fit in u32; M2+ may extend via ExtraIdx for u64).
+	// d.lhs = lo32 of low bound, d.rhs = lo32 of high bound (limited to
+	// values that fit in u32; may later extend via ExtraIdx for u64).
 	PatRange,
 	// No payload.
 	PatWildcard,
@@ -408,7 +408,7 @@ constexpr TypeIdx U64 = 9;
 constexpr TypeIdx I64 = 10;
 constexpr TypeIdx F32 = 11;
 constexpr TypeIdx F64 = 12;
-constexpr TypeIdx Type = 13;  // generics G1: the meta-type
+constexpr TypeIdx Type = 13;  // the meta-type
 constexpr TypeIdx U1 = Bool;  // alias
 }  // namespace BuiltinType
 

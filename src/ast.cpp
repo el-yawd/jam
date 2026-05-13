@@ -25,7 +25,7 @@ JamBasicBlockRef CurrentLoopBreak = nullptr;
 // loop. SIZE_MAX means "no enclosing loop body active here".
 size_t CurrentLoopBodyScopeIdx = SIZE_MAX;
 
-// Forward declaration so codegenCall (P9.5 auto-address path) can call
+// Forward declaration so codegenCall (auto-address path) can call
 // codegenAddressOf which is defined further down in the file.
 static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n);
 
@@ -225,7 +225,7 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 		// keeps the codegen working uniformly whether the variable is
 		// backed by an `alloca` (locals, value-passed params) or by a
 		// function argument that's already a pointer to caller storage
-		// (P9 mode-aware ABI for `mut` / `undefined` params).
+		// (mode-aware ABI for `mut` / `undefined` params).
 		JamTypeRef allocatedType = ctx.getLLVMType(varTy);
 
 		if (k.kind == TypeKind::PtrMany) {
@@ -1707,7 +1707,7 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	return Alloca;
 }
 
-// + P9: emit a single drop call for one tracked binding. P9's
+// Emit a single drop call for one tracked binding. The
 // mode-aware ABI now lowers `fn drop(self: mut T)` as a pointer-typed
 // parameter, so the call site passes the binding's storage address
 // directly — no load-value-then-pass-by-value workaround. The drop fn
@@ -1989,7 +1989,7 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 //
 // The Maranget decision-tree formalism degenerates to "specialize the only
 // column" in (one scrutinee, one column); the cascade is the canonical
-// one-column lowering. M2+ replaces this with a multi-column tree.
+// one-column lowering. A multi-column tree will replace this later.
 
 // Build a boolean (i1) value that is true iff the scrutinee matches the
 // given pattern node. `scrut` is the already-loaded scrutinee value;
@@ -2058,7 +2058,7 @@ emitPatternTest(JamCodegenContext &ctx, NodeIdx patIdx, JamValueRef scrut,
 		}
 		uint32_t discrim = einfo->variants[idx].discriminant;
 		// Extract the tag if the scrutinee is a {tag, payload} struct.
-		// For E1 (unit-only) enums the scrutinee is already i8.
+		// For unit-only enums the scrutinee is already i8.
 		JamValueRef tagVal = scrut;
 		JamTypeRef tagType = scrutType;
 		if (JamLLVMTypeIsStruct(scrutType)) {
@@ -2193,7 +2193,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	if (!scrut) return nullptr;
 	JamTypeRef scrutType = JamLLVMTypeOf(scrut);
 	// Classify the scrutinee. Enum scrutinees may be either an integer
-	// (E1 unit-only enums lower to i8) or a struct (E2 payloaded enums
+	// (unit-only enums lower to i8) or a struct (payloaded enums
 	// lower to a named struct). For struct scrutinees we MUST verify
 	// the type matches a registered enum, otherwise a slice (which is
 	// also a struct shape `{ptr, len}`) would silently route through
@@ -2226,7 +2226,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 	JamBasicBlockRef mergeBB =
 	    JamLLVMAppendBasicBlock(func, "match.end");
 
-	// Per-arm result for the M3 phi: pairs (basicBlock, value) where
+	// Per-arm result for the phi: pairs (basicBlock, value) where
 	// the arm's body ended without terminating control flow. The
 	// match's expression-form value is a phi over these.
 	std::vector<std::pair<JamBasicBlockRef, JamValueRef>> armResults;
@@ -2331,7 +2331,7 @@ static JamValueRef codegenMatch(JamCodegenContext &ctx, const AstNode &n) {
 		}
 
 		// Track each arm's last produced value (for match-as-expression
-		// support, M3). Arms that terminate via `return` / `break` /
+		// support). Arms that terminate via `return` / `break` /
 		// `continue` don't fall through to merge and aren't recorded.
 		JamValueRef lastValue = nullptr;
 		ctx.pushDropScope();
