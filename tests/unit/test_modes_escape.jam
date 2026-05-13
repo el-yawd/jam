@@ -9,13 +9,13 @@ const { assert } = import("test");
 // Must-fail cases (return &p, return &p.field) are verified manually
 // until the must-fail runner lands in P7.
 
-// --- Returning a mut param's *value* is fine (it's a copy) ---
+// Returning a mut param's *value* is fine (it's a copy)
 fn doubleByValue(x: mut u32) u32 {
     x = x + x;
     return x;
 }
 
-// --- Returning a sub-path of a mut param by value is fine ---
+// Returning a sub-path of a mut param by value is fine
 const Pair = struct {
     a: u32,
     b: u32,
@@ -26,18 +26,18 @@ fn pickFieldA(p: mut Pair) u32 {
     return p.a;
 }
 
-// --- Returning the deref of a pointer-typed mut param is fine ---
+// Returning the deref of a pointer-typed mut param is fine
 fn loadThroughMutPtr(p: mut *mut u32) u32 {
     return p.*;
 }
 
-// --- Returning a fresh value computed from mut param: fine ---
+// Returning a fresh value computed from mut param: fine
 fn computeFromMut(x: mut u32) u32 {
     x = x + 100;
     return x + 1;
 }
 
-// --- Tests ---
+// Tests
 
 tfn doubleByValueOK() {
     var n: u32 = 5;

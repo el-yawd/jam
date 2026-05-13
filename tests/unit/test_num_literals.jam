@@ -1,7 +1,7 @@
 // Numeric-literal coverage: hex, binary, octal, decimal, underscores.
 const { assert } = import("test");
 
-// -- Hex --
+// Hex
 
 fn hexLowerCase() u8     { return 0xff; }
 fn hexUpperCase() u8     { return 0xFF; }
@@ -18,7 +18,7 @@ tfn hexMixedEq()    { assert(hexMixedCase(), 171); }
 tfn hexZeroEq()     { assert(hexZero(), 0); }
 tfn hexHighEq()     { assert(hexHigh(), 3735928559); }
 
-// -- Binary --
+// Binary
 
 fn binaryZero() u8       { return 0b0; }
 fn binaryOne() u8        { return 0b1; }
@@ -34,7 +34,7 @@ tfn binaryFifteenEq()    { assert(binaryFifteen(), 15); }
 tfn binarySixteenEq()    { assert(binarySixteen(), 16); }
 tfn binaryAlternatingEq() { assert(binaryAlternating(), 170); }
 
-// -- Octal --
+// Octal
 
 fn octalZero() u8        { return 0o0; }
 fn octalSeven() u8       { return 0o7; }
@@ -46,7 +46,7 @@ tfn octalSevenEq()        { assert(octalSeven(), 7); }
 tfn octalSeventeenEq()    { assert(octalSeventeenOct(), 15); }
 tfn octalRwxEq()          { assert(octalRwxRwxRwx(), 511); }
 
-// -- Underscore separators --
+// Underscore separators
 
 fn decUnderscore() u32    { return 1_000_000; }
 fn hexUnderscore() u32    { return 0xDEAD_BEEF; }
@@ -60,7 +60,7 @@ tfn hexUnderscoreEveryEq() { assert(hexUnderscoreEvery(), 0x01234567); }
 tfn binUnderscoreEq()      { assert(binUnderscore(), 170); }
 tfn octUnderscoreEq()      { assert(octUnderscore(), 511); }
 
-// -- Cross-base equality --
+// Cross-base equality
 
 fn crossDecHex() u32      { return 255; }
 fn crossHex() u32         { return 0xFF; }
@@ -71,7 +71,7 @@ tfn crossEqDecHex()  { assert(crossDecHex(), crossHex()); }
 tfn crossEqDecBin()  { assert(crossDecHex(), crossBin()); }
 tfn crossEqDecOct()  { assert(crossDecHex(), crossOct()); }
 
-// -- Negative literals (sign + base + underscores) --
+// Negative literals (sign + base + underscores)
 
 fn negDecUnderscore() i32 { return -1_000; }
 fn negHex() i32           { return -0xFF; }
@@ -81,7 +81,7 @@ tfn negDecUnderscoreEq() { assert(negDecUnderscore(), -1000); }
 tfn negHexEq()           { assert(negHex(), -255); }
 tfn negBinEq()           { assert(negBin(), -10); }
 
-// -- Use inside `match` patterns --
+// Use inside `match` patterns
 
 fn classifyMixed(x: u8) u8 {
     var r: u8 = 0;
@@ -102,7 +102,7 @@ tfn classifyOctal()        { assert(classifyMixed(0o17), 3); }
 tfn classifyRange()        { assert(classifyMixed(5), 4); }
 tfn classifyMissOther()    { assert(classifyMixed(100), 0); }
 
-// -- Range bounds in different bases --
+// Range bounds in different bases
 
 fn rangeBases(x: u8) u8 {
     var r: u8 = 0;

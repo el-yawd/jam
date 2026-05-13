@@ -10,7 +10,7 @@ const { assert } = import("test");
 // (overlapping mut + let, mut + move, move + move on overlapping paths)
 // are verified manually until P7 wires up the must-fail test runner.
 
-// --- Multiple `let` reads of the same binding: OK ---
+// Multiple `let` reads of the same binding: OK
 fn add(a: u32, b: u32) u32 {
     return a + b;
 }
@@ -20,7 +20,7 @@ fn doubleSelf() u32 {
     return add(x, x);
 }
 
-// --- Disjoint sub-paths of the same struct: OK ---
+// Disjoint sub-paths of the same struct: OK
 const Pair = struct {
     a: u32,
     b: u32,
@@ -35,7 +35,7 @@ fn disjointFields() u32 {
     return addPair(p.a, p.b);
 }
 
-// --- Disjoint constant indices: OK ---
+// Disjoint constant indices: OK
 fn addTwo(a: u8, b: u8) u8 {
     return a + b;
 }
@@ -45,7 +45,7 @@ fn disjointArrayIndices() u8 {
     return addTwo(arr[0], arr[2]);
 }
 
-// --- Same-path move + return: OK (single arg, no overlap with itself) ---
+// Same-path move + return: OK (single arg, no overlap with itself)
 fn consume(buf: move u32) u32 {
     return buf;
 }
@@ -55,7 +55,7 @@ fn singleMove() u32 {
     return consume(x);
 }
 
-// --- Tests ---
+// Tests
 
 tfn doubleSelfOK() {
     assert(doubleSelf(), 42);

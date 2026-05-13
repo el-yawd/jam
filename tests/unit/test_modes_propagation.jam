@@ -13,8 +13,8 @@ const { assert } = import("test");
 // Must-fail cases (read after move; uninit read of a let-mode arg) are
 // verified manually until P7 wires the must-fail test runner.
 
-// --- move arg consumes caller binding; P4 marks it Uninit, but we don't
-//     read it after, so the program is well-typed. ---
+// move arg consumes caller binding; P4 marks it Uninit, but we don't
+//     read it after, so the program is well-typed.
 fn consume(buf: move u32) u32 {
     return buf;
 }
@@ -25,7 +25,7 @@ fn moveCaller() u32 {
     return taken;
 }
 
-// --- move multiple args; each gets its own propagation ---
+// move multiple args; each gets its own propagation
 fn consumeTwo(a: move u32, b: move u32) u32 {
     return a + b;
 }
@@ -36,7 +36,7 @@ fn moveTwoCaller() u32 {
     return consumeTwo(p, q);
 }
 
-// --- let arg leaves caller's binding Init; can keep using it ---
+// let arg leaves caller's binding Init; can keep using it
 fn read(x: u32) u32 {
     return x + 1;
 }
@@ -48,7 +48,7 @@ fn letCaller() u32 {
     return first + second;
 }
 
-// --- mut arg: caller passes `&n` (pointer to its storage); the function
+// mut arg: caller passes `&n` (pointer to its storage); the function
 //     mutates through the pointer and the caller observes the change.
 //     P9.2/P9.3 made `mut` lower as `ptr align A` at the LLVM level.
 fn doubleIt(x: mut u32) u32 {
@@ -65,7 +65,7 @@ fn mutCaller() u32 {
     return doubled + stillUsable;
 }
 
-// --- Mixing: move + let in one signature, caller picks the right shape ---
+// Mixing: move + let in one signature, caller picks the right shape
 fn mixedConsumer(taken: move u32, kept: u32) u32 {
     return taken + kept;
 }
@@ -78,7 +78,7 @@ fn mixedCaller() u32 {
     return sum + bAgain;
 }
 
-// --- Tests ---
+// Tests
 
 tfn moveCallerOK() {
     assert(moveCaller(), 100);

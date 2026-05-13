@@ -81,9 +81,7 @@ bool diagsAbout(const std::vector<jam::init_analysis::Diagnostic> &diags,
 	return false;
 }
 
-// =========================================================================
 // P4 — callsite mode propagation
-// =========================================================================
 
 void testReadAfterMove() {
 	auto r = analyzeSource(R"(
@@ -129,9 +127,7 @@ fn caller() u32 {
 	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
 }
 
-// =========================================================================
 // P5 — exclusivity rule
-// =========================================================================
 
 void testExclusivityMutLet() {
 	auto r = analyzeSource(R"(
@@ -191,9 +187,7 @@ fn caller() u32 {
 	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
 }
 
-// =========================================================================
 // P5.5 — scope-escape check
-// =========================================================================
 
 void testEscapeMutParam() {
 	auto r = analyzeSource(R"(
@@ -230,9 +224,7 @@ fn doubleIt(x: mut u32) u32 {
 	ASSERT_EQ(static_cast<size_t>(0), r.diagnostics.size());
 }
 
-// =========================================================================
 // P8 — drop registry foundation
-// =========================================================================
 
 void testMoveOnDropBearingRejected() {
 	// A type with a user-defined `fn drop(self: mut T)` is "drop-bearing".

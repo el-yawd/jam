@@ -3,8 +3,6 @@
 // `union { ... }` types at FFI boundaries.
 const { assert } = import("test");
 
-// -------------------- Same-size unions --------------------
-
 const FloatBits = union {
     i: u32,
     f: f32,
@@ -45,8 +43,6 @@ tfn floatRoundTripOne()        { assert(floatRoundTrip(0x3F800000), 0x3F800000);
 tfn floatRoundTripMinusOne()   { assert(floatRoundTrip(0xBF800000), 0xBF800000); }
 tfn floatRoundTripZero()       { assert(floatRoundTrip(0), 0); }
 
-// -------------------- Different-size unions --------------------
-
 const SmallVsBig = union {
     s: u8,
     b: u64,
@@ -72,8 +68,6 @@ fn writeSmallReadBig() u64 {
 tfn writeBigReadSmallByte()  { assert(writeBigReadSmall(), 0xBE); }
 tfn writeSmallReadBigVal()   { assert(writeSmallReadBig(), 42); }
 
-// -------------------- Function parameter / return --------------------
-
 fn returnUnion(seed: u32) FloatBits {
     var b: FloatBits = { i: seed };
     return b;
@@ -87,8 +81,6 @@ fn callerOfReturnUnion() u32 {
 tfn callerOfReturnUnionEq() {
     assert(callerOfReturnUnion(), 0x12345678);
 }
-
-// -------------------- Multiple fields of same width --------------------
 
 const ThreeWayU32 = union {
     a: u32,
@@ -104,8 +96,6 @@ fn signedUnsignedReinterpret() u32 {
 tfn signedToUnsigned() {
     assert(signedUnsignedReinterpret(), 0xFFFFFFFF);
 }
-
-// -------------------- Sized correctly --------------------
 
 const Bigger = union {
     small: u8,

@@ -47,9 +47,7 @@ TypeIdx buildStruct(JamCodegenContext &ctx, const std::string &name,
 	return ty;
 }
 
-// =========================================================================
 // Parameter classification
-// =========================================================================
 
 void testLetU32IsByValueScalar() {
 	JamCodegenContext ctx("test");
@@ -153,9 +151,7 @@ void testLetPointerIsByValueScalar() {
 	ASSERT_TRUE(a.kind == jam::abi::ParamABI::Kind::ByValue);
 }
 
-// =========================================================================
 // Return classification
-// =========================================================================
 
 void testReturnVoidIsDirect() {
 	JamCodegenContext ctx("test");

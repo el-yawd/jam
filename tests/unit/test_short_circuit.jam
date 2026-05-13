@@ -1,5 +1,4 @@
 // Test short-circuit evaluation for 'and' and 'or' operators
-// Following Zig's behavior
 
 // Test 'and' short-circuit: if first is false, second is not evaluated
 fn test_and_short_circuit(a: bool, b: bool) bool {

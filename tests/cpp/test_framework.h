@@ -26,8 +26,7 @@ class TestFramework {
 	}
 
 	void runAll() {
-		std::cout << "Running C++ Unit Tests for Jam Compiler\n";
-		std::cout << "=======================================\n\n";
+		std::cout << "Running C++ Unit Tests for Jam Compiler\n\n";
 
 		for (auto &test : tests) {
 			std::cout << test.name << "... ";
@@ -46,7 +45,6 @@ class TestFramework {
 		}
 
 		std::cout << "\nTest Results\n";
-		std::cout << "============\n";
 		std::cout << "Passed: " << passed << "\n";
 		std::cout << "Failed: " << failed << "\n";
 		std::cout << "Total:  " << (passed + failed) << "\n";

@@ -2,8 +2,6 @@
 const { assert } = import("test");
 const { Vec, Option } = import("collections");
 
-// -------------------- Tests --------------------
-
 const VecI32 = Vec(i32);
 const VecU8  = Vec(u8);
 
@@ -88,8 +86,6 @@ tfn vecOfU8() {
     assert(unwrapU8(v.get(2), 0) as i32, 30);
 }
 
-// -------------------- size-aware initial capacity --------------------
-
 tfn initialCapacityForU8() {
     // sizeOf(u8) == 1 ⇒ initial cap 8 (Rust's heuristic).
     var v: VecU8 = VecU8.empty();
@@ -101,8 +97,6 @@ tfn initialCapacityForI32() {
     var v: VecI32 = VecI32.empty();
     assert(v.capacity as i32, 4);
 }
-
-// -------------------- withCapacity --------------------
 
 tfn withCapacityPreallocates() {
     var v: VecI32 = VecI32.withCapacity(100);

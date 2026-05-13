@@ -8,29 +8,29 @@ const { assert } = import("test");
 // Semantic enforcement (init analysis, exclusivity, scope-escape, drop
 // synthesis) lands in P2 and beyond. See docs/MVS.md.
 
-// --- Default mode (no keyword): read-only borrow ---
+// Default mode (no keyword): read-only borrow
 fn readDefault(x: u32) u32 {
     return x;
 }
 
-// --- mut: exclusive read-write borrow ---
+// mut: exclusive read-write borrow
 fn modifyMut(x: mut u32) u32 {
     x = x + 1;
     return x;
 }
 
-// --- move: consume ownership ---
+// move: consume ownership
 fn moveValue(buf: move u32) u32 {
     return buf;
 }
 
-// --- All three modes mixed in one signature ---
+// All three modes mixed in one signature
 fn mixedModes(a: u32, b: mut u32, c: move u32) u32 {
     b = b + 1;
     return a + b + c;
 }
 
-// --- Mode applied to a pointer-typed parameter ---
+// Mode applied to a pointer-typed parameter
 // `mut *mut u32` reads as: mut-mode borrow of a pointer-to-mut-u32.
 // The mode keyword sits after `:`; the pointer's own `mut` qualifier
 // stays inside the type. No ambiguity (pointer types start with `*`).
@@ -38,18 +38,18 @@ fn modifyMutPtr(p: mut *mut u32) u32 {
     return p.*;
 }
 
-// --- Parameter named `out` is allowed: `out` is not a reserved word ---
+// Parameter named `out` is allowed: `out` is not a reserved word
 fn paramNamedOut(out: u32) u32 {
     return out;
 }
 
-// --- Local helper for the test path ---
+// Local helper for the test path
 fn fillThenReadHelper() u8 {
     var arr: [4]u8 = [1, 2, 3, 4];
     return arr[2];
 }
 
-// --- Tests ---
+// Tests
 
 tfn readDefaultParses() {
     assert(readDefault(7), 7);
