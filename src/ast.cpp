@@ -1512,7 +1512,12 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			if (calleeAST && !calleeAST->isExtern &&
 			    i < calleeAST->Args.size()) {
 				const Param &p = calleeAST->Args[i];
-				if (p.Mode == ParamMode::Let || p.Mode == ParamMode::Move) {
+				// `mut` params are always ByPointer (see classifyParam);
+				// the call site needs to forward an lvalue address.
+				// `let` / `move` get the same treatment only when the
+				// aggregate's size pushes the ABI past kByValueMaxBytes.
+				if (p.Mode == ParamMode::Let || p.Mode == ParamMode::Move ||
+				    p.Mode == ParamMode::Mut) {
 					auto pabi = jam::abi::classifyParam(p.Mode, p.Type, ctx);
 					if (pabi.kind == jam::abi::ParamABI::Kind::ByPointer) {
 						autoAddress = true;
