@@ -7,6 +7,10 @@ on:
     branches: [main, master]
   workflow_dispatch: # Allows manual triggering
 
+defaults:
+  run:
+    shell: bash --noprofile --norc -eo pipefail {0}
+
 jobs:
   build-linux-x86:
     name: Build on Linux (x86_64)
