@@ -182,4 +182,4 @@ check-format:
 # Serve documentation site
 docs:
 	@echo "Serving documentation at http://localhost:4000..."
-	cd docs && bundle update && bundle exec jekyll serve
+	cd docs && bundle install && bundle exec jekyll serve --livereload
