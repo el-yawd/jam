@@ -33,15 +33,21 @@ add_executable(jam
 )
 
 llvm_map_components_to_libnames(llvm_libs
+  AllTargetsAsmParsers
+  AllTargetsCodeGens
+  AllTargetsDescs
+  AllTargetsDisassemblers
+  AllTargetsInfos
   Core
   ExecutionEngine
   Interpreter
   MC
   MCJIT
-  Support
-  nativecodegen
   OrcJIT
+  Passes
+  Support
   native
+  nativecodegen
 )
 target_link_libraries(jam ${llvm_libs})
 include(GNUInstallDirs)
