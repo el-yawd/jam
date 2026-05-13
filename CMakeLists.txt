@@ -1,31 +1,20 @@
 # Jam CMakeList
-
 cmake_minimum_required(VERSION 3.10)
 
-# Default to an optimized build when the user hasn't picked one.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the build type" FORCE)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
 project(Jam)
-
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Find LLVM package
 find_package(LLVM REQUIRED CONFIG)
-
-# Print LLVM information
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
-
-# Include LLVM directories
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-# Add compiler executable
 add_executable(jam 
   src/main.cpp
   src/lexer.cpp
@@ -36,7 +25,6 @@ add_executable(jam
   src/cabi.cpp
 )
 
-# Get proper link libraries for LLVM
 llvm_map_components_to_libnames(llvm_libs
   Core
   ExecutionEngine
@@ -48,25 +36,18 @@ llvm_map_components_to_libnames(llvm_libs
   OrcJIT
   native
 )
-
-# Link against LLVM libraries
 target_link_libraries(jam ${llvm_libs})
-
-# Installation rules
 include(GNUInstallDirs)
 
-# Set installation prefix if not specified
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Default install prefix" FORCE)
 endif()
 
-# Install the jam executable
 install(TARGETS jam 
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   COMPONENT Runtime
 )
 
-# Install documentation files
 install(FILES 
   README.md
   LICENSE
@@ -75,10 +56,8 @@ install(FILES
   COMPONENT Documentation
 )
 
-# Create a simple man page directory structure (optional)
 install(DIRECTORY DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-# Print installation info
 message(STATUS "Jam will be installed to: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Executable will be installed to: ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}")
 message(STATUS "Documentation will be installed to: ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DOCDIR}")
