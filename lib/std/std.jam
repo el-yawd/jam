@@ -1,7 +1,0 @@
-// Jam Standard Library
-//
-// This is the root module for the standard library.
-// Import with: const std = import("std");
-
-// Re-export submodules
-// const fmt = import("./fmt.jam");
