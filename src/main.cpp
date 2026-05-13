@@ -650,19 +650,16 @@ static int compileAndRun(const std::string &filename,
 	char *tripleStr = JamLLVMGetDefaultTargetTriple();
 	JamLLVMSetTargetTriple(codegenCtx.getModule(), tripleStr);
 
-	// Create target machine. Default to JAM_OPT_NONE (Zig Debug-equivalent)
-	// — LLVM's machine codegen + module pipeline at -O2 dominate compile
-	// time. Debug builds compile ~30× faster; `--release` opts into -O3,
-	// `--release-small` into -Oz.
-	// imporant: PIC relocations by default. Modern Linux distros (and macOS) link
-	// executables as PIE; the system `ld` rejects R_X86_64_32 absolute
-	// relocations from a Reloc::Static object when producing a PIE binary.
-	// PIC works everywhere — the tiny indirection cost is irrelevant for a
-	// compiler frontend that links once per invocation.
+	// must_pic is true on targets that need PIC (Windows DLLs, GNU
+	// libc on Linux, …) and `pie` is true on PIE-by-default platforms
+	// (Darwin). Without PIC, system `ld` on Linux x86_64 rejects
+	// R_X86_64_32 absolute relocations when linking a PIE binary.
+	const bool pic = []() {
+		jam::Target t = jam::Target::getHostTarget();
+		return t.requiresPIE() || t.requiresPIC();
+	}();
 	JamTargetMachineRef tm = JamLLVMCreateTargetMachine(
-	    tripleStr, "generic", "",
-	    true,  // PIC
-	    optLevel, lto);
+	    tripleStr, "generic", "", pic, optLevel, lto);
 	JamLLVMDisposeMessage(tripleStr);
 
 	if (!tm) {
