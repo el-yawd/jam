@@ -118,8 +118,21 @@ void JamLLVMSetTargetTriple(JamModuleRef mod, const char *triple) {
 }
 
 void JamLLVMSetDataLayout(JamModuleRef mod, JamTargetMachineRef tm) {
-	UNWRAP_MODULE(mod)->setDataLayout(
-	    UNWRAP_TARGET_MACHINE(tm)->createDataLayout());
+	llvm::Module *m = UNWRAP_MODULE(mod);
+	llvm::TargetMachine *targetMachine = UNWRAP_TARGET_MACHINE(tm);
+	m->setDataLayout(targetMachine->createDataLayout());
+
+	// it does stamp the module-level PIC/PIE flags so the emitted ELF object's
+	// e_flags advertise PIC. Without this, even when the TargetMachine uses
+	// Reloc::PIC_ to emit PC-relative relocations, the object is marked
+	// "not PIC" and a system linker building a PIE binary will refuse it
+	// (R_X86_64_32 against .rodata can not be used when making a PIE
+	// object).
+	const auto relocModel = targetMachine->getRelocationModel();
+	if (relocModel == llvm::Reloc::PIC_) {
+		m->setPICLevel(llvm::PICLevel::BigPIC);
+		m->setPIELevel(llvm::PIELevel::Large);
+	}
 }
 
 JamFunctionRef JamLLVMGetFunction(JamModuleRef mod, const char *name) {

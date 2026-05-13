@@ -654,9 +654,14 @@ static int compileAndRun(const std::string &filename,
 	// — LLVM's machine codegen + module pipeline at -O2 dominate compile
 	// time. Debug builds compile ~30× faster; `--release` opts into -O3,
 	// `--release-small` into -Oz.
+	// imporant: PIC relocations by default. Modern Linux distros (and macOS) link
+	// executables as PIE; the system `ld` rejects R_X86_64_32 absolute
+	// relocations from a Reloc::Static object when producing a PIE binary.
+	// PIC works everywhere — the tiny indirection cost is irrelevant for a
+	// compiler frontend that links once per invocation.
 	JamTargetMachineRef tm = JamLLVMCreateTargetMachine(
 	    tripleStr, "generic", "",
-	    false,  // not PIC for now
+	    true,  // PIC
 	    optLevel, lto);
 	JamLLVMDisposeMessage(tripleStr);
 
