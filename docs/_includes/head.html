@@ -1,0 +1,26 @@
+<meta charset="UTF-8">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-13K8QY0XCQ"></script>
+<script>window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', 'G-13K8QY0XCQ');</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="{{ '/assets/images/favicon-32x32.png' | relative_url }}" type="image/png">
+<title>{% if page.title %}{{ page.title }} - {% endif %}{{ site.title }}</title>
+
+<!-- Open Graph / LinkedIn -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="{% if page.title %}{{ page.title }} - {% endif %}{{ site.title }}">
+<meta property="og:description" content="{{ site.description }}">
+<meta property="og:image" content="https://jamlang.org/assets/images/cover.jpg">
+<meta property="og:image:width" content="2000">
+<meta property="og:image:height" content="1000">
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{% if page.title %}{{ page.title }} - {% endif %}{{ site.title }}">
+<meta name="twitter:description" content="{{ site.description }}">
+<meta name="twitter:image" content="https://jamlang.org/assets/images/cover.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="stylesheet" href="{{ '/assets/css/main.css' | relative_url }}">

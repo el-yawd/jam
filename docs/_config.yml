@@ -1,0 +1,25 @@
+# Site settings
+title: Jam
+description: Jam Programming Language
+url: "jamlang.org"
+baseurl: ""
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+
+# Exclude from build
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+
+# Default front matter
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: "default"
+
+# Site data
+version: "0.1.0"

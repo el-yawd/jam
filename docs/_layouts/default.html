@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% include head.html %}
+</head>
+<body class="bg-[#fffdfd] text-slate-800 antialiased selection:bg-pink-200">
+    {{ content }}
+    <script>
+        lucide.createIcons();
+
+        // Mobile nav toggle — slides the #nav-mobile panel open/closed
+        // and swaps the hamburger icon for an X. Queries the button's
+        // two icon children directly (works whether lucide has already
+        // swapped <i> for <svg> or not).
+        (function () {
+            const btn = document.querySelector('[data-nav-toggle]');
+            const menu = document.getElementById('nav-mobile');
+            if (!btn || !menu) return;
+            const icons = btn.querySelectorAll('svg, i');
+            btn.addEventListener('click', function () {
+                const isOpen = !menu.classList.contains('hidden');
+                menu.classList.toggle('hidden');
+                icons.forEach(function (icon) { icon.classList.toggle('hidden'); });
+                btn.setAttribute('aria-expanded', String(!isOpen));
+                btn.setAttribute('aria-label', isOpen ? 'Open menu' : 'Close menu');
+            });
+        })();
+        {% if page.scripts %}{{ page.scripts }}{% endif %}
+    </script>
+</body>
+</html>
