@@ -5,17 +5,6 @@
  * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
  */
 
-// Numeric-literal validation. The lexer scans number tokens permissively
-// — it accepts essentially every character that could plausibly belong
-// to a number — and this module walks those bytes, decides whether they
-// form a well-formed integer / big-integer / float literal, and returns
-// either the parsed value or a position-bearing error.
-//
-// Keeping validation separate from the lexer keeps the tokenizer small
-// and fast (the path a syntax-highlighting tool would take) while
-// letting the validator own the rich error vocabulary used at parse
-// time.
-
 #ifndef NUMBER_LITERAL_H
 #define NUMBER_LITERAL_H
 
@@ -59,10 +48,6 @@ struct NumberError {
 	NumberBase base;  // meaningful for InvalidDigit, otherwise Decimal
 };
 
-// Tagged-union result: exactly one of the four variants is valid based
-// on `kind`. The codegen / parser path consumes Int directly; BigInt and
-// Float are surfaced for future support and currently cause the parser
-// to throw an "unsupported literal" message.
 enum class NumberResultKind {
 	Int,
 	BigInt,
@@ -77,14 +62,7 @@ struct NumberResult {
 	NumberError failure{};
 };
 
-// Validate a number lexeme produced by the lexer's permissive scan.
-// `bytes` is expected to be non-empty and to start with a digit (the
-// lexer guarantees this). A leading `-` sign is *not* accepted here —
-// callers that handle negation strip the sign first.
 NumberResult parseNumberLiteral(const std::string &bytes);
-
-// Stable human-readable description for an error kind. Used by the
-// parser to construct diagnostic messages.
 const char *numberErrorMessage(NumberErrorKind kind);
 
 #endif  // NUMBER_LITERAL_H

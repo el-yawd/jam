@@ -80,16 +80,6 @@ enum TokenType {
 };
 
 // Token structure.
-//
-// `byteOffset` is the start byte offset of the token in the source —
-// matches Zig's `Ast.TokenList = MultiArrayList({ tag, start })`. Zig
-// stores only `start` per token; the end is recomputed on demand from
-// the tokenizer (`tokenSlice` re-tokenizes for variable-length tokens,
-// short-circuits on a static lexeme table for keywords/operators).
-//
-// `lexeme` and `line` are legacy: kept for compat while the rest of
-// the codebase migrates to byte-offset-only access. Under strict
-// `lib/std/zig/` parity neither will exist in the long run.
 struct Token {
 	TokenType type;
 	std::string lexeme;

@@ -139,9 +139,7 @@ class Analyzer {
 	const FunctionAST *lookupDropFor(const std::string &bindingName) const;
 };
 
-// --------------------------------------------------------------------------
 // Entry point.
-// --------------------------------------------------------------------------
 
 std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	args_ = &fn.Args;
@@ -182,9 +180,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	return std::move(diagnostics_);
 }
 
-// --------------------------------------------------------------------------
 // Tag dispatch.
-// --------------------------------------------------------------------------
 
 Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 	if (idx == kNoNode) return Result{std::move(state), false};
@@ -324,9 +320,7 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 	return Result{std::move(state), false};
 }
 
-// --------------------------------------------------------------------------
 // Statement / declaration cases.
-// --------------------------------------------------------------------------
 
 Result Analyzer::analyzeVarDecl(NodeIdx idx, NameMap state) {
 	// VarDecl: d.lhs = ExtraIdx → [StringIdx name, TypeIdx type, NodeIdx init]
@@ -805,9 +799,7 @@ Result Analyzer::analyzeStructLit(NodeIdx idx, NameMap state) {
 	return r;
 }
 
-// --------------------------------------------------------------------------
 // Read check + diagnostics.
-// --------------------------------------------------------------------------
 
 void Analyzer::checkVariableRead(NodeIdx idx, const NameMap &state) {
 	const AstNode &n = nodes_.get(idx);
@@ -948,9 +940,7 @@ void Analyzer::emitError(std::string message, NodeIdx anchor,
 	diagnostics_.push_back(std::move(d));
 }
 
-// --------------------------------------------------------------------------
 // Lattice merge.
-// --------------------------------------------------------------------------
 
 NameMap Analyzer::mergeMaps(const NameMap &a, const NameMap &b) {
 	NameMap result = a;
@@ -967,9 +957,7 @@ NameMap Analyzer::mergeMaps(const NameMap &a, const NameMap &b) {
 
 }  // namespace
 
-// --------------------------------------------------------------------------
 // Public entry point.
-// --------------------------------------------------------------------------
 
 std::vector<Diagnostic> analyze(const FunctionAST &fn, const NodeStore &nodes,
                                 const StringPool &strings,

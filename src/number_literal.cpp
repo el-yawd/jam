@@ -43,19 +43,11 @@ NumberResult okFloat(NumberBase base) {
 
 }  // namespace
 
-// Walk a number lexeme. Bookkeeping uses the minimal state needed for
-// the four-base, underscore-aware grammar: a base, a running u64
-// accumulator with overflow tracking, plus boolean flags marking the
-// last-seen-was-underscore / saw-period / saw-exponent transitions.
-// On the first ill-formed character or transition, we bail out with a
-// position-bearing error.
 NumberResult parseNumberLiteral(const std::string &bytes) {
 	std::size_t i = 0;
 	uint8_t baseValue = 10;
 	NumberBase base = NumberBase::Decimal;
 
-	// Detect base prefix. Only lowercase prefixes are allowed; an
-	// uppercase prefix is a specific error (matches Zig).
 	if (bytes.size() >= 2 && bytes[0] == '0') {
 		switch (bytes[1]) {
 		case 'b':

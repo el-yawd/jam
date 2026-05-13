@@ -18,36 +18,20 @@
 
 class ModuleResolver {
   public:
-	// Construct with base directory and the shared type/string/node pools
-	// so imported modules' types and AST nodes intern into the same pools
-	// as the main one.
 	ModuleResolver(const std::string &baseDir, TypePool &typePool,
 	               StringPool &stringPool, NodeStore &nodeStore);
 
-	// Resolve import path to absolute file path
-	// Returns empty string if not found
 	std::string resolve(const std::string &importPath) const;
 
-	// Load and parse a module, with caching
-	// Returns nullptr if module cannot be loaded
 	ModuleAST *getOrLoadModule(const std::string &importPath);
 
-	// Check if a module has been loaded
 	bool isLoaded(const std::string &importPath) const;
 
-	// Get all loaded modules
 	const std::unordered_map<std::string, std::unique_ptr<ModuleAST>> &
 	getLoadedModules() const;
 
-	// Get the base directory
 	const std::string &getBaseDir() const { return baseDir; }
 
-	// Wire shared anonymous-struct / anon-enum vectors. When set, all
-	// parsers spawned for imported modules append to these vectors
-	// instead of into per-module ModuleAST::AnonStructs/AnonEnums.
-	// Lets generic-instantiation references that originate in an
-	// imported module (e.g. Vec(T)'s `return struct {...}`) resolve
-	// through a single shared registry at codegen.
 	void setSharedAnonRegistries(
 	    std::vector<std::unique_ptr<StructDeclAST>> *as,
 	    std::vector<std::unique_ptr<EnumDeclAST>> *ae) {
@@ -67,10 +51,8 @@ class ModuleResolver {
 	std::unordered_set<std::string>
 	    currentlyLoading;  // For circular import detection
 
-	// Read file contents
 	std::string readFile(const std::string &path) const;
 
-	// Parse source into AST
 	std::unique_ptr<ModuleAST> parseSource(const std::string &source) const;
 };
 

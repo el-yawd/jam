@@ -201,9 +201,6 @@ NodeIdx Parser::parsePrimary() {
 		}
 		return emit(AstNode{AstTag::ArrayLit, 0, 0, 0, kNoType, extra});
 	}
-	// Generics G2: `struct { ... }` as an expression evaluates to a value
-	// of type `type` — the struct type being constructed. Used as the
-	// body of a generic type-returning function.
 	if (match(TOK_STRUCT)) { return parseStructExpression(); }
 	// Same shape for tagged sum types: `enum { Variant1, Variant2(T), ... }`
 	// in expression position. Enables generic enums like
@@ -228,24 +225,7 @@ NodeIdx Parser::parsePrimary() {
 			}
 		}
 
-		// Function call.
 		if (match(TOK_OPEN_PAREN)) {
-			// Detect `IDENT(args).IDENT(args)` — a chained generic-
-			// call method invocation. We need this because args of
-			// the inner call are TYPE expressions (e.g. `i32`, which
-			// lexes as TOK_TYPE and isn't valid in value-expression
-			// position), and the outer call's receiver is the
-			// instantiated type, not a runtime value.
-			//
-			// Peek-ahead: scan forward over paren-balanced tokens to
-			// find the matching `)`, then check the 2-3 tokens past
-			// it for `.IDENT(`. If we match, parse the inner args as
-			// types via parseType() and emit a TypeMethodCall.
-			//
-			// Only applies when the IDENT-rooted chain has no other
-			// member accesses (so `Vec(i32).empty()` works but
-			// `mod.Vec(i32).empty()` falls through to regular call —
-			// the latter shape isn't a real Jam construct anyway).
 			if (nodes->get(expr).tag != AstTag::MemberAccess) {
 				int peekIdx = current;  // sits on first arg token
 				int depth = 1;
@@ -360,16 +340,6 @@ NodeIdx Parser::parsePrimary() {
 //   []T          — slice (mutability follows the binding)
 //   [N]T         — fixed-size array (mutability follows the binding;
 //                  `N` is part of the type)
-//
-// Pointer types require a `const` or `mut` qualifier (the type
-// alone cannot say whether the pointee is writable; the binding's
-// `var` / `const` only governs reassignment of the pointer itself).
-// An optional `[]` between the qualifier and the element type promotes
-// the pointer to many-item form.
-//
-// Slices `[]T` and fixed arrays `[N]T` take no qualifier — their
-// element mutability follows the binding (`var x: []u8` permits
-// `x[i] = …`; `const x: []u8` does not).
 TypeIdx Parser::parseType() {
 	if (match(TOK_STAR)) {
 		bool ptrConst = false;
@@ -424,16 +394,11 @@ TypeIdx Parser::parseType() {
 		if (s == "f64") return BuiltinType::F64;
 		if (s == "bool" || s == "u1") return BuiltinType::Bool;
 		if (s == "str") return typePool->internSlice(BuiltinType::U8);
-		// Generics G1: `type` resolves to the singleton meta-type. A
-		// parameter of this type accepts a TypeIdx at compile time.
 		if (s == "type") return BuiltinType::Type;
 		throw std::runtime_error("Unknown base type: " + s);
 	}
 	if (match(TOK_IDENTIFIER)) {
 		const std::string &ident = previous().lexeme;
-		// Generics G3: `Self` resolves to the enclosing struct's name —
-		// the top of the parser's struct-context stack. Outside any
-		// struct body it's an error.
 		if (ident == "Self") {
 			if (structContextStack.empty()) {
 				throw std::runtime_error(
@@ -442,10 +407,6 @@ TypeIdx Parser::parseType() {
 			return typePool->internNamed(
 			    stringPool->intern(structContextStack.back()));
 		}
-		// Generics G4: `Identifier(arg, ...)` in a type position is a
-		// generic instantiation. The args are parsed recursively as
-		// types; the result is a `TypeKind::GenericCall` TypeIdx that
-		// the codegen resolves on demand via the substitution engine.
 		if (check(TOK_OPEN_PAREN)) {
 			advance();  // consume `(`
 			std::vector<TypeIdx> args;
@@ -459,10 +420,6 @@ TypeIdx Parser::parseType() {
 			return typePool->internGenericCall(
 			    stringPool->intern(ident), std::move(args));
 		}
-		// User-named types (struct / union / enum) are interned with
-		// kind = Named; codegen resolves to the concrete kind via the
-		// declaration registries. The parser does not need to know
-		// which kind the user meant.
 		return typePool->internNamed(stringPool->intern(ident));
 	}
 	throw std::runtime_error("Expected type");
@@ -493,16 +450,7 @@ NodeIdx Parser::parseStructLiteral() {
 	return emit(AstNode{AstTag::StructLit, 0, 0, 0, kNoType, extra});
 }
 
-// Parse a single atom pattern: integer literal, inclusive range,
-// enum-variant (`Color.Red`), or wildcard. Or-patterns are handled by
-// parsePattern.
 NodeIdx Parser::parsePatternAtom() {
-	// `Identifier(types) '.' Identifier(bindings)` — chained-generic
-	// enum-variant pattern. Detect via paren-balanced peek-ahead
-	// (same shape as the expression-side TypeMethodCall fix). The
-	// receiver is parsed as a generic type via parseType() and stored
-	// in the pattern as a TypeIdx (flag bit 1 marks this encoding).
-	// Codegen alias-resolves through lookupEnum at match time.
 	if (check(TOK_IDENTIFIER) && peek().lexeme != "_") {
 		int peekIdx = current + 1;
 		if (peekIdx < (int)tokens.size() &&
@@ -573,9 +521,6 @@ NodeIdx Parser::parsePatternAtom() {
 		}
 	}
 
-	// `Identifier '.' Identifier` — enum-variant pattern, optionally
-	// followed by `(binding1, binding2, ...)` to destructure payload
-	// fields. Must come before the literal/wildcard branches.
 	if (check(TOK_IDENTIFIER) && peek().lexeme != "_") {
 		int saved = current;
 		advance();  // consume enum name
@@ -600,9 +545,6 @@ NodeIdx Parser::parsePatternAtom() {
 				}
 				consume(TOK_CLOSE_PAREN,
 				        "Expected `)` to close payload bindings");
-				// Pack as: extra = [enumNameId, variantNameId, count,
-				// binding0, binding1, ...]. lhs = extra-idx; rhs = 1
-				// to mark "with bindings".
 				ExtraIdx extra = nodes->reserveExtra(3 + bindings.size());
 				nodes->setExtra(extra, enumNameId);
 				nodes->setExtra(extra + 1, variantNameId);
@@ -658,8 +600,6 @@ NodeIdx Parser::parsePatternAtom() {
 	    "Expected pattern (integer literal, range, or `_`)");
 }
 
-// Parse an or-pattern: A | B | C. Returns a single PatLit/PatRange/
-// PatWildcard if no `|` is present, else a PatOr wrapping the list.
 NodeIdx Parser::parsePattern() {
 	NodeIdx first = parsePatternAtom();
 	if (!check(TOK_PIPE)) { return first; }
@@ -676,12 +616,6 @@ NodeIdx Parser::parsePattern() {
 	return emit(AstNode{AstTag::PatOr, 0, 0, 0, extra, 0});
 }
 
-// Parse a match statement: `match (expr) { Pattern Block ... }`.
-// The catch-all is the wildcard pattern `_`; there is no `else` arm.
-// Layout in extra:
-//   [armCount,
-//    arm0_patIdx, arm0_bodyCount, arm0_body...,
-//    arm1_patIdx, arm1_bodyCount, arm1_body..., ...]
 NodeIdx Parser::parseMatch() {
 	consume(TOK_MATCH, "Expected `match`");
 	consume(TOK_OPEN_PAREN, "Expected `(` after `match`");
@@ -1155,7 +1089,7 @@ std::unique_ptr<StructDeclAST> Parser::parseStructDecl() {
 
 	std::vector<std::pair<std::string, TypeIdx>> fields;
 	std::vector<std::unique_ptr<FunctionAST>> methods;
-	structContextStack.push_back(name);  // G3: Self resolves to this name
+	structContextStack.push_back(name);
 	parseStructBody(fields, methods);
 	structContextStack.pop_back();
 	consume(TOK_SEMI, "Expected ';' after struct declaration");
@@ -1204,9 +1138,6 @@ NodeIdx Parser::parseEnumExpression() {
 }
 
 NodeIdx Parser::parseStructExpression() {
-	// Caller has matched the `struct` keyword. Anonymous struct: synthetic
-	// name keyed by index in anonStructs (the substitution engine in G4
-	// reads from there to instantiate the body with concrete type args).
 	consume(TOK_OPEN_BRACE, "Expected '{' after 'struct'");
 	auto &structsRef = sharedAnonStructs ? *sharedAnonStructs : anonStructs;
 	uint32_t idx = static_cast<uint32_t>(structsRef.size());
@@ -1214,9 +1145,6 @@ NodeIdx Parser::parseStructExpression() {
 
 	std::vector<std::pair<std::string, TypeIdx>> fields;
 	std::vector<std::unique_ptr<FunctionAST>> methods;
-	// G3: Self inside this anonymous struct's body resolves to the
-	// synthetic name. The substitution engine in G4 will rewrite that
-	// name to the per-instantiation struct name.
 	structContextStack.push_back(name);
 	parseStructBody(fields, methods);
 	structContextStack.pop_back();
@@ -1256,9 +1184,6 @@ std::unique_ptr<EnumDeclAST> Parser::parseEnumDecl() {
 			consume(TOK_CLOSE_PAREN,
 			        "Expected `)` to close variant payload list");
 		}
-		// Optional explicit discriminant: `Variant = N` or
-		// `Variant(payload) = N`. The supplied integer overrides the
-		// running counter; subsequent variants resume from N + 1.
 		if (match(TOK_EQUAL)) {
 			consume(TOK_NUMBER,
 			        "Expected integer literal after `=` in enum variant");
@@ -1304,8 +1229,6 @@ std::unique_ptr<EnumDeclAST> Parser::parseEnumDecl() {
 	return std::make_unique<EnumDeclAST>(name, std::move(variants));
 }
 
-// Parse `const Name = union { f1: T1, f2: T2, ... };`. Same shape as
-// parseStructDecl — only the keyword differs.
 std::unique_ptr<UnionDeclAST> Parser::parseUnionDecl() {
 	consume(TOK_CONST, "Expected 'const' for union declaration");
 	consume(TOK_IDENTIFIER, "Expected union name");
@@ -1376,12 +1299,6 @@ std::unique_ptr<ConstDeclAST> Parser::parseConstDecl() {
 	if (match(TOK_COLON)) { declared = parseType(); }
 
 	consume(TOK_EQUAL, "Expected '=' in module-scope const declaration");
-
-	// Generics G4: try-parse the RHS as a type. If it parses as a
-	// `TypeKind::GenericCall` (e.g. `Box(i32)`) and is followed by a
-	// semicolon, treat the const as a type alias. Anything else
-	// rewinds and parses as a value expression. Save/restore the
-	// parser cursor since parseType can throw on non-type inputs.
 	int saved = current;
 	TypeIdx aliased = kNoType;
 	try {
@@ -1470,12 +1387,6 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 		module->Functions.push_back(parseFunction());
 	}
 
-	// Generics G2: hand off anonymous struct bodies (`struct {...}`
-	// expressions encountered during parse) to the ModuleAST so the
-	// instantiation engine can find them by index.
-	// Only transfer member-owned vectors when not sharing. With shared
-	// storage, the caller (main.cpp) owns the vectors and threads them
-	// to codegen directly.
 	if (!sharedAnonStructs) {
 		module->AnonStructs = std::move(anonStructs);
 	}

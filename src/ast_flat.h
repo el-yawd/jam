@@ -40,9 +40,7 @@ constexpr NodeIdx kNoNode = 0;
 constexpr StringIdx kNoString = 0;
 constexpr TypeIdx kNoType = 0;
 
-// --------------------------------------------------------------------------
 // Node tags. One byte; switched on in codegen.
-// --------------------------------------------------------------------------
 
 enum class AstTag : uint8_t {
 	Invalid = 0,
@@ -218,10 +216,8 @@ struct AstNode {
 static_assert(sizeof(AstNode) == 16,
               "AstNode is sized to one cache-friendly slot");
 
-// --------------------------------------------------------------------------
 // Storage. NodeStore owns the flat node array + the `extra` u32 pool used
 // for variadic payloads (call args, block bodies, struct literal fields).
-// --------------------------------------------------------------------------
 
 class NodeStore {
 	std::vector<AstNode> nodes_;
@@ -271,10 +267,8 @@ class NodeStore {
 	const std::vector<uint32_t> &extra() const { return extra_; }
 };
 
-// --------------------------------------------------------------------------
 // Interned identifiers + string literals. deque<string> keeps references
 // stable across pushes so the string_view keys in `idx_` don't dangle.
-// --------------------------------------------------------------------------
 
 class StringPool {
 	std::deque<std::string> strings_;
@@ -300,11 +294,9 @@ class StringPool {
 	std::size_t size() const { return strings_.size(); }
 };
 
-// --------------------------------------------------------------------------
 // Type interning. Types are first-class structured values, never strings.
 // Built-ins (void, bool, u8..u64, i8..i64, f32, f64, str) live at fixed
 // pre-interned indices so callers can refer to them without a lookup.
-// --------------------------------------------------------------------------
 
 enum class TypeKind : uint8_t {
 	Invalid = 0,

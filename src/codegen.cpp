@@ -308,7 +308,7 @@ int JamCodegenContext::getFieldIndex(const std::string &structName,
 	return -1;
 }
 
-// ---- Union registry -------------------------------------------------------
+// Union registry
 
 void JamCodegenContext::registerUnion(
     const std::string &name, JamTypeRef type,
@@ -351,7 +351,7 @@ JamCodegenContext::getUnionFieldType(const std::string &unionName,
 	return kNoType;
 }
 
-// ---- Enum registry --------------------------------------------------------
+// Enum registry
 
 void JamCodegenContext::registerEnum(
     const std::string &name, std::vector<EnumVariantInfo> variants) const {
@@ -692,9 +692,7 @@ uint64_t JamCodegenContext::typeAlign(TypeIdx ty) const {
 	throw std::runtime_error("typeAlign: unhandled type kind");
 }
 
-// --------------------------------------------------------------------------
 // Generics G4: substitution engine for `Identifier(arg, ...)` types.
-// --------------------------------------------------------------------------
 
 namespace {
 

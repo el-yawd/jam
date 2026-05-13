@@ -324,9 +324,7 @@ static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
 	    "Indexing supports only locals and struct field chains");
 }
 
-// ---------------------------------------------------------------------------
 // Special-form calls (println/print/sleep/assert)
-// ---------------------------------------------------------------------------
 
 static JamValueRef genPrintCall(JamCodegenContext &ctx,
                                 const std::string &callee,
@@ -502,9 +500,7 @@ static JamValueRef genAssertCall(JamCodegenContext &ctx, const uint32_t *args,
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
-// ---------------------------------------------------------------------------
 // Main switch-dispatched codegen
-// ---------------------------------------------------------------------------
 
 static JamValueRef codegenStringLit(JamCodegenContext &ctx,
                                     const std::string &val) {
@@ -1980,7 +1976,6 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
-// ---------------------------------------------------------------------------
 // `match` codegen — M1 (integer literals, inclusive ranges, or-patterns,
 // wildcard, `else`).
 //
@@ -1995,7 +1990,6 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 // The Maranget decision-tree formalism degenerates to "specialize the only
 // column" in M1 (one scrutinee, one column); the cascade is the canonical
 // one-column lowering. M2+ replaces this with a multi-column tree.
-// ---------------------------------------------------------------------------
 
 // Build a boolean (i1) value that is true iff the scrutinee matches the
 // given pattern node. `scrut` is the already-loaded scrutinee value;
@@ -2990,12 +2984,10 @@ JamValueRef resolveLvaluePtr(JamCodegenContext &ctx, NodeIdx node,
 	throw std::runtime_error("resolveLvaluePtr is not yet exposed");
 }
 
-// ---------------------------------------------------------------------------
 // FunctionAST codegen — split into declarePrototype + defineBody so the
 // driver can register every function's signature before it starts emitting
 // any body. That's what lets `main` (or any caller) appear above its
 // callees in source order.
-// ---------------------------------------------------------------------------
 
 // P8.2: name-mangling for `fn drop(self: mut T)`. When the source-level
 // name "drop" coincides with a recognizable drop-fn signature, mangle to

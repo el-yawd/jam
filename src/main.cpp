@@ -31,9 +31,6 @@
 #include "target.h"
 #include <filesystem>
 
-// Charm-gum-style "dot" spinner (Braille pattern frames) drawn in pink to
-// stderr while a build is running. RAII-managed: scope-guards stop the
-// thread on early returns / exceptions.
 static std::atomic<bool> gSpinnerActive{false};
 
 static void runSpinner(std::string title) {
@@ -43,8 +40,6 @@ static void runSpinner(std::string title) {
 	};
 	int i = 0;
 	while (gSpinnerActive.load()) {
-		// 256-color hot pink (#FF5FAF) for the spinner glyph; default
-		// foreground for the title text. \033[K clears any residual.
 		std::cerr << "\r\033[38;5;205m" << frames[i] << "\033[0m " << title
 		          << "\033[K" << std::flush;
 		i = (i + 1) % 8;
@@ -80,8 +75,6 @@ static int compileAndRun(const std::string &filename,
                          bool emitIR, bool testMode, JamOptLevel optLevel,
                          JamLTO lto, JamStrip strip,
                          const std::vector<std::string> &linkLibs) {
-	// Show a pink dot spinner during build/run; suppress for test mode (the
-	// per-test logging is its own progress indicator).
 	SpinnerGuard spinner(!testMode, "Jam Making");
 
 	std::ifstream file(filename);
@@ -95,53 +88,31 @@ static int compileAndRun(const std::string &filename,
 	buffer << file.rdbuf();
 	std::string source = buffer.str();
 
-	// Create codegen context using wrapper
 	JamCodegenContext codegenCtx("jam_module");
-
-	// Tokenize the source code
 	Lexer lexer(source);
 	std::vector<Token> tokens = lexer.scanTokens();
 
-	// Shared anonymous-struct / anon-enum registries. Both the main
-	// parser and the resolver's imported-module parsers append to
-	// these, so EnumExpr / StructExpr nodes from any module index
-	// into the same vectors at codegen time. Required for generic
-	// definitions that live in an imported module (e.g. Vec(T) in
-	// std/collections.jam) — their `struct {...}` / `enum {...}`
-	// bodies need to be reachable when codegen instantiates the
-	// generic from the main module's call site.
 	std::vector<std::unique_ptr<StructDeclAST>> sharedAnonStructs;
 	std::vector<std::unique_ptr<EnumDeclAST>> sharedAnonEnums;
 
-	// Parse the tokens into an AST. The parser shares the codegen
-	// context's TypePool / StringPool so types are interned at parse time
-	// instead of being repeatedly re-parsed from strings during codegen.
 	Parser parser(tokens, codegenCtx.getTypePool(),
 	              codegenCtx.getStringPool(), codegenCtx.getNodeStore());
 	parser.sharedAnonStructs = &sharedAnonStructs;
 	parser.sharedAnonEnums = &sharedAnonEnums;
 	std::unique_ptr<ModuleAST> module = parser.parse();
-
-	// Get base directory for module resolution
 	std::filesystem::path sourcePath(filename);
 	std::string baseDir = sourcePath.parent_path().string();
 	if (baseDir.empty()) { baseDir = "."; }
 
-	// Create module resolver (sharing the codegen pools so imports intern
-	// into the same TypePool / StringPool as the main module).
 	ModuleResolver resolver(baseDir, codegenCtx.getTypePool(),
 	                        codegenCtx.getStringPool(),
 	                        codegenCtx.getNodeStore());
 	resolver.setSharedAnonRegistries(&sharedAnonStructs, &sharedAnonEnums);
 	SymbolTable symbolTable;
 
-	// Register builtin test module symbols
 	symbolTable.registerBuiltinSymbol("test", "assert");
-
-	// Process regular imports (const std = import("std"))
 	for (auto &import : module->Imports) {
 		if (import->Path == "std" || import->Path == "test") {
-			// builtin modules are handled specially in codegen
 			continue;
 		}
 
@@ -152,11 +123,9 @@ static int compileAndRun(const std::string &filename,
 			return 1;
 		}
 
-		// Register the module's exported symbols
 		symbolTable.registerModule(import->Path, importedModule);
 	}
 
-	// Process destructuring imports (const { func } = import("mod"))
 	for (auto &destImport : module->DestructuringImports) {
 		ModuleAST *importedModule = resolver.getOrLoadModule(destImport->Path);
 		if (!importedModule) {
@@ -165,10 +134,7 @@ static int compileAndRun(const std::string &filename,
 			return 1;
 		}
 
-		// Register the module's exported symbols
 		symbolTable.registerModule(destImport->Path, importedModule);
-
-		// Register each binding
 		for (const auto &name : destImport->Names) {
 			if (!symbolTable.hasSymbol(destImport->Path, name)) {
 				std::cerr << "Error: Symbol '" << name
@@ -180,16 +146,8 @@ static int compileAndRun(const std::string &filename,
 		}
 	}
 
-	// Generics G4: hand off the parsed module's anonymous-struct table
-	// (bodies of `struct {...}` expressions) to the codegen context so
-	// the substitution engine can look them up by index when resolving
-	// generic instantiations.
 	codegenCtx.setAnonStructs(&sharedAnonStructs);
 	codegenCtx.setAnonEnums(&sharedAnonEnums);
-
-	// Register struct types from imported modules and main module first so
-	// that codegen has the struct registry available. Two phases so structs
-	// can reference each other regardless of declaration order.
 	auto declareStructs = [&](ModuleAST *m) {
 		for (auto &s : m->Structs) {
 			JamTypeRef structType = JamLLVMStructCreateNamed(
