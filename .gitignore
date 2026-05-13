@@ -25,3 +25,8 @@ docs/Gemfile.lock
 docs/vendor/
 
 /misc
+
+# fwiw i need to update this flow
+abi_tests
+codegen_error_tests
+init_tests
