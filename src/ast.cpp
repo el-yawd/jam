@@ -910,16 +910,14 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	case BinOp::Div: {
 		bool signed_ =
 		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
-		return signed_
-		           ? JamLLVMBuildSDiv(ctx.getBuilder(), L, R, "divtmp")
-		           : JamLLVMBuildUDiv(ctx.getBuilder(), L, R, "divtmp");
+		return signed_ ? JamLLVMBuildSDiv(ctx.getBuilder(), L, R, "divtmp")
+		               : JamLLVMBuildUDiv(ctx.getBuilder(), L, R, "divtmp");
 	}
 	case BinOp::Mod: {
 		bool signed_ =
 		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
-		return signed_
-		           ? JamLLVMBuildSRem(ctx.getBuilder(), L, R, "remtmp")
-		           : JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
+		return signed_ ? JamLLVMBuildSRem(ctx.getBuilder(), L, R, "remtmp")
+		               : JamLLVMBuildURem(ctx.getBuilder(), L, R, "remtmp");
 	}
 	case BinOp::BitAnd:
 		return JamLLVMBuildAnd(ctx.getBuilder(), L, R, "andtmp");
