@@ -62,6 +62,7 @@ class Parser {
 	std::unique_ptr<EnumDeclAST> parseEnumDecl();
 	std::unique_ptr<ConstDeclAST> parseConstDecl();
 	std::string qualifiedName(NodeIdx chainRoot) const;
+	bool isQualifiedNameChain(NodeIdx chainRoot) const;
 
   public:
 	Parser(std::vector<Token> tokens, TypePool &typePool,
