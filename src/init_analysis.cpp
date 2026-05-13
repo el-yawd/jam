@@ -5,7 +5,7 @@
  * Licensed under the Apache License, Version 2.0 with LLVM Exceptions.
  */
 
-// Definite-initialization analysis for Jam (MVS phase P2).
+// Definite-initialization analysis for Jam.
 //
 // A tree-walking dataflow over the function body produces, at each program
 // point, a map from binding name to lattice state {Unknown, Init, Uninit,
@@ -21,7 +21,7 @@
 //
 // Scope (this file):
 //   - Tracks state for locals declared `var name: T = ...`.
-//   - Function parameters enter as Init (modes are applied in P3).
+//   - Function parameters enter as Init (modes are applied).
 //   - Detects reads of Uninit / MaybeInit Variable nodes.
 //   - if/else: precise state merge.
 //   - while/for/match: single-pass merge of body output with pre-state
@@ -33,7 +33,7 @@
 //   - `move` / `undefined` callsite mode propagation.
 //   - Drop synthesis driven by the live-init set.
 //
-// See docs/MVS.md §5 (Definite Initialization) and §8.3 (P2 phase).
+// See docs/MVS.md §5 (Definite Initialization) and §8.3.
 
 #include "init_analysis.h"
 #include "ast.h"
@@ -128,7 +128,7 @@ class Analyzer {
 	const std::vector<Param> *args_ = nullptr;
 
 	// Static type per binding name. Populated as parameter list and
-	// VarDecls are walked. Used by P8's drop-bearing check on `move` args.
+	// VarDecls are walked. Used by the drop-bearing check on `move` args.
 	// Reset per function in run().
 	std::unordered_map<std::string, TypeIdx> varTypes_;
 
@@ -150,7 +150,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 	//   Let / Mut / Move → Init (caller's binding is valid)
 	// `move` does not change anything for the callee's view of its own
 	// parameter — the moved-from-ness applies to the *caller's* binding
-	// after the call (P4 work).
+	// after the call.
 	for (const Param &p : fn.Args) {
 		state[p.Name] = InitState::Init;
 		varTypes_[p.Name] = p.Type;
@@ -167,7 +167,7 @@ std::vector<Diagnostic> Analyzer::run(const FunctionAST &fn) {
 		r = analyze(stmt, std::move(r.state));
 	}
 
-	// P3 + P8.2: if control reaches the end of the body without an
+	// + P8.2: if control reaches the end of the body without an
 	// explicit return, every drop-bearing local must have been
 	// initialized. (Functions that always return on every path produce
 	// r.terminated == true and skip this check; the per-return checks
@@ -239,7 +239,7 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		return analyze(n.lhs, std::move(state));
 	case AstTag::MemberAccess:
 		// Walk the base. We treat `s.f` as reading `s` (the binding),
-		// not the field — P2 doesn't track field-level init.
+		// not the field — doesn't track field-level init.
 		return analyze(n.lhs, std::move(state));
 	case AstTag::Index: {
 		auto r = analyze(n.lhs, std::move(state));
@@ -248,11 +248,11 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 	}
 	case AstTag::Deref:
 		// `p.*` — read the pointer. (Whether the pointee was initialized
-		// is a separate concern P2 does not track.)
+		// is a separate concern it does not track.)
 		return analyze(n.lhs, std::move(state));
 	case AstTag::AddressOf:
 		// `&x` — taking an address does not read the binding's value.
-		// Ignore the operand for read-check purposes. P2 imprecisely
+		// Ignore the operand for read-check purposes. it imprecisely
 		// allows `&x` even when `x` is Uninit; pointer-write through it
 		// is a separate analysis layer.
 		return Result{std::move(state), false};
@@ -304,7 +304,7 @@ Result Analyzer::analyze(NodeIdx idx, NameMap state) {
 		return Result{std::move(state), false};
 
 	// Pattern atoms appear only inside MatchNode arms; they don't read
-	// bindings (M1's patterns are integer literals / ranges / wildcards).
+	// bindings (the patterns are integer literals / ranges / wildcards).
 	case AstTag::PatLit:
 	case AstTag::PatRange:
 	case AstTag::PatWildcard:
@@ -480,7 +480,7 @@ Result Analyzer::analyzeFor(NodeIdx idx, NameMap state) {
 		bodyR = analyze(s, std::move(bodyR.state));
 	}
 
-	// For-over-range: P2 assumes the body executes at least once. This
+	// For-over-range: it assumes the body executes at least once. This
 	// matches existing Jam idioms (e.g., `for i in 0:N { arr[i] = ... }`
 	// followed by reading `arr`). Strictly speaking the body may run
 	// zero times for an empty range; accepting that imprecision keeps
@@ -515,7 +515,7 @@ Result Analyzer::analyzeMatch(NodeIdx idx, NameMap state) {
 	uint32_t cursor = 1;
 	for (uint32_t a = 0; a < armCount; a++) {
 		// Arm pattern (index ignored for init analysis — patterns don't
-		// touch existing-binding state in M1).
+		// touch existing-binding state).
 		cursor++;  // patIdx
 		uint32_t armBodyCount = nodes_.getExtra(extra + cursor);
 		cursor++;
@@ -635,7 +635,7 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 				const std::string &name = strings_.get(info.path.base);
 
 				// reject `move` on a drop-bearing binding
-				// until move-aware drop tracking lands in P8.1. Without
+				// until move-aware drop tracking lands. Without
 				// it, codegen would emit drop on the moved-out slot at
 				// scope exit — a double-free.
 				if (lookupDropFor(name) != nullptr) {
@@ -809,7 +809,7 @@ void Analyzer::checkVariableRead(NodeIdx idx, const NameMap &state) {
 	auto it = state.find(name);
 	if (it == state.end()) {
 		// Not in our tracking — likely a global, an imported name, or a
-		// for-loop variable that escaped its scope. P2 conservatively
+		// for-loop variable that escaped its scope. it conservatively
 		// assumes Init for unseen names so it doesn't false-fire.
 		return;
 	}
@@ -834,7 +834,7 @@ void Analyzer::checkDropBearingLocalsInit(const NameMap &state,
 	// Walk only the bindings that are *currently in scope* — i.e.,
 	// present in the merged state map at this exit point. Bindings
 	// declared inside a now-exited inner block have already been dropped
-	// at their own scope end (P8.3 codegen), and the merge has removed
+	// at their own scope end, and the merge has removed
 	// them from the state map; checking them here would produce false
 	// positives because varTypes_ retains every name we've ever seen.
 	//

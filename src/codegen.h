@@ -197,7 +197,7 @@ class JamCodegenContext {
 		}
 		return nullptr;
 	}
-	// P8.3 scope-aware drops: each lexical block (function body, if/else
+	// scope-aware drops: each lexical block (function body, if/else
 	// arm, while/for body, match arm body) has its own DropEntry vector.
 	// pushDropScope/popDropScope are called at block boundaries; the
 	// codegen emits drops for the topmost scope at the end of each block
@@ -230,11 +230,11 @@ class JamCodegenContext {
 	// Lazy LLVM type per TypeIdx (built once, reused). Indexed by TypeIdx.
 	mutable std::vector<JamTypeRef> llvmTypeCache;
 
-	// P8.1+P8.3 drop state (see DropEntry / setDropRegistry above).
+	// drop state (see DropEntry / setDropRegistry above).
 	const jam::drops::DropRegistry *dropRegistry = nullptr;
 	std::vector<std::vector<DropEntry>> dropScopes;
 
-	// P9 callsite ABI: when codegen for a call expression needs to know
+	// callsite ABI: when codegen for a call expression needs to know
 	// the callee's parameter modes (e.g. to decide whether to auto-take
 	// the address of an arg for a large `let` aggregate), it looks up
 	// the FunctionAST here. Populated by main.cpp during prototype
@@ -244,7 +244,7 @@ class JamCodegenContext {
 	                         const FunctionAST *fn);
 	const FunctionAST *getFunctionAST(const std::string &name) const;
 
-	// P9.6 sret state: when the current function returns a large
+	// sret state: when the current function returns a large
 	// aggregate, the codegen-managed sret slot (the leading `ptr` arg)
 	// is kept here so codegenReturn knows where to store the return
 	// value. Set in defineBody, cleared at function exit.

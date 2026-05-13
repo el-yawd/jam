@@ -132,9 +132,9 @@ struct EnumVariantAST {
 // Variants get sequential discriminants assigned in declaration order
 // (Up=0, Down=1, …). Unit variants have no payload; tagged variants
 // carry positional fields. Codegen lowers the enum to:
-//   - `i8` if every variant is unit (E1 path)
+//   - `i8` if every variant is unit
 //   - `{i8 tag, [maxPayloadSize x i8]}` aligned to max payload align
-//     if any variant has a payload (E2 path)
+//     if any variant has a payload
 class EnumDeclAST {
   public:
 	std::string Name;

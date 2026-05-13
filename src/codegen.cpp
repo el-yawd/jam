@@ -160,7 +160,7 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		} else if (const auto *uinfo = getUnion(name)) {
 			result = uinfo->type;
 		} else if (const auto *einfo = getEnum(name)) {
-			// E1 (unit-only): lowers to i8. E2 (with payloads): lowers
+			// (unit-only): lowers to i8. E2 (with payloads): lowers
 			// to {i8, [N x i8]} via the named struct type set during
 			// declaration.
 			result = einfo->hasPayloadVariant ? einfo->type : getInt8Type();
@@ -185,7 +185,7 @@ JamTypeRef JamCodegenContext::getLLVMType(TypeIdx ty) const {
 		break;
 	}
 	case TypeKind::Enum: {
-		// E1 enums lower to u8 — one byte per discriminant.
+		// enums lower to u8 — one byte per discriminant.
 		result = getInt8Type();
 		break;
 	}
@@ -842,7 +842,7 @@ TypeIdx JamCodegenContext::resolveGenericCall(TypeIdx callTy) const {
 // return statement. Substitutes each field's TypeIdx with the concrete
 // generic args, creates a fresh LLVM struct type with a unique name, and
 // returns a Named TypeIdx pointing at the new struct. Methods are not
-// instantiated in v1 (G6 territory).
+// instantiated in v1.
 TypeIdx JamCodegenContext::instantiateStructExpr(
     const AstNode &exprNode, const std::string &calleeName,
     const std::vector<TypeIdx> &args,

@@ -884,7 +884,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 					    std::to_string(v.payloadTypes.size()) +
 					    " payload arg(s), got " + std::to_string(argCount));
 				}
-				// E1 unit-only enum: just the tag (discriminant value).
+				// unit-only enum: just the tag (discriminant value).
 				if (!einfo->hasPayloadVariant) {
 					return JamLLVMConstInt(
 					    ctx.getInt8Type(),
@@ -1209,7 +1209,7 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 	const FunctionAST *calleeAST = ctx.getFunctionAST(lookupName);
 	if (!calleeAST) calleeAST = ctx.getFunctionAST(callee);
 
-	// P9.6 sret: when the callee returns a large aggregate, the call
+	// sret: when the callee returns a large aggregate, the call
 	// site allocates a result slot and passes its address as the
 	// leading argument. The call itself returns void; the "value" of
 	// the call expression is a load from the slot.
@@ -1478,7 +1478,7 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 		}
 		TypeIdx varTy = ctx.getVariableType(varName);
 
-		// Union member write (single-level only in M1). All fields share
+		// Union member write (single-level only). All fields share
 		// the same address, so the write is just a store of the rhs at
 		// the union's allocation, typed as the field type.
 		if (path.size() == 1) {
@@ -1707,7 +1707,7 @@ static JamValueRef codegenVarDecl(JamCodegenContext &ctx, const AstNode &n) {
 	return Alloca;
 }
 
-// P8.1 + P9: emit a single drop call for one tracked binding. P9's
+// + P9: emit a single drop call for one tracked binding. P9's
 // mode-aware ABI now lowers `fn drop(self: mut T)` as a pointer-typed
 // parameter, so the call site passes the binding's storage address
 // directly — no load-value-then-pass-by-value workaround. The drop fn
@@ -1976,7 +1976,7 @@ static JamValueRef codegenFor(JamCodegenContext &ctx, const AstNode &n) {
 	return JamLLVMConstInt(ctx.getInt8Type(), 0, false);
 }
 
-// `match` codegen — M1 (integer literals, inclusive ranges, or-patterns,
+// `match` codegen — (integer literals, inclusive ranges, or-patterns,
 // wildcard, `else`).
 //
 // Strategy: a sequential icmp-cascade. For each arm, build a boolean
@@ -2693,7 +2693,7 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 			    ctx.getInt8Type(),
 			    static_cast<uint64_t>(v.discriminant), false);
 			if (!einfo->hasPayloadVariant) {
-				// E1 path: enum is just i8.
+				// path: enum is just i8.
 				return tagConst;
 			}
 			if (!v.payloadTypes.empty()) {
@@ -2702,7 +2702,7 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 				    "` carries a payload; use `" + enumName + "." +
 				    variantName + "(...)` to construct it");
 			}
-			// E2 unit variant: build a {tag, payload-undef} struct value.
+			// unit variant: build a {tag, payload-undef} struct value.
 			JamTypeRef enumLLVMType = einfo->type;
 			uint64_t enumAlign =
 			    einfo->maxPayloadAlign > 1 ? einfo->maxPayloadAlign : 1;
@@ -2741,7 +2741,7 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx,
 		                                member.c_str());
 	}
 
-	// Union member read (single-level only in M1). All fields share the
+	// Union member read (single-level only). All fields share the
 	// same address; reading uses the field's type at the union's
 	// allocation. Reading a different field than the most recently
 	// written one reinterprets the bits — that's the union's whole job.
@@ -3018,7 +3018,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 	std::string funcName =
 	    mangledFunctionName(*this, ctx.getTypePool(), ctx.getStringPool());
 
-	// P9.6 return ABI: large aggregates returned by Jam-defined fns
+	// return ABI: large aggregates returned by Jam-defined fns
 	// (not extern, not test) are sret — caller passes a leading
 	// `ptr sret(%T) align A` arg, callee stores into it and returns
 	// void. Small returns stay direct.
@@ -3050,7 +3050,7 @@ JamFunctionRef FunctionAST::declarePrototype(JamCodegenContext &ctx) {
 				ArgTypes.push_back(ctx.getLLVMType(arg.Type));
 				continue;
 			}
-			// P9 mode-aware ABI. classifyParam decides per-(mode, type)
+			// mode-aware ABI. classifyParam decides per-(mode, type)
 			// whether the parameter is passed by value (the type's natural
 			// LLVM representation) or by pointer.
 			jam::abi::ParamABI pabi =
@@ -3154,7 +3154,7 @@ void FunctionAST::defineBody(JamCodegenContext &ctx) {
 	ctx.setCurrentReturnType(ReturnType);
 
 	for (unsigned i = 0; i < Args.size(); i++) {
-		// P9 mode-aware ABI: ByValue parameters are stored to a local
+		// mode-aware ABI: ByValue parameters are stored to a local
 		// alloca on entry (matching the existing pattern for value
 		// semantics). ByPointer parameters are *already* pointers to
 		// caller-owned storage; we register the parameter directly as
