@@ -107,6 +107,15 @@ std::string Parser::qualifiedName(NodeIdx chainRoot) const {
 	throw std::runtime_error("Invalid member access chain");
 }
 
+bool Parser::isQualifiedNameChain(NodeIdx chainRoot) const {
+	const AstNode &n = nodes->get(chainRoot);
+	if (n.tag == AstTag::Variable) return true;
+	if (n.tag == AstTag::MemberAccess) {
+		return isQualifiedNameChain(static_cast<NodeIdx>(n.lhs));
+	}
+	return false;
+}
+
 NodeIdx Parser::parsePrimary() {
 	// `match (…) { … }` is also valid in expression position so it can
 	// produce a value. The same call works for both statement and
@@ -209,23 +218,37 @@ NodeIdx Parser::parsePrimary() {
 		std::string name = previous().lexeme;
 		StringIdx nameId = stringPool->intern(name);
 		NodeIdx expr = emit(AstNode{AstTag::Variable, 0, 0, 0, nameId, 0});
+		bool chainStarted = false;
 
-		// Member access chain (foo.bar.baz) and pointer deref (.*).
-		while (match(TOK_DOT)) {
-			if (match(TOK_STAR)) {
-				expr = emit(AstNode{AstTag::Deref, 0, 0, 0,
-				                    static_cast<uint32_t>(expr), 0});
-			} else {
-				consume(TOK_IDENTIFIER, "Expected member name after '.'");
-				StringIdx mem = stringPool->intern(previous().lexeme);
-				expr = emit(AstNode{AstTag::MemberAccess, 0, 0, 0,
-				                    static_cast<uint32_t>(expr), mem});
+		// `.field`, `.*`, `[i]`, and `(args)`
+		while (check(TOK_DOT) || check(TOK_OPEN_BRACKET) ||
+		       check(TOK_OPEN_PAREN)) {
+			if (match(TOK_DOT)) {
+				chainStarted = true;
+				if (match(TOK_STAR)) {
+					expr = emit(AstNode{AstTag::Deref, 0, 0, 0,
+					                    static_cast<uint32_t>(expr), 0});
+				} else {
+					consume(TOK_IDENTIFIER, "Expected member name after '.'");
+					StringIdx mem = stringPool->intern(previous().lexeme);
+					expr = emit(AstNode{AstTag::MemberAccess, 0, 0, 0,
+					                    static_cast<uint32_t>(expr), mem});
+				}
+				continue;
 			}
-		}
+			if (match(TOK_OPEN_BRACKET)) {
+				chainStarted = true;
+				NodeIdx idx = parseLogicalOr();
+				consume(TOK_CLOSE_BRACKET, "Expected ']' after index");
+				expr = emit(AstNode{AstTag::Index, 0, 0, 0,
+				                    static_cast<uint32_t>(expr),
+				                    static_cast<uint32_t>(idx)});
+				continue;
+			}
 
-		if (match(TOK_OPEN_PAREN)) {
-			if (nodes->get(expr).tag != AstTag::MemberAccess) {
-				int peekIdx = current;  // sits on first arg token
+			// TOK_OPEN_PAREN, Foo(T).method(args)
+			if (!chainStarted) {
+				int peekIdx = current + 1;  // first token after (
 				int depth = 1;
 				while (peekIdx < (int)tokens.size() && depth > 0) {
 					TokenType tt = tokens[peekIdx].type;
@@ -239,8 +262,7 @@ NodeIdx Parser::parsePrimary() {
 				    tokens[peekIdx + 1].type == TOK_DOT &&
 				    tokens[peekIdx + 2].type == TOK_IDENTIFIER &&
 				    tokens[peekIdx + 3].type == TOK_OPEN_PAREN) {
-					// Commit to TypeMethodCall path. The inner args
-					// are types; build a GenericCall TypeIdx.
+					advance();  // consume (
 					std::vector<TypeIdx> typeArgs;
 					if (!check(TOK_CLOSE_PAREN)) {
 						do {
@@ -275,12 +297,15 @@ NodeIdx Parser::parsePrimary() {
 						nodes->setExtra(extra + 2 + i,
 						                static_cast<uint32_t>(methodArgs[i]));
 					}
-					return emit(AstNode{AstTag::TypeMethodCall, 0, 0, 0,
+					expr = emit(AstNode{AstTag::TypeMethodCall, 0, 0, 0,
 					                    static_cast<uint32_t>(receiverTy),
 					                    extra});
+					chainStarted = true;
+					continue;
 				}
 			}
 
+			advance();  // consume (
 			std::vector<NodeIdx> args;
 			if (!check(TOK_CLOSE_PAREN)) {
 				do {
@@ -289,31 +314,29 @@ NodeIdx Parser::parsePrimary() {
 			}
 			consume(TOK_CLOSE_PAREN, "Expected ')' after function arguments");
 
-			std::string callee;
-			const AstNode &en = nodes->get(expr);
-			if (en.tag == AstTag::MemberAccess) {
-				callee = qualifiedName(expr);
-			} else {
-				callee = std::move(name);
-			}
-			StringIdx calleeId = stringPool->intern(callee);
-
-			// extra layout: [argCount, arg0, arg1, ...]
+			// extra layout (shared by both Call encodings):
+			//   [argCount, arg0, arg1, ...]
 			ExtraIdx extra = nodes->reserveExtra(1 + args.size());
 			nodes->setExtra(extra, static_cast<uint32_t>(args.size()));
 			for (size_t i = 0; i < args.size(); i++) {
 				nodes->setExtra(extra + 1 + i, args[i]);
 			}
-			return emit(AstNode{AstTag::Call, 0, 0, 0, calleeId, extra});
-		}
 
-		// Postfix indexing chain: arr[i], arr[i][j], etc.
-		while (match(TOK_OPEN_BRACKET)) {
-			NodeIdx idx = parseLogicalOr();
-			consume(TOK_CLOSE_BRACKET, "Expected ']' after index");
-			expr = emit(AstNode{AstTag::Index, 0, 0, 0,
-			                    static_cast<uint32_t>(expr),
-			                    static_cast<uint32_t>(idx)});
+			if (isQualifiedNameChain(expr)) {
+				std::string callee;
+				const AstNode &en = nodes->get(expr);
+				if (en.tag == AstTag::MemberAccess) {
+					callee = qualifiedName(expr);
+				} else {
+					callee = name;
+				}
+				StringIdx calleeId = stringPool->intern(callee);
+				expr = emit(AstNode{AstTag::Call, 0, 0, 0, calleeId, extra});
+			} else {
+				expr = emit(AstNode{AstTag::Call, 0, 1, 0,
+				                    static_cast<uint32_t>(expr), extra});
+			}
+			chainStarted = true;
 		}
 
 		return expr;
