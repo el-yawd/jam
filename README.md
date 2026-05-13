@@ -15,9 +15,9 @@
 
 More about the language [here](https://rapha.land/jam-programming-language/).
 
-There's nothing yet available to use, I also restricted the repo to no issues or pull requests. I will reenable after v0.1 release and a proper documentation website. Anything you would like to ask directly feel free to send me an email.
+There's nothing available to use yet, and I've also disabled issues and pull requests on the repo. I'll re-enable both after the v0.1 release and once there's a proper documentation website. If there's anything you'd like to ask directly, feel free to send me an email.
 
-In the future Jam indeed will go to an org, but now is mostly me maintaining the language and I am considering test other options besides GitHub in the future, so I would like to wait a bit before start moving things around.
+Jam will indeed move to an org in the future, but right now it's mostly me maintaining the language and I'm considering testing other options besides GitHub, so I'd like to wait a bit before starting to move things around.
 
 ## Contributing
 
