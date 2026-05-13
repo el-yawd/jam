@@ -17,7 +17,7 @@
 
 JamBasicBlockRef CurrentLoopContinue = nullptr;
 JamBasicBlockRef CurrentLoopBreak = nullptr;
-// P8.4: index into the drop-scope stack of the *currently enclosing
+// index into the drop-scope stack of the *currently enclosing
 // loop body's scope*. On `break` / `continue`, the codegen emits drops
 // for every scope from the top down to (and including) this index, so
 // locals declared inside the loop body — possibly under nested
@@ -35,10 +35,6 @@ static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n);
 static std::string mangledFunctionName(const FunctionAST &fn,
                                        const TypePool &types,
                                        const StringPool &strings);
-
-// ---------------------------------------------------------------------------
-// Local helpers
-// ---------------------------------------------------------------------------
 
 static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
                             JamTypeRef expected) {
