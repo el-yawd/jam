@@ -209,126 +209,376 @@ static StringIdx collectMemberChain(const NodeStore &nodes, NodeIdx idx,
 	}
 }
 
-// Resolve an indexable lvalue (the Object inside an Index node) to a pointer
-// at the indexed element. Supports plain `arr[i]` on a local and indexed
-// fields like `g.board[i]` reached through struct GEPs.
+static TypeIdx inferLValueType(JamCodegenContext &ctx, NodeIdx nodeIdx);
+
+struct LValueAddress {
+	JamValueRef ptr;
+	TypeIdx leafType;
+	JamTypeRef leafLLVMType;
+};
+
+// resolveLValueAddress:
+// Walk a chain of `Variable` / `MemberAccess` / `Index` / `Deref` nodes
+// and return a pointer at the leaf. Supports arbitrary interleaving so
+// `arr[i].field`, `g.things[i].pc`, `slice[i].sub.x`, and `xs[i].*` all
+// reach the right storage. The resolver also handles slice projection
+// (`s.ptr` / `s.len`), slice indexing, many-pointer indexing, and union
+// member access (all union fields share the base address).
+//
+// Index sub-expressions are codegen'd inline; callers must NOT codegen
+// the index themselves.
+static LValueAddress resolveLValueAddress(JamCodegenContext &ctx,
+                                          NodeIdx nodeIdx) {
+	const NodeStore &ns = ctx.getNodeStore();
+	const StringPool &sp = ctx.getStringPool();
+	const AstNode &n = ns.get(nodeIdx);
+
+	if (n.tag == AstTag::Variable) {
+		const std::string &name = sp.get(static_cast<StringIdx>(n.lhs));
+		JamValueRef alloca = ctx.getVariable(name);
+		if (!alloca) {
+			throw std::runtime_error("Unknown variable: " + name);
+		}
+		TypeIdx ty = ctx.getVariableType(name);
+		LValueAddress r;
+		r.ptr = alloca;
+		r.leafType = ty;
+		r.leafLLVMType = ctx.getLLVMType(ty);
+		return r;
+	}
+
+	if (n.tag == AstTag::MemberAccess) {
+		LValueAddress base =
+		    resolveLValueAddress(ctx, static_cast<NodeIdx>(n.lhs));
+		const std::string &fieldName =
+		    sp.get(static_cast<StringIdx>(n.rhs));
+		const TypeKey &k = ctx.getTypePool().get(base.leafType);
+
+		// `s.ptr` and `s.len`. The slice is lowered as
+		// `{ptr, len}` so each field has a static struct index.
+		if (k.kind == TypeKind::Slice) {
+			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+			if (fieldName == "ptr") {
+				LValueAddress r;
+				r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(),
+				                              base.leafLLVMType, base.ptr, 0,
+				                              "slice.ptr");
+				r.leafType = ctx.getTypePool().internPtrMany(elemTy);
+				r.leafLLVMType = ctx.getLLVMType(r.leafType);
+				return r;
+			}
+			if (fieldName == "len") {
+				LValueAddress r;
+				r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(),
+				                              base.leafLLVMType, base.ptr, 1,
+				                              "slice.len");
+				r.leafType = BuiltinType::U64;
+				r.leafLLVMType = ctx.getLLVMType(r.leafType);
+				return r;
+			}
+			throw std::runtime_error("Slice has no field '" + fieldName +
+			                         "' (only .ptr and .len)");
+		}
+
+		// Union: every field shares the same address.
+		if (const auto *uinfo = ctx.lookupUnion(base.leafType)) {
+			TypeIdx fieldTy =
+			    ctx.getUnionFieldType(uinfo->name, fieldName);
+			if (fieldTy == kNoType) {
+				throw std::runtime_error("Union `" + uinfo->name +
+				                         "` has no field `" + fieldName +
+				                         "`");
+			}
+			LValueAddress r;
+			r.ptr = base.ptr;
+			r.leafType = fieldTy;
+			r.leafLLVMType = ctx.getLLVMType(fieldTy);
+			return r;
+		}
+
+		// Struct field.
+		const auto *info = ctx.lookupStruct(base.leafType);
+		if (!info) {
+			throw std::runtime_error("Cannot access field '" + fieldName +
+			                         "' on non-struct type");
+		}
+		int fldIdx = ctx.getFieldIndex(info->name, fieldName);
+		if (fldIdx < 0) {
+			throw std::runtime_error("Unknown field '" + fieldName +
+			                         "' in struct " + info->name);
+		}
+		TypeIdx fldType = info->fields[fldIdx].second;
+		LValueAddress r;
+		r.ptr = JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
+		                              base.ptr,
+		                              static_cast<unsigned>(fldIdx),
+		                              fieldName.c_str());
+		r.leafType = fldType;
+		r.leafLLVMType = ctx.getLLVMType(fldType);
+		return r;
+	}
+
+	if (n.tag == AstTag::Index) {
+		JamValueRef idxVal = codegenNode(ctx, static_cast<NodeIdx>(n.rhs));
+		if (!idxVal) {
+			throw std::runtime_error("failed to codegen index expression");
+		}
+		idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
+
+		LValueAddress base =
+		    resolveLValueAddress(ctx, static_cast<NodeIdx>(n.lhs));
+		const TypeKey &k = ctx.getTypePool().get(base.leafType);
+
+		if (k.kind == TypeKind::Array) {
+			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+			LValueAddress r;
+			r.leafType = elemTy;
+			r.leafLLVMType = ctx.getLLVMType(elemTy);
+			r.ptr = JamLLVMBuildArrayGEP(ctx.getBuilder(),
+			                             base.leafLLVMType, base.ptr, idxVal,
+			                             "idxgep");
+			return r;
+		}
+		if (k.kind == TypeKind::Slice) {
+			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+			JamValueRef ptrSlot = JamLLVMBuildStructGEP(
+			    ctx.getBuilder(), base.leafLLVMType, base.ptr, 0,
+			    "slice.ptr.slot");
+			TypeIdx ptrType = ctx.getTypePool().internPtrMany(elemTy);
+			JamTypeRef ptrLLVMType = ctx.getLLVMType(ptrType);
+			JamValueRef loadedPtr = JamLLVMBuildLoad(
+			    ctx.getBuilder(), ptrLLVMType, ptrSlot, "slice.ptr");
+			LValueAddress r;
+			r.leafType = elemTy;
+			r.leafLLVMType = ctx.getLLVMType(elemTy);
+			r.ptr = JamLLVMBuildPtrGEP(ctx.getBuilder(), r.leafLLVMType,
+			                           loadedPtr, idxVal, "ptrgep");
+			return r;
+		}
+		if (k.kind == TypeKind::PtrMany) {
+			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+			JamValueRef loadedPtr = JamLLVMBuildLoad(
+			    ctx.getBuilder(), base.leafLLVMType, base.ptr, "ptrload");
+			LValueAddress r;
+			r.leafType = elemTy;
+			r.leafLLVMType = ctx.getLLVMType(elemTy);
+			r.ptr = JamLLVMBuildPtrGEP(ctx.getBuilder(), r.leafLLVMType,
+			                           loadedPtr, idxVal, "ptrgep");
+			return r;
+		}
+		if (k.kind == TypeKind::PtrSingle) {
+			throw std::runtime_error(
+			    "Cannot index single-item pointer; use `.*` to "
+			    "dereference, or declare as `*mut[] T` for many-item "
+			    "indexing");
+		}
+		throw std::runtime_error("Cannot index value of this type");
+	}
+
+	if (n.tag == AstTag::Deref) {
+		// `ptr.*` as an lvalue: the pointer's value IS the address of
+		// the pointee. Load the pointer, hand it back as the leaf
+		// pointer with the pointee type.
+		LValueAddress base =
+		    resolveLValueAddress(ctx, static_cast<NodeIdx>(n.lhs));
+		const TypeKey &k = ctx.getTypePool().get(base.leafType);
+		if (k.kind != TypeKind::PtrSingle && k.kind != TypeKind::PtrMany) {
+			throw std::runtime_error("Cannot dereference non-pointer type");
+		}
+		TypeIdx pointeeTy = static_cast<TypeIdx>(k.a);
+		JamValueRef loadedPtr = JamLLVMBuildLoad(
+		    ctx.getBuilder(), base.leafLLVMType, base.ptr, "deref.ptr");
+		LValueAddress r;
+		r.ptr = loadedPtr;
+		r.leafType = pointeeTy;
+		r.leafLLVMType = ctx.getLLVMType(pointeeTy);
+		return r;
+	}
+
+	if (n.tag == AstTag::Call) {
+		// ok so, cases like `foo().field`, `foo()[i]`, `arr[i].method().sub`.
+		// to keep the chain going we materialize the call, spill it to a stack temp,
+		// and hand back a pointer to the temp.
+		//
+		// To allocate the right-sized temp and to find the right struct
+		// for further `.field` GEPs, we mirror codegenCall's dispatch to
+		// figure out the source-level return type:
+		//   StringIdx callee, free function   ->  registry["foo"]
+		//   StringIdx callee, `inst.method`   ->  walk to Struct.method
+		//   StringIdx callee, `Struct.method` ->  registry["Struct.method"]
+		//   NodeIdx callee, `…method`         ->  receiver-type method
+		TypeIdx retType = kNoType;
+		if ((n.flags & 1) == 0) {
+			const std::string &callee =
+			    sp.get(static_cast<StringIdx>(n.lhs));
+			if (const FunctionAST *fn = ctx.getFunctionAST(callee)) {
+				retType = fn->ReturnType;
+			} else {
+				size_t firstDot = callee.find('.');
+				size_t lastDot = callee.rfind('.');
+				if (firstDot != std::string::npos &&
+				    firstDot == lastDot) {
+					std::string instName = callee.substr(0, firstDot);
+					std::string methodPart = callee.substr(firstDot + 1);
+					if (ctx.hasVariable(instName)) {
+						TypeIdx instTy = ctx.getVariableType(instName);
+						if (const auto *sinfo =
+						        ctx.lookupStruct(instTy)) {
+							std::string qualified =
+							    sinfo->name + "." + methodPart;
+							if (const FunctionAST *fn =
+							        ctx.getFunctionAST(qualified)) {
+								retType = fn->ReturnType;
+							}
+						}
+					}
+				}
+			}
+		} else {
+			NodeIdx calleeNodeIdx = static_cast<NodeIdx>(n.lhs);
+			const AstNode &cn = ns.get(calleeNodeIdx);
+			if (cn.tag == AstTag::MemberAccess) {
+				TypeIdx recvTy = inferLValueType(
+				    ctx, static_cast<NodeIdx>(cn.lhs));
+				if (const auto *sinfo = ctx.lookupStruct(recvTy)) {
+					const std::string &methodName =
+					    sp.get(static_cast<StringIdx>(cn.rhs));
+					std::string qualified =
+					    sinfo->name + "." + methodName;
+					if (const FunctionAST *fn =
+					        ctx.getFunctionAST(qualified)) {
+						retType = fn->ReturnType;
+					}
+				}
+			}
+		}
+		if (retType == kNoType) {
+			throw std::runtime_error(
+			    "Cannot chain through a call whose return type the "
+			    "codegen can't statically resolve — assign the call "
+			    "result to a `var` first");
+		}
+		JamValueRef val = codegenNode(ctx, nodeIdx);
+		if (!val) {
+			throw std::runtime_error("call produced no value to chain");
+		}
+		JamTypeRef retLLVMType = ctx.getLLVMType(retType);
+		JamValueRef tmp = JamLLVMBuildAlloca(
+		    ctx.getBuilder(), retLLVMType, ctx.typeAlign(retType),
+		    "call.tmp");
+		JamLLVMBuildStore(ctx.getBuilder(), val, tmp);
+		LValueAddress r;
+		r.ptr = tmp;
+		r.leafType = retType;
+		r.leafLLVMType = retLLVMType;
+		return r;
+	}
+
+	throw std::runtime_error(
+	    "lvalue chain contains an unsupported node — only "
+	    "Variable, MemberAccess, Index, Deref, and Call are "
+	    "addressable; assign the value to a `var` first if you need to "
+	    "chain through a more complex expression");
+}
+
+static TypeIdx inferLValueType(JamCodegenContext &ctx, NodeIdx nodeIdx) {
+	const NodeStore &ns = ctx.getNodeStore();
+	const StringPool &sp = ctx.getStringPool();
+	const AstNode &n = ns.get(nodeIdx);
+
+	if (n.tag == AstTag::Variable) {
+		const std::string &name = sp.get(static_cast<StringIdx>(n.lhs));
+		return ctx.getVariableType(name);
+	}
+	if (n.tag == AstTag::MemberAccess) {
+		TypeIdx baseTy =
+		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		if (baseTy == kNoType) return kNoType;
+		const std::string &fieldName =
+		    sp.get(static_cast<StringIdx>(n.rhs));
+		const TypeKey &k = ctx.getTypePool().get(baseTy);
+		if (k.kind == TypeKind::Slice) {
+			if (fieldName == "ptr") {
+				return ctx.getTypePool().internPtrMany(
+				    static_cast<TypeIdx>(k.a));
+			}
+			if (fieldName == "len") return BuiltinType::U64;
+			return kNoType;
+		}
+		if (const auto *uinfo = ctx.lookupUnion(baseTy)) {
+			return ctx.getUnionFieldType(uinfo->name, fieldName);
+		}
+		const auto *info = ctx.lookupStruct(baseTy);
+		if (!info) return kNoType;
+		int idx = ctx.getFieldIndex(info->name, fieldName);
+		if (idx < 0) return kNoType;
+		return info->fields[idx].second;
+	}
+	if (n.tag == AstTag::Index) {
+		TypeIdx baseTy =
+		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		if (baseTy == kNoType) return kNoType;
+		const TypeKey &k = ctx.getTypePool().get(baseTy);
+		if (k.kind == TypeKind::Array || k.kind == TypeKind::Slice ||
+		    k.kind == TypeKind::PtrMany) {
+			return static_cast<TypeIdx>(k.a);
+		}
+		return kNoType;
+	}
+	if (n.tag == AstTag::Deref) {
+		TypeIdx baseTy =
+		    inferLValueType(ctx, static_cast<NodeIdx>(n.lhs));
+		if (baseTy == kNoType) return kNoType;
+		const TypeKey &k = ctx.getTypePool().get(baseTy);
+		if (k.kind == TypeKind::PtrSingle || k.kind == TypeKind::PtrMany) {
+			return static_cast<TypeIdx>(k.a);
+		}
+		return kNoType;
+	}
+	return kNoType;
+}
+
 static JamValueRef resolveIndexedElementPtr(JamCodegenContext &ctx,
                                             NodeIdx objectIdx,
                                             JamValueRef idxVal,
                                             JamTypeRef &outElemType) {
-	const NodeStore &ns = ctx.getNodeStore();
-	const AstNode &on = ns.get(objectIdx);
-	const StringPool &sp = ctx.getStringPool();
+	LValueAddress base = resolveLValueAddress(ctx, objectIdx);
+	const TypeKey &k = ctx.getTypePool().get(base.leafType);
 
-	if (on.tag == AstTag::Variable) {
-		const std::string &name = sp.get(static_cast<StringIdx>(on.lhs));
-		JamValueRef alloca = ctx.getVariable(name);
-		if (!alloca) { throw std::runtime_error("Unknown variable: " + name); }
-		TypeIdx varTy = ctx.getVariableType(name);
-		const TypeKey &k = ctx.getTypePool().get(varTy);
-
-		// Resolve the binding's LLVM type from the source-level TypeIdx
-		// rather than from the alloca instruction's allocated-type. This
-		// keeps the codegen working uniformly whether the variable is
-		// backed by an `alloca` (locals, value-passed params) or by a
-		// function argument that's already a pointer to caller storage
-		// (mode-aware ABI for `mut` / `undefined` params).
-		JamTypeRef allocatedType = ctx.getLLVMType(varTy);
-
-		if (k.kind == TypeKind::PtrMany) {
-			TypeIdx elemTy = static_cast<TypeIdx>(k.a);
-			outElemType = ctx.getLLVMType(elemTy);
-			JamValueRef ptrVal = JamLLVMBuildLoad(
-			    ctx.getBuilder(), allocatedType, alloca, name.c_str());
-			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, ptrVal,
-			                          idxVal, "ptrgep");
-		}
-		if (k.kind == TypeKind::PtrSingle) {
-			throw std::runtime_error(
-			    "Cannot index single-item pointer; use `.*` to dereference, "
-			    "or declare as `[*]T` for many-item indexing");
-		}
-
-		outElemType = JamLLVMGetArrayElementType(allocatedType);
-		return JamLLVMBuildArrayGEP(ctx.getBuilder(), allocatedType, alloca,
-		                            idxVal, "idxgep");
+	if (k.kind == TypeKind::Array) {
+		TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+		outElemType = ctx.getLLVMType(elemTy);
+		return JamLLVMBuildArrayGEP(ctx.getBuilder(), base.leafLLVMType,
+		                            base.ptr, idxVal, "idxgep");
 	}
-
-	if (on.tag == AstTag::MemberAccess) {
-		std::vector<StringIdx> path;
-		StringIdx rootName = collectMemberChain(ns, objectIdx, path);
-		if (rootName == kNoString) {
-			throw std::runtime_error(
-			    "Indexing into a non-variable lvalue is not supported");
-		}
-		const std::string &varName = sp.get(rootName);
-		JamValueRef alloca = ctx.getVariable(varName);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + varName);
-		}
-		TypeIdx typeAtLevel = ctx.getVariableType(varName);
-		JamValueRef currentPtr = alloca;
-		JamTypeRef currentType = ctx.getLLVMType(typeAtLevel);
-
-		for (size_t i = 0; i < path.size(); i++) {
-			const std::string &fieldName = sp.get(path[i]);
-
-			// `slice.ptr[i]` — the LHS is a `[]T` slice value (lowered
-			// to `{ptr, len}`). Step into field 0 (the ptr), then
-			// load it so the next iteration / leaf can GEP through.
-			const TypeKey &lvlKey = ctx.getTypePool().get(typeAtLevel);
-			if (lvlKey.kind == TypeKind::Slice && fieldName == "ptr") {
-				currentPtr = JamLLVMBuildStructGEP(
-				    ctx.getBuilder(), currentType, currentPtr, 0, "slice.ptr");
-				TypeIdx elemTy = static_cast<TypeIdx>(lvlKey.a);
-				typeAtLevel = ctx.getTypePool().internPtrMany(elemTy);
-				currentType = ctx.getLLVMType(typeAtLevel);
-				continue;
-			}
-
-			const auto *info = ctx.lookupStruct(typeAtLevel);
-			if (!info) {
-				throw std::runtime_error("Cannot index through field '" +
-				                         fieldName + "' on non-struct");
-			}
-			int idx = ctx.getFieldIndex(info->name, fieldName);
-			if (idx < 0) {
-				throw std::runtime_error("Unknown field '" + fieldName +
-				                         "' in struct " + info->name);
-			}
-			currentPtr = JamLLVMBuildStructGEP(
-			    ctx.getBuilder(), currentType, currentPtr,
-			    static_cast<unsigned>(idx), fieldName.c_str());
-			typeAtLevel = info->fields[idx].second;
-			currentType = ctx.getLLVMType(typeAtLevel);
-		}
-
-		// When the leaf field is a many-pointer (`*mut[] T` / `*const[] T`),
-		// `currentPtr` points at the slot holding the pointer, not at the
-		// pointee's array. Load the pointer value, then GEP it by the
-		// runtime index. Without this load we'd compute the offset off the
-		// field's storage address and produce a wild pointer — segfault on
-		// write.
-		const TypeKey &leafKey = ctx.getTypePool().get(typeAtLevel);
-		if (leafKey.kind == TypeKind::PtrMany) {
-			TypeIdx elemTy = static_cast<TypeIdx>(leafKey.a);
-			outElemType = ctx.getLLVMType(elemTy);
-			JamValueRef loadedPtr = JamLLVMBuildLoad(
-			    ctx.getBuilder(), currentType, currentPtr, "fld.ptr");
-			return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, loadedPtr,
-			                          idxVal, "ptrgep");
-		}
-
-		outElemType = JamLLVMGetArrayElementType(currentType);
-		return JamLLVMBuildArrayGEP(ctx.getBuilder(), currentType, currentPtr,
-		                            idxVal, "idxgep");
+	if (k.kind == TypeKind::Slice) {
+		TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+		outElemType = ctx.getLLVMType(elemTy);
+		JamValueRef ptrSlot =
+		    JamLLVMBuildStructGEP(ctx.getBuilder(), base.leafLLVMType,
+		                          base.ptr, 0, "slice.ptr.slot");
+		TypeIdx ptrType = ctx.getTypePool().internPtrMany(elemTy);
+		JamValueRef loadedPtr =
+		    JamLLVMBuildLoad(ctx.getBuilder(), ctx.getLLVMType(ptrType),
+		                     ptrSlot, "slice.ptr");
+		return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, loadedPtr,
+		                          idxVal, "ptrgep");
 	}
-
-	throw std::runtime_error(
-	    "Indexing supports only locals and struct field chains");
+	if (k.kind == TypeKind::PtrMany) {
+		TypeIdx elemTy = static_cast<TypeIdx>(k.a);
+		outElemType = ctx.getLLVMType(elemTy);
+		JamValueRef loadedPtr = JamLLVMBuildLoad(
+		    ctx.getBuilder(), base.leafLLVMType, base.ptr, "ptrload");
+		return JamLLVMBuildPtrGEP(ctx.getBuilder(), outElemType, loadedPtr,
+		                          idxVal, "ptrgep");
+	}
+	if (k.kind == TypeKind::PtrSingle) {
+		throw std::runtime_error(
+		    "Cannot index single-item pointer; use `.*` to dereference, "
+		    "or declare as `*mut[] T` for many-item indexing");
+	}
+	throw std::runtime_error("Cannot index value of this type");
 }
-
-// Special-form calls (println/print/sleep/assert)
 
 static JamValueRef genPrintCall(JamCodegenContext &ctx,
                                 const std::string &callee, const uint32_t *args,
@@ -819,6 +1069,65 @@ static JamValueRef codegenTypeMethodCall(JamCodegenContext &ctx,
 }
 
 static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
+	if (n.flags & 1) {
+		NodeIdx calleeNodeIdx = static_cast<NodeIdx>(n.lhs);
+		const AstNode &cn = ctx.getNodeStore().get(calleeNodeIdx);
+		if (cn.tag != AstTag::MemberAccess) {
+			throw std::runtime_error(
+			    "Indirect calls are only supported on method receivers — "
+			    "the callee must end in `.methodName`");
+		}
+		NodeIdx receiverIdx = static_cast<NodeIdx>(cn.lhs);
+		StringIdx methodNameId = static_cast<StringIdx>(cn.rhs);
+		const std::string &methodName =
+		    ctx.getStringPool().get(methodNameId);
+
+		TypeIdx recvTy = inferLValueType(ctx, receiverIdx);
+		if (recvTy == kNoType) {
+			throw std::runtime_error(
+			    "Cannot infer receiver type for method `" + methodName +
+			    "`");
+		}
+		const auto *sinfo = ctx.lookupStruct(recvTy);
+		if (!sinfo) {
+			throw std::runtime_error(
+			    "Method call receiver is not a struct (method `" +
+			    methodName + "`)");
+		}
+		std::string qualified = sinfo->name + "." + methodName;
+		const FunctionAST *methodAST = ctx.getFunctionAST(qualified);
+		if (!methodAST || methodAST->Args.empty()) {
+			throw std::runtime_error("Method `" + methodName +
+			                         "` not found on struct `" +
+			                         sinfo->name + "`");
+		}
+
+		NodeIdx recvArgNode = receiverIdx;
+		ParamMode mode = methodAST->Args[0].Mode;
+		if (mode == ParamMode::Mut || mode == ParamMode::Move) {
+			recvArgNode = ctx.getNodeStore().addNode(AstNode{
+			    AstTag::AddressOf, 0, 0, 0,
+			    static_cast<uint32_t>(receiverIdx), 0});
+		}
+
+		ExtraIdx origExtra = static_cast<ExtraIdx>(n.rhs);
+		uint32_t origCount = ctx.getNodeStore().getExtra(origExtra);
+		StringIdx calleeId = ctx.getStringPool().intern(qualified);
+		ExtraIdx callExtra =
+		    ctx.getNodeStore().reserveExtra(2 + origCount);
+		ctx.getNodeStore().setExtra(callExtra, 1 + origCount);
+		ctx.getNodeStore().setExtra(callExtra + 1,
+		                            static_cast<uint32_t>(recvArgNode));
+		for (uint32_t i = 0; i < origCount; i++) {
+			ctx.getNodeStore().setExtra(
+			    callExtra + 2 + i,
+			    ctx.getNodeStore().getExtra(origExtra + 1 + i));
+		}
+		AstNode synth{AstTag::Call, 0, 0, 0,
+		              static_cast<uint32_t>(calleeId), callExtra};
+		return codegenCall(ctx, synth);
+	}
+
 	// `callee` may be rewritten below (e.g. instance-receiver method
 	// dispatch turns `inst.method` into `StructName.method`), so it's
 	// a value not a reference.
@@ -1412,98 +1721,15 @@ static JamValueRef codegenAssign(JamCodegenContext &ctx, const AstNode &n) {
 		return rhsVal;
 	}
 
-	// arr[i] = value (or g.board[i] = value)
-	if (target.tag == AstTag::Index) {
+	// Any other lvalue shape (Index, MemberAccess, or arbitrary interleavings
+	// like `arr[i].field`, `g.things[i].pc`, `s.ptr[i]`) flows through the
+	// shared resolver.
+	if (target.tag == AstTag::Index || target.tag == AstTag::MemberAccess) {
 		JamValueRef rhsVal = codegenNode(ctx, valueIdx);
 		if (!rhsVal) return nullptr;
-		JamValueRef idxVal = codegenNode(ctx, static_cast<NodeIdx>(target.rhs));
-		if (!idxVal) return nullptr;
-		idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
-		JamTypeRef elemType = nullptr;
-		JamValueRef elemPtr = resolveIndexedElementPtr(
-		    ctx, static_cast<NodeIdx>(target.lhs), idxVal, elemType);
-		rhsVal = coerceTo(ctx, rhsVal, elemType);
-		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, elemPtr);
-		return rhsVal;
-	}
-
-	// a.b.c = value (struct field chain)
-	if (target.tag == AstTag::MemberAccess) {
-		std::vector<StringIdx> path;
-		StringIdx rootName = collectMemberChain(ns, targetIdx, path);
-		if (rootName == kNoString) {
-			throw std::runtime_error("Invalid assignment target");
-		}
-		const std::string &varName = sp.get(rootName);
-		JamValueRef alloca = ctx.getVariable(varName);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + varName);
-		}
-		TypeIdx varTy = ctx.getVariableType(varName);
-
-		// Union member write (single-level only). All fields share
-		// the same address, so the write is just a store of the rhs at
-		// the union's allocation, typed as the field type.
-		if (path.size() == 1) {
-			const auto *uinfo = ctx.lookupUnion(varTy);
-			if (uinfo) {
-				const std::string &member = sp.get(path[0]);
-				TypeIdx fieldTy = ctx.getUnionFieldType(uinfo->name, member);
-				if (fieldTy == kNoType) {
-					throw std::runtime_error("Union `" + uinfo->name +
-					                         "` has no field `" + member + "`");
-				}
-				JamTypeRef expected = ctx.getLLVMType(fieldTy);
-				JamValueRef rhsVal = codegenNode(ctx, valueIdx, expected);
-				if (!rhsVal) return nullptr;
-				rhsVal = coerceTo(ctx, rhsVal, expected);
-				JamLLVMBuildStore(ctx.getBuilder(), rhsVal, alloca);
-				return rhsVal;
-			}
-		}
-
-		JamValueRef rhsVal = codegenNode(ctx, valueIdx);
-		if (!rhsVal) return nullptr;
-
-		const auto *info = ctx.lookupStruct(varTy);
-		if (!info) {
-			throw std::runtime_error("Cannot assign to field of non-struct: " +
-			                         varName);
-		}
-
-		// Walk the field chain with struct GEPs so we end up with a pointer
-		// straight to the leaf field, then store only that field. The earlier
-		// approach loaded the whole struct, ran an extractvalue/insertvalue
-		// dance, and stored the whole struct back — wasteful in the IR and
-		// in unoptimized machine code, plus it loaded poison from an uninit
-		// alloca whenever the struct hadn't been fully initialized.
-		JamValueRef leafPtr = alloca;
-		JamTypeRef leafLLVMType = info->type;
-		TypeIdx typeAtLevel = varTy;
-		TypeIdx leafFieldType = kNoType;
-		for (size_t i = 0; i < path.size(); i++) {
-			const auto *curInfo = ctx.lookupStruct(typeAtLevel);
-			if (!curInfo) {
-				throw std::runtime_error("Cannot access field '" +
-				                         sp.get(path[i]) + "' on non-struct");
-			}
-			const std::string &fieldName = sp.get(path[i]);
-			int idx = ctx.getFieldIndex(curInfo->name, fieldName);
-			if (idx < 0) {
-				throw std::runtime_error("Unknown field '" + fieldName +
-				                         "' in " + curInfo->name);
-			}
-			leafPtr = JamLLVMBuildStructGEP(ctx.getBuilder(), leafLLVMType,
-			                                leafPtr, static_cast<unsigned>(idx),
-			                                fieldName.c_str());
-			typeAtLevel = curInfo->fields[idx].second;
-			leafLLVMType = ctx.getLLVMType(typeAtLevel);
-			if (i + 1 == path.size()) { leafFieldType = typeAtLevel; }
-		}
-
-		JamTypeRef expected = ctx.getLLVMType(leafFieldType);
-		JamValueRef newValue = coerceTo(ctx, rhsVal, expected);
-		JamLLVMBuildStore(ctx.getBuilder(), newValue, leafPtr);
+		LValueAddress addr = resolveLValueAddress(ctx, targetIdx);
+		rhsVal = coerceTo(ctx, rhsVal, addr.leafLLVMType);
+		JamLLVMBuildStore(ctx.getBuilder(), rhsVal, addr.ptr);
 		return rhsVal;
 	}
 
@@ -1555,49 +1781,13 @@ static JamValueRef codegenAddressOf(JamCodegenContext &ctx, const AstNode &n) {
 		return alloca;
 	}
 
-	if (op.tag == AstTag::Index) {
-		JamValueRef idxVal = codegenNode(ctx, static_cast<NodeIdx>(op.rhs));
-		if (!idxVal) return nullptr;
-		idxVal = coerceTo(ctx, idxVal, ctx.getInt64Type());
-		JamTypeRef elemType = nullptr;
-		return resolveIndexedElementPtr(ctx, static_cast<NodeIdx>(op.lhs),
-		                                idxVal, elemType);
-	}
-
-	if (op.tag == AstTag::MemberAccess) {
-		std::vector<StringIdx> path;
-		StringIdx rootName = collectMemberChain(ns, operandIdx, path);
-		if (rootName == kNoString) {
-			throw std::runtime_error(
-			    "Address-of a non-variable lvalue is not supported");
-		}
-		const std::string &varName = sp.get(rootName);
-		JamValueRef alloca = ctx.getVariable(varName);
-		if (!alloca) {
-			throw std::runtime_error("Unknown variable: " + varName);
-		}
-		TypeIdx typeAtLevel = ctx.getVariableType(varName);
-		JamValueRef currentPtr = alloca;
-		JamTypeRef currentType = ctx.getLLVMType(typeAtLevel);
-		for (size_t i = 0; i < path.size(); i++) {
-			const auto *info = ctx.lookupStruct(typeAtLevel);
-			if (!info) {
-				throw std::runtime_error("Cannot take address of field '" +
-				                         sp.get(path[i]) + "' on non-struct");
-			}
-			const std::string &fieldName = sp.get(path[i]);
-			int idx = ctx.getFieldIndex(info->name, fieldName);
-			if (idx < 0) {
-				throw std::runtime_error("Unknown field '" + fieldName +
-				                         "' in struct " + info->name);
-			}
-			currentPtr = JamLLVMBuildStructGEP(
-			    ctx.getBuilder(), currentType, currentPtr,
-			    static_cast<unsigned>(idx), fieldName.c_str());
-			typeAtLevel = info->fields[idx].second;
-			currentType = ctx.getLLVMType(typeAtLevel);
-		}
-		return currentPtr;
+	// All other lvalue shapes (Index, MemberAccess, Deref, plus chains like
+	// `arr[i].field`) go through the shared resolver. `&p.*` resolves to
+	// `p`'s value (the resolver loads the pointer and returns it as the
+	// addressable leaf), which matches the source-level semantics.
+	if (op.tag == AstTag::Index || op.tag == AstTag::MemberAccess ||
+	    op.tag == AstTag::Deref) {
+		return resolveLValueAddress(ctx, operandIdx).ptr;
 	}
 
 	throw std::runtime_error("Cannot take address of this expression");
@@ -2585,8 +2775,13 @@ static JamValueRef codegenMemberAccess(JamCodegenContext &ctx, const AstNode &n,
 	std::vector<StringIdx> path;
 	StringIdx rootName = collectMemberChain(ns, selfIdx, path);
 	if (rootName == kNoString) {
-		throw std::runtime_error(
-		    "Direct member access codegen not yet implemented");
+		// Chain contains a non-Variable root (typically an `Index` node,
+		// as in `arr[i].field` or `g.things[i].pc`). Walk through the
+		// shared lvalue resolver to get a pointer at the leaf, then load
+		// the leaf value.
+		LValueAddress addr = resolveLValueAddress(ctx, selfIdx);
+		return JamLLVMBuildLoad(ctx.getBuilder(), addr.leafLLVMType, addr.ptr,
+		                        "field");
 	}
 
 	// Enum-variant value: `EnumName.Variant` (no parens) resolves to

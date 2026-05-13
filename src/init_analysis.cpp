@@ -560,17 +560,14 @@ Result Analyzer::analyzeReturn(NodeIdx idx, NameMap state) {
 Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 	// Call: d.lhs = StringIdx (callee), d.rhs = ExtraIdx → [argCount, args...]
 	const AstNode &n = nodes_.get(idx);
-	StringIdx calleeIdx = n.lhs;
-	const std::string &calleeName = strings_.get(calleeIdx);
-
-	// Look up the callee in the registry. Unknown callees (extern fns,
-	// std imports we didn't register, indirect calls) skip mode
-	// propagation — args are walked normally for read checks, but no
-	// post-call state changes apply.
 	const FunctionAST *callee = nullptr;
-	if (registry_) {
-		auto it = registry_->find(calleeName);
-		if (it != registry_->end()) callee = it->second;
+	if ((n.flags & 1) == 0) {
+		StringIdx calleeIdx = n.lhs;
+		const std::string &calleeName = strings_.get(calleeIdx);
+		if (registry_) {
+			auto it = registry_->find(calleeName);
+			if (it != registry_->end()) callee = it->second;
+		}
 	}
 
 	ExtraIdx extra = n.rhs;
@@ -613,6 +610,14 @@ Result Analyzer::analyzeCall(NodeIdx idx, NameMap state) {
 	}
 
 	Result r{std::move(state), false};
+
+	// walk the callee subtree when present so its read-checks fire
+	// (e.g. `arr[i].method()` must verify `arr` is initialized).
+	if (n.flags & 1) {
+		r = analyze(static_cast<NodeIdx>(n.lhs), std::move(r.state));
+		if (r.terminated) return r;
+	}
+
 	for (const ArgInfo &info : argInfos) {
 		if (r.terminated) return r;
 		// Walk the arg expression. For `let`/`mut`/`move` modes the walk
