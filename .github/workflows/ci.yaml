@@ -41,9 +41,7 @@ jobs:
           cmake --build . -j $(nproc)
 
       - name: Run unit tests
-        run: |
-          cd build
-          ./jam test ../tests/unit
+        run: ./build/jam test tests/unit
 
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
@@ -76,9 +74,7 @@ jobs:
           cmake --build . -j $(nproc)
 
       - name: Run unit tests
-        run: |
-          cd build
-          ./jam test ../tests/unit
+        run: ./build/jam test tests/unit
 
       - name: Archive ARM build artifacts
         uses: actions/upload-artifact@v4
@@ -92,10 +88,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM via Homebrew
+      - name: Install LLVM 20 via Homebrew
         run: |
-          brew install llvm
-          LLVM_PREFIX="$(brew --prefix llvm)"
+          brew install llvm@20
+          LLVM_PREFIX="$(brew --prefix llvm@20)"
           echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
           echo "LLVM_PREFIX=${LLVM_PREFIX}" >> "$GITHUB_ENV"
           "${LLVM_PREFIX}/bin/llvm-config" --version
@@ -108,9 +104,7 @@ jobs:
           cmake --build . -j $(sysctl -n hw.ncpu)
 
       - name: Run unit tests
-        run: |
-          cd build
-          ./jam test ../tests/unit
+        run: ./build/jam test tests/unit
 
       - name: Archive macOS build artifacts
         uses: actions/upload-artifact@v4
