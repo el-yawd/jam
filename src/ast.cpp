@@ -1540,9 +1540,12 @@ static JamValueRef codegenCall(JamCodegenContext &ctx, const AstNode &n) {
 			JamValueRef argVal;
 			if (autoAddress) {
 				const AstNode &argNode = ctx.getNodeStore().get(args[i]);
-				if (argNode.tag == AstTag::Variable ||
-				    argNode.tag == AstTag::Index ||
-				    argNode.tag == AstTag::MemberAccess) {
+				if (argNode.tag == AstTag::AddressOf) {
+					argVal = codegenNode(ctx, args[i]);
+					if (!argVal) return nullptr;
+				} else if (argNode.tag == AstTag::Variable ||
+				           argNode.tag == AstTag::Index ||
+				           argNode.tag == AstTag::MemberAccess) {
 					// lvalue: take its address directly via the same
 					// path that the explicit `&` operator uses.
 					AstNode fakeAddrOf{AstTag::AddressOf,
