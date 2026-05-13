@@ -1,7 +1,7 @@
 ---
 layout: docs
 title: Language Reference
-permalink: /soon/reference/
+permalink: /reference/
 sidebar:
   - title: Basics
     items:

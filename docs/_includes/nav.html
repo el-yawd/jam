@@ -4,7 +4,7 @@
     <div class="max-w-{% if include.wide %}7xl{% else %}6xl{% endif %} mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between items-center h-{% if include.compact %}16{% else %}20{% endif %}">
             <!-- Logo -->
-            <a href="{{ '/soon/' | relative_url }}" class="flex-shrink-0 flex items-center gap-2 cursor-pointer {% if include.compact %}group{% endif %}">
+            <a href="{{ '/' | relative_url }}" class="flex-shrink-0 flex items-center gap-2 cursor-pointer {% if include.compact %}group{% endif %}">
                 <div class="relative {% if include.compact %}w-5 h-7{% else %}w-6 h-8{% endif %} transform {% if include.compact %}group-hover:rotate-12 transition-transform duration-300{% else %}rotate-3{% endif %}">
                     <!-- Lid -->
                     <div class="absolute top-0 left-1/2 -translate-x-1/2 {% if include.compact %}w-4 h-1.5{% else %}w-5 h-2{% endif %} bg-[#A97191] rounded-t-sm"></div>
@@ -25,11 +25,11 @@
             {% if include.type == 'home' %}
             <!-- Home Menu (desktop) -->
             <div class="hidden md:flex items-center space-x-8">
-                <a href="{{ '/soon/tour' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
+                <a href="{{ '/tour' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
                     <i data-lucide="map" class="w-4 h-4"></i>
                     Tour
                 </a>
-                <a href="{{ '/soon/reference' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
+                <a href="{{ '/reference' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
                     <i data-lucide="book-open" class="w-4 h-4"></i>
                     Reference
                 </a>
@@ -41,7 +41,7 @@
                     {{ discord_svg }}
                     Discord
                 </a>
-                <a href="{{ '/soon/sponsor' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
+                <a href="{{ '/sponsor' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
                     <i data-lucide="heart" class="w-4 h-4 text-pink-400"></i>
                     Sponsor
                 </a>
@@ -58,9 +58,9 @@
             {% elsif include.type == 'docs' %}
             <!-- Docs Menu (desktop) -->
             <div class="hidden md:flex items-center space-x-6 text-sm">
-                <a href="{{ '/soon/' | relative_url }}" class="text-slate-500 hover:text-pink-600 transition-colors">Home</a>
-                <a href="{{ '/soon/tour' | relative_url }}" class="text-slate-500 hover:text-pink-600 transition-colors">Tour</a>
-                <a href="{{ '/soon/reference' | relative_url }}" class="text-pink-600 font-medium">Reference</a>
+                <a href="{{ '/' | relative_url }}" class="text-slate-500 hover:text-pink-600 transition-colors">Home</a>
+                <a href="{{ '/tour' | relative_url }}" class="text-slate-500 hover:text-pink-600 transition-colors">Tour</a>
+                <a href="{{ '/reference' | relative_url }}" class="text-pink-600 font-medium">Reference</a>
                 <div class="h-4 w-px bg-slate-200"></div>
                 <a href="https://github.com/raphamorim/jam" class="text-slate-400 hover:text-pink-600">{{ github_svg }}</a>
                 <a href="https://discord.gg/ZpRTtheTNB" class="text-slate-400 hover:text-pink-600">{{ discord_svg }}</a>
@@ -81,13 +81,13 @@
             </div>
             <div class="flex items-center gap-4">
                 <span class="text-xs font-mono text-slate-400 hidden sm:inline">{{ include.current }} of {{ include.total }}</span>
-                <a href="{{ '/soon/' | relative_url }}" class="text-slate-400 hover:text-pink-600 transition-colors"><i data-lucide="x" class="w-5 h-5"></i></a>
+                <a href="{{ '/' | relative_url }}" class="text-slate-400 hover:text-pink-600 transition-colors"><i data-lucide="x" class="w-5 h-5"></i></a>
             </div>
 
             {% elsif include.type == 'simple' %}
             <!-- Simple Menu (desktop) -->
             <div class="hidden md:flex items-center space-x-8">
-                <a href="{{ '/soon/' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
+                <a href="{{ '/' | relative_url }}" class="text-slate-600 hover:text-pink-600 transition-colors duration-200 flex items-center gap-2 font-medium">
                     <i data-lucide="home" class="w-4 h-4"></i>
                     Home
                 </a>
@@ -114,10 +114,10 @@
     <div id="nav-mobile" class="md:hidden hidden border-t border-pink-100 bg-[#fffdfd]/95 backdrop-blur">
         <div class="px-4 py-3 space-y-1">
             {% if include.type == 'home' %}
-                <a href="{{ '/soon/tour' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
+                <a href="{{ '/tour' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     <i data-lucide="map" class="w-4 h-4"></i> Tour
                 </a>
-                <a href="{{ '/soon/reference' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
+                <a href="{{ '/reference' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     <i data-lucide="book-open" class="w-4 h-4"></i> Reference
                 </a>
                 <a href="https://github.com/raphamorim/jam" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
@@ -126,13 +126,13 @@
                 <a href="https://discord.gg/ZpRTtheTNB" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     {{ discord_svg }} Discord
                 </a>
-                <a href="{{ '/soon/sponsor' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
+                <a href="{{ '/sponsor' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     <i data-lucide="heart" class="w-4 h-4 text-pink-400"></i> Sponsor
                 </a>
             {% elsif include.type == 'docs' %}
-                <a href="{{ '/soon/' | relative_url }}" class="block px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">Home</a>
-                <a href="{{ '/soon/tour' | relative_url }}" class="block px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">Tour</a>
-                <a href="{{ '/soon/reference' | relative_url }}" class="block px-3 py-3 rounded-md text-pink-600 font-medium bg-pink-50/50">Reference</a>
+                <a href="{{ '/' | relative_url }}" class="block px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">Home</a>
+                <a href="{{ '/tour' | relative_url }}" class="block px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">Tour</a>
+                <a href="{{ '/reference' | relative_url }}" class="block px-3 py-3 rounded-md text-pink-600 font-medium bg-pink-50/50">Reference</a>
                 <a href="https://github.com/raphamorim/jam" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     {{ github_svg }} GitHub
                 </a>
@@ -140,7 +140,7 @@
                     {{ discord_svg }} Discord
                 </a>
             {% elsif include.type == 'simple' %}
-                <a href="{{ '/soon/' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
+                <a href="{{ '/' | relative_url }}" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
                     <i data-lucide="home" class="w-4 h-4"></i> Home
                 </a>
                 <a href="https://github.com/raphamorim/jam" class="flex items-center gap-3 px-3 py-3 rounded-md text-slate-700 hover:bg-pink-50 hover:text-pink-600 transition-colors">
