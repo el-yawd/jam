@@ -157,7 +157,7 @@ NodeIdx Parser::parsePrimary() {
 		uint64_t mag = parseNumLexeme(previous().lexeme, isNegative, isFloat);
 		uint16_t flags = 0;
 		if (isNegative) flags |= 1;
-		if (isFloat)    flags |= 2;
+		if (isFloat) flags |= 2;
 		AstNode n{AstTag::NumberLit,
 		          0,
 		          flags,

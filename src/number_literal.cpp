@@ -7,7 +7,7 @@
 
 #include "number_literal.h"
 
-#include <cstdlib>     // strtod
+#include <cstdlib>  // strtod
 #include <string>
 
 namespace {

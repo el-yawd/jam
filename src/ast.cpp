@@ -169,7 +169,7 @@ static JamValueRef numberLitConst(JamCodegenContext &ctx, const AstNode &n,
                                   JamTypeRef expectedType) {
 	uint64_t val = numberLitValue(n);
 	bool isNegative = (n.flags & 1) != 0;
-	bool isFloat    = (n.flags & 2) != 0;
+	bool isFloat = (n.flags & 2) != 0;
 
 	if (isFloat) {
 		// Reinterpret the packed u64 as a host double.
@@ -953,22 +953,31 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 			return JamLLVMBuildFRem(ctx.getBuilder(), L, R, "fremtmp");
 		case BinOp::Eq:
 			// OEQ: false when either side is NaN. Matches IEEE-754 and C.
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OEQ, L, R, "fcmp");
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OEQ, L, R,
+			                        "fcmp");
 		case BinOp::Ne:
 			// UNE: true when either side is NaN OR operands differ. The
 			// alternative (ONE) returns false on NaN inputs, which would
 			// make `nan != nan` evaluate false, which is surprising and wrong.
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_UNE, L, R, "fcmp");
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_UNE, L, R,
+			                        "fcmp");
 		case BinOp::Lt:
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLT, L, R, "fcmp");
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLT, L, R,
+			                        "fcmp");
 		case BinOp::Le:
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLE, L, R, "fcmp");
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLE, L, R,
+			                        "fcmp");
 		case BinOp::Gt:
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGT, L, R, "fcmp");
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGT, L, R,
+			                        "fcmp");
 		case BinOp::Ge:
-			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGE, L, R, "fcmp");
-		case BinOp::BitAnd: case BinOp::BitOr: case BinOp::BitXor:
-		case BinOp::Shl: case BinOp::Shr:
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGE, L, R,
+			                        "fcmp");
+		case BinOp::BitAnd:
+		case BinOp::BitOr:
+		case BinOp::BitXor:
+		case BinOp::Shl:
+		case BinOp::Shr:
 			throw std::runtime_error(
 			    "bitwise / shift operators are not defined for float operands");
 		default:
@@ -3167,11 +3176,10 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 			// Otherwise `255u as f32` would round-trip as -1.0 because
 			// SIToFP treats the high bit as a sign.
 			bool signedSrc = isSignedIntExpr(ctx, operandIdx);
-			return signedSrc
-			           ? JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,
-			                                "as.si2fp")
-			           : JamLLVMBuildUIToFP(ctx.getBuilder(), val, targetLLVM,
-			                                "as.ui2fp");
+			return signedSrc ? JamLLVMBuildSIToFP(ctx.getBuilder(), val,
+			                                      targetLLVM, "as.si2fp")
+			                 : JamLLVMBuildUIToFP(ctx.getBuilder(), val,
+			                                      targetLLVM, "as.ui2fp");
 		}
 		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsInteger(targetLLVM)) {
 			// Conversion truncates toward zero (matches C semantics).
@@ -3179,11 +3187,10 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 			// on signed integer types (see ast_flat.h's seed of i8/i16/…).
 			const TypeKey &tk = ctx.getTypePool().get(targetTy);
 			bool signedDst = tk.kind == TypeKind::Int && tk.b != 0;
-			return signedDst
-			           ? JamLLVMBuildFPToSI(ctx.getBuilder(), val, targetLLVM,
-			                                "as.fp2si")
-			           : JamLLVMBuildFPToUI(ctx.getBuilder(), val, targetLLVM,
-			                                "as.fp2ui");
+			return signedDst ? JamLLVMBuildFPToSI(ctx.getBuilder(), val,
+			                                      targetLLVM, "as.fp2si")
+			                 : JamLLVMBuildFPToUI(ctx.getBuilder(), val,
+			                                      targetLLVM, "as.fp2ui");
 		}
 		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
 			return JamLLVMBuildFPCast(ctx.getBuilder(), val, targetLLVM,

@@ -822,23 +822,57 @@ JamValueRef JamLLVMBuildFCmp(JamBuilderRef builder, JamFloatPredicate pred,
                              const char *name) {
 	llvm::CmpInst::Predicate llvmPred;
 	switch (pred) {
-	case JAM_FCMP_FALSE: llvmPred = llvm::CmpInst::FCMP_FALSE; break;
-	case JAM_FCMP_OEQ:   llvmPred = llvm::CmpInst::FCMP_OEQ; break;
-	case JAM_FCMP_OGT:   llvmPred = llvm::CmpInst::FCMP_OGT; break;
-	case JAM_FCMP_OGE:   llvmPred = llvm::CmpInst::FCMP_OGE; break;
-	case JAM_FCMP_OLT:   llvmPred = llvm::CmpInst::FCMP_OLT; break;
-	case JAM_FCMP_OLE:   llvmPred = llvm::CmpInst::FCMP_OLE; break;
-	case JAM_FCMP_ONE:   llvmPred = llvm::CmpInst::FCMP_ONE; break;
-	case JAM_FCMP_ORD:   llvmPred = llvm::CmpInst::FCMP_ORD; break;
-	case JAM_FCMP_UNO:   llvmPred = llvm::CmpInst::FCMP_UNO; break;
-	case JAM_FCMP_UEQ:   llvmPred = llvm::CmpInst::FCMP_UEQ; break;
-	case JAM_FCMP_UGT:   llvmPred = llvm::CmpInst::FCMP_UGT; break;
-	case JAM_FCMP_UGE:   llvmPred = llvm::CmpInst::FCMP_UGE; break;
-	case JAM_FCMP_ULT:   llvmPred = llvm::CmpInst::FCMP_ULT; break;
-	case JAM_FCMP_ULE:   llvmPred = llvm::CmpInst::FCMP_ULE; break;
-	case JAM_FCMP_UNE:   llvmPred = llvm::CmpInst::FCMP_UNE; break;
-	case JAM_FCMP_TRUE:  llvmPred = llvm::CmpInst::FCMP_TRUE; break;
-	default:             llvmPred = llvm::CmpInst::FCMP_OEQ; break;
+	case JAM_FCMP_FALSE:
+		llvmPred = llvm::CmpInst::FCMP_FALSE;
+		break;
+	case JAM_FCMP_OEQ:
+		llvmPred = llvm::CmpInst::FCMP_OEQ;
+		break;
+	case JAM_FCMP_OGT:
+		llvmPred = llvm::CmpInst::FCMP_OGT;
+		break;
+	case JAM_FCMP_OGE:
+		llvmPred = llvm::CmpInst::FCMP_OGE;
+		break;
+	case JAM_FCMP_OLT:
+		llvmPred = llvm::CmpInst::FCMP_OLT;
+		break;
+	case JAM_FCMP_OLE:
+		llvmPred = llvm::CmpInst::FCMP_OLE;
+		break;
+	case JAM_FCMP_ONE:
+		llvmPred = llvm::CmpInst::FCMP_ONE;
+		break;
+	case JAM_FCMP_ORD:
+		llvmPred = llvm::CmpInst::FCMP_ORD;
+		break;
+	case JAM_FCMP_UNO:
+		llvmPred = llvm::CmpInst::FCMP_UNO;
+		break;
+	case JAM_FCMP_UEQ:
+		llvmPred = llvm::CmpInst::FCMP_UEQ;
+		break;
+	case JAM_FCMP_UGT:
+		llvmPred = llvm::CmpInst::FCMP_UGT;
+		break;
+	case JAM_FCMP_UGE:
+		llvmPred = llvm::CmpInst::FCMP_UGE;
+		break;
+	case JAM_FCMP_ULT:
+		llvmPred = llvm::CmpInst::FCMP_ULT;
+		break;
+	case JAM_FCMP_ULE:
+		llvmPred = llvm::CmpInst::FCMP_ULE;
+		break;
+	case JAM_FCMP_UNE:
+		llvmPred = llvm::CmpInst::FCMP_UNE;
+		break;
+	case JAM_FCMP_TRUE:
+		llvmPred = llvm::CmpInst::FCMP_TRUE;
+		break;
+	default:
+		llvmPred = llvm::CmpInst::FCMP_OEQ;
+		break;
 	}
 	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateFCmp(
 	    llvmPred, UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));

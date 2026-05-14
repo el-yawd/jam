@@ -60,7 +60,7 @@ typedef enum {
 // `U` = unordered (NaN inputs → true). Jam emits the ordered
 // variants by default so NaN never satisfies a comparison.
 typedef enum {
-	JAM_FCMP_FALSE = 50, // always false
+	JAM_FCMP_FALSE = 50,  // always false
 	JAM_FCMP_OEQ = 51,
 	JAM_FCMP_OGT = 52,
 	JAM_FCMP_OGE = 53,
