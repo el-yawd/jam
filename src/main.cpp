@@ -137,9 +137,9 @@ static int compileAndRun(const std::string &filename,
 			if (!symbolTable.hasSymbol(destImport->Path, name)) {
 				// Throw so the outer catch prefixes the importing
 				// file's path on the error message.
-				throw std::runtime_error(
-				    "symbol `" + name + "` is not exported from module `" +
-				    destImport->Path + "`");
+				throw std::runtime_error("symbol `" + name +
+				                         "` is not exported from module `" +
+				                         destImport->Path + "`");
 			}
 			symbolTable.registerBinding(name, destImport->Path, name);
 		}

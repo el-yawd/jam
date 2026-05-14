@@ -219,9 +219,7 @@ ModuleAST *ModuleResolver::getOrLoadModule(const std::string &importPath) {
 			getOrLoadModule(importPath);
 		}
 	};
-	for (const auto &import : module->Imports) {
-		loadNested(import->Path);
-	}
+	for (const auto &import : module->Imports) { loadNested(import->Path); }
 	for (const auto &destImport : module->DestructuringImports) {
 		loadNested(destImport->Path);
 	}

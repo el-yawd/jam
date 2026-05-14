@@ -1410,7 +1410,8 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 			bool nextIsConst = check(TOK_CONST);
 			current = pubSaved;
 			if (nextIsConst) {
-				advance();  // consume `pub`; const branch below handles the rest.
+				advance();  // consume `pub`; const branch below handles the
+				            // rest.
 				isPub = true;
 				// Reject `pub const { ... } = import(...)` upfront so the
 				// later destructuring-import path doesn't silently drop pub.
