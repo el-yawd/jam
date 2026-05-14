@@ -1,0 +1,36 @@
+const { assert } = import("test");
+const { File } = import("std/fs");
+
+extern fn remove(path: *const[] u8) i32;
+
+const FsFile = File();
+
+tfn writeReadRoundTrip() {
+    var path: []u8 = "jam_std_fs_test.tmp";
+
+    // Best-effort cleanup from a previous run.
+    remove(path.ptr as *const[] u8);
+
+    var writer: FsFile = FsFile.open(path, "wb");
+    var written: u64 = writer.write("hello fs");
+    assert(written as i32, 8);
+    assert(writer.close(), 0);
+
+    var reader: FsFile = FsFile.open(path, "rb");
+    var buf: [16]u8 = [0; 16];
+    var readN: u64 = reader.read(&buf[0], 16);
+    assert(readN as i32, 8);
+    assert(reader.close(), 0);
+
+    // "hello fs"
+    assert(buf[0], 104);
+    assert(buf[1], 101);
+    assert(buf[2], 108);
+    assert(buf[3], 108);
+    assert(buf[4], 111);
+    assert(buf[5], 32);
+    assert(buf[6], 102);
+    assert(buf[7], 115);
+
+    assert(remove(path.ptr as *const[] u8), 0);
+}

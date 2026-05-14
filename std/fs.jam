@@ -1,0 +1,36 @@
+// std.fs — minimal libc-backed file I/O.
+//
+// `File()` returns a concrete file-handle type with simple open/read/write/close
+// methods. This keeps the API consistent with other std modules that expose
+// type constructors (`Vec(T)`, `Option(T)`).
+
+pub extern fn fopen(path: *const[] u8, mode: *const[] u8) *mut[] u8;
+pub extern fn fread(ptr: *mut[] u8, size: u64, count: u64, stream: *mut[] u8) u64;
+pub extern fn fwrite(ptr: *const[] u8, size: u64, count: u64, stream: *mut[] u8) u64;
+pub extern fn fclose(stream: *mut[] u8) i32;
+
+pub fn File() type {
+    return struct {
+        handle: *mut[] u8,
+
+        // `mode` follows libc fopen modes ("rb", "wb", "ab", ...).
+        fn open(path: []u8, mode: []u8) Self {
+            var raw: *mut[] u8 = fopen(path.ptr as *const[] u8, mode.ptr as *const[] u8);
+            return { handle: raw };
+        }
+
+        // Reads up to `maxBytes` into `dst`. Returns number of bytes read.
+        fn read(self: Self, dst: *mut[] u8, maxBytes: u64) u64 {
+            return fread(dst, 1, maxBytes, self.handle);
+        }
+
+        // Writes all bytes from `data`. Returns number of bytes written.
+        fn write(self: Self, data: []u8) u64 {
+            return fwrite(data.ptr as *const[] u8, 1, data.len as u64, self.handle);
+        }
+
+        fn close(self: Self) i32 {
+            return fclose(self.handle);
+        }
+    };
+}
