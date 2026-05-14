@@ -27,27 +27,27 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string g_stdPathOverride;
+std::optional<std::string> g_stdPathOverride;
 
 // Locate the running jam executable's filesystem path, with symlinks
-// resolved. Returns "" on platforms we don't handle; callers must
-// gracefully fall back to other lookups.
-std::string getExecutablePath() {
+// resolved. Returns std::nullopt on platforms we don't handle so
+// callers fall back to other lookups.
+std::optional<std::string> getExecutablePath() {
 #if defined(__APPLE__)
 	char buf[PATH_MAX];
 	uint32_t size = sizeof(buf);
-	if (_NSGetExecutablePath(buf, &size) != 0) return "";
+	if (_NSGetExecutablePath(buf, &size) != 0) return std::nullopt;
 	char real[PATH_MAX];
 	if (realpath(buf, real) != nullptr) return std::string(real);
 	return std::string(buf);
 #elif defined(__linux__)
 	char buf[PATH_MAX];
 	ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-	if (len <= 0) return "";
+	if (len <= 0) return std::nullopt;
 	buf[len] = '\0';
 	return std::string(buf);
 #else
-	return "";
+	return std::nullopt;
 #endif
 }
 
@@ -56,32 +56,37 @@ std::string getExecutablePath() {
 //   2. `JAM_STD_PATH` env var — used as-is when non-empty.
 //   3. `<bindir>/../lib/jam/std` — binary-relative install layout
 //      (matches `$PREFIX/lib/jam/std` shipped by `make install`).
-// Returns "" when none are available; the resolver then falls back
-// to the in-tree CWD `std/` lookup so dev workflows still work.
-const std::string &stdRoot() {
-	static const std::string root = []() -> std::string {
-		if (!g_stdPathOverride.empty()) return g_stdPathOverride;
+// Returns std::nullopt when none are available; the resolver then
+// falls back to the in-tree CWD `std/` lookup so dev workflows still
+// work.
+const std::optional<std::string> &stdRoot() {
+	static const std::optional<std::string> root =
+	    []() -> std::optional<std::string> {
+		if (g_stdPathOverride) return g_stdPathOverride;
 		if (const char *env = std::getenv("JAM_STD_PATH")) {
 			if (env[0] != '\0') return std::string(env);
 		}
-		std::string exe = getExecutablePath();
-		if (exe.empty()) return "";
-		fs::path binDir = fs::path(exe).parent_path();
+		auto exe = getExecutablePath();
+		if (!exe) return std::nullopt;
+		fs::path binDir = fs::path(*exe).parent_path();
 		fs::path candidate = binDir / ".." / "lib" / "jam" / "std";
 		std::error_code ec;
 		fs::path canonical = fs::weakly_canonical(candidate, ec);
-		if (ec) return "";
+		if (ec) return std::nullopt;
 		if (fs::exists(canonical) && fs::is_directory(canonical)) {
 			return canonical.string();
 		}
-		return "";
+		return std::nullopt;
 	}();
 	return root;
 }
 
 }  // namespace
 
-void setStdPathOverride(const std::string &path) { g_stdPathOverride = path; }
+void setStdPathOverride(const std::string &path) {
+	if (path.empty()) g_stdPathOverride.reset();
+	else g_stdPathOverride = path;
+}
 
 ModuleResolver::ModuleResolver(const std::string &baseDir, TypePool &typePool_,
                                StringPool &stringPool_, NodeStore &nodeStore_)
@@ -111,13 +116,12 @@ std::string ModuleResolver::resolve(const std::string &importPath) const {
 	std::string stdPath = path;
 	if (stdPath.rfind("std/", 0) == 0) { stdPath = stdPath.substr(4); }
 
-	const std::string &root = stdRoot();
-	if (!root.empty()) {
-		fs::path fileCandidate = fs::path(root) / (stdPath + ".jam");
+	if (const auto &root = stdRoot(); root) {
+		fs::path fileCandidate = fs::path(*root) / (stdPath + ".jam");
 		if (fs::exists(fileCandidate) && fs::is_regular_file(fileCandidate)) {
 			return fs::canonical(fileCandidate).string();
 		}
-		fs::path indexCandidate = fs::path(root) / stdPath / "mod.jam";
+		fs::path indexCandidate = fs::path(*root) / stdPath / "mod.jam";
 		if (fs::exists(indexCandidate) && fs::is_regular_file(indexCandidate)) {
 			return fs::canonical(indexCandidate).string();
 		}
