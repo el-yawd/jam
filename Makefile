@@ -22,6 +22,8 @@ else
 endif
 
 BINDIR ?= $(PREFIX)/bin
+LIBDIR ?= $(PREFIX)/lib
+STDDIR ?= $(LIBDIR)/jam/std
 
 build:
 	@if ! command -v $(LLVM_CONFIG) >/dev/null 2>&1; then \
@@ -68,12 +70,18 @@ cmake-uninstall:
 install: build
 	@echo "Installing Jam compiler to $(PREFIX)..."
 	@echo "Platform: $(PLATFORM)"
+	install -d $(BINDIR)
 	cp ./jam.out $(BINDIR)/jam
 	chmod 755 $(BINDIR)/jam
+	@echo "Installing Jam standard library to $(STDDIR)..."
+	install -d $(STDDIR)
+	rm -rf $(STDDIR)
+	cp -R ./std $(STDDIR)
 
 uninstall:
 	@echo "Uninstalling Jam compiler..."
 	rm -f $(BINDIR)/jam
+	rm -rf $(LIBDIR)/jam
 
 clean:
 	rm -f ./jam_llvm.o ./main.o ./lexer.o ./parser.o ./ast.o ./codegen.o ./target.o ./cabi.o ./module_resolver.o ./symbol_table.o ./jam.out

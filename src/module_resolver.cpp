@@ -8,12 +8,79 @@
 #include "module_resolver.h"
 #include "lexer.h"
 #include "parser.h"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+#include <climits>
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
+
+namespace {
+
+std::string g_stdPathOverride;
+
+// Locate the running jam executable's filesystem path, with symlinks
+// resolved. Returns "" on platforms we don't handle; callers must
+// gracefully fall back to other lookups.
+std::string getExecutablePath() {
+#if defined(__APPLE__)
+	char buf[PATH_MAX];
+	uint32_t size = sizeof(buf);
+	if (_NSGetExecutablePath(buf, &size) != 0) return "";
+	char real[PATH_MAX];
+	if (realpath(buf, real) != nullptr) return std::string(real);
+	return std::string(buf);
+#elif defined(__linux__)
+	char buf[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+	if (len <= 0) return "";
+	buf[len] = '\0';
+	return std::string(buf);
+#else
+	return "";
+#endif
+}
+
+// Compute the standard-library root once per process. Order:
+//   1. `--std-path <path>` CLI flag (via setStdPathOverride).
+//   2. `JAM_STD_PATH` env var — used as-is when non-empty.
+//   3. `<bindir>/../lib/jam/std` — binary-relative install layout
+//      (matches `$PREFIX/lib/jam/std` shipped by `make install`).
+// Returns "" when none are available; the resolver then falls back
+// to the in-tree CWD `std/` lookup so dev workflows still work.
+const std::string &stdRoot() {
+	static const std::string root = []() -> std::string {
+		if (!g_stdPathOverride.empty()) return g_stdPathOverride;
+		if (const char *env = std::getenv("JAM_STD_PATH")) {
+			if (env[0] != '\0') return std::string(env);
+		}
+		std::string exe = getExecutablePath();
+		if (exe.empty()) return "";
+		fs::path binDir = fs::path(exe).parent_path();
+		fs::path candidate = binDir / ".." / "lib" / "jam" / "std";
+		std::error_code ec;
+		fs::path canonical = fs::weakly_canonical(candidate, ec);
+		if (ec) return "";
+		if (fs::exists(canonical) && fs::is_directory(canonical)) {
+			return canonical.string();
+		}
+		return "";
+	}();
+	return root;
+}
+
+}  // namespace
+
+void setStdPathOverride(const std::string &path) { g_stdPathOverride = path; }
 
 ModuleResolver::ModuleResolver(const std::string &baseDir, TypePool &typePool_,
                                StringPool &stringPool_, NodeStore &nodeStore_)
@@ -37,9 +104,29 @@ std::string ModuleResolver::resolve(const std::string &importPath) const {
 		return fs::canonical(indexPath).string();
 	}
 
-	fs::path stdPath = fs::path("std") / (path + ".jam");
-	if (fs::exists(stdPath) && fs::is_regular_file(stdPath)) {
-		return fs::canonical(stdPath).string();
+	// Standard-library lookup. Accept both `import("collections")` and
+	// `import("std/collections")` spellings by stripping a leading
+	// `std/` so the bare module name resolves under the std root.
+	std::string stdPath = path;
+	if (stdPath.rfind("std/", 0) == 0) { stdPath = stdPath.substr(4); }
+
+	const std::string &root = stdRoot();
+	if (!root.empty()) {
+		fs::path fileCandidate = fs::path(root) / (stdPath + ".jam");
+		if (fs::exists(fileCandidate) && fs::is_regular_file(fileCandidate)) {
+			return fs::canonical(fileCandidate).string();
+		}
+		fs::path indexCandidate = fs::path(root) / stdPath / "mod.jam";
+		if (fs::exists(indexCandidate) && fs::is_regular_file(indexCandidate)) {
+			return fs::canonical(indexCandidate).string();
+		}
+	}
+
+	// In-tree dev fallback: `<CWD>/std/<path>.jam`. Lets a fresh build
+	// of jam.out run unit tests without first installing the std lib.
+	fs::path devPath = fs::path("std") / (stdPath + ".jam");
+	if (fs::exists(devPath) && fs::is_regular_file(devPath)) {
+		return fs::canonical(devPath).string();
 	}
 
 	return "";  // Not found

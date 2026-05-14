@@ -16,6 +16,9 @@
 #include <unordered_set>
 #include <vector>
 
+// Override the standard-library lookup root.
+void setStdPathOverride(const std::string &path);
+
 class ModuleResolver {
   public:
 	ModuleResolver(const std::string &baseDir, TypePool &typePool,

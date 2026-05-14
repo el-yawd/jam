@@ -823,6 +823,9 @@ static void printHelp(const char *prog) {
 	       "  --target-info   Show host target info (arch, triple, "
 	       "pointer size, ...)\n"
 	       "  -o <name>       Output binary name (default: output)\n"
+	       "  --std-path <dir>\n"
+	       "                  Override the standard-library root used to\n"
+	       "                  Takes precedence over the JAM_STD_PATH env var.\n"
 	       "  -l<name>, --library <name>\n"
 	       "                  Link against system library <name>\n"
 	       "  -h, --help      Show this help and exit\n"
@@ -880,6 +883,7 @@ int main(int argc, char *argv[]) {
 	JamStrip strip = JAM_STRIP_NONE;
 	std::string filename;
 	std::string outputName = "output";
+	std::string stdPathOverride;
 	std::vector<std::string> linkLibs;
 
 	if (argc < 2) {
@@ -1026,6 +1030,10 @@ int main(int argc, char *argv[]) {
 			outputName = argv[++i];
 			continue;
 		}
+		if (arg == "--std-path" && i + 1 < argc) {
+			stdPathOverride = argv[++i];
+			continue;
+		}
 		filename = arg;
 		break;
 	}
@@ -1039,7 +1047,7 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	// Get target information
+	if (!stdPathOverride.empty()) { setStdPathOverride(stdPathOverride); }
 	jam::Target target = jam::Target::getHostTarget();
 	jam::CAbi cabi(target);
 

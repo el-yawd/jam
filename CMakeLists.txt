@@ -68,6 +68,11 @@ install(FILES
   COMPONENT Documentation
 )
 
+install(DIRECTORY std/
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/jam/std
+  COMPONENT Runtime
+)
+
 install(DIRECTORY DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
 message(STATUS "Jam will be installed to: ${CMAKE_INSTALL_PREFIX}")
