@@ -1,0 +1,11 @@
+// std.option — tagged optional value.
+//
+// `Option(T)` carries a value via `Some(T)` or signals absence via
+// `None`. Match-exhaustive: every consumer must handle both arms.
+
+pub fn Option(T: type) type {
+    return enum {
+        Some(T),
+        None,
+    };
+}

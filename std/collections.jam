@@ -1,25 +1,20 @@
 // std.collections — dynamic data structures.
 //
-// `Option(T)` — tagged optional. `Some(T)` carries a value; `None`
-// signals absence. Used by fallible getters / poppers.
-//
 // `Vec(T)` — growable dynamic array. Uses libc malloc / free /
 // realloc as the backing allocator. MVS auto-drops the backing
 // buffer at scope exit. A user-pluggable Allocator interface is
 // deferred until function-pointer support lands in the compiler;
 // once it does, `std.mem.Allocator` will be a runtime vtable type
 // matching Zig's `std.mem.Allocator`.
+//
+// `Option(T)` lives in `std/option` and is imported here for
+// fallible getters / poppers.
+
+const { Option } = import("option");
 
 pub extern fn malloc(size: u64) *mut[] u8;
 pub extern fn free(ptr: *mut[] u8);
 pub extern fn realloc(ptr: *mut[] u8, size: u64) *mut[] u8;
-
-pub fn Option(T: type) type {
-    return enum {
-        Some(T),
-        None,
-    };
-}
 
 pub fn Vec(T: type) type {
     return struct {
