@@ -1001,8 +1001,8 @@ NodeIdx Parser::parseUnary() {
 				}
 				for (auto it = casts.rbegin(); it != casts.rend(); ++it) {
 					newLit = emit(AstNode{AstTag::AsCast, 0, 0, 0,
-					                       static_cast<uint32_t>(newLit),
-					                       static_cast<uint32_t>(*it)});
+					                      static_cast<uint32_t>(newLit),
+					                      static_cast<uint32_t>(*it)});
 				}
 			}
 			return wrapAs(newLit);

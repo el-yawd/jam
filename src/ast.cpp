@@ -3057,11 +3057,10 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		TypeIdx targetTy = static_cast<TypeIdx>(n.rhs);
 		JamTypeRef targetLLVM = ctx.getLLVMType(targetTy);
 		const AstNode &operandNode = ctx.getNodeStore().get(operandIdx);
-		JamTypeRef innerExpected =
-		    (operandNode.tag == AstTag::NumberLit &&
-		     JamLLVMTypeIsInteger(targetLLVM))
-		        ? targetLLVM
-		        : nullptr;
+		JamTypeRef innerExpected = (operandNode.tag == AstTag::NumberLit &&
+		                            JamLLVMTypeIsInteger(targetLLVM))
+		                               ? targetLLVM
+		                               : nullptr;
 		JamValueRef val = codegenNode(ctx, operandIdx, innerExpected);
 		if (!val) return nullptr;
 		JamTypeRef srcLLVM = JamLLVMTypeOf(val);
