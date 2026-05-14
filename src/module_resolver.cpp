@@ -202,18 +202,28 @@ ModuleAST *ModuleResolver::getOrLoadModule(const std::string &importPath) {
 		return nullptr;
 	}
 
-	for (const auto &import : module->Imports) {
-		if (import->Path != "std") {
-			fs::path modulePath(resolvedPath);
-			std::string moduleDir = modulePath.parent_path().string();
-			ModuleResolver nestedResolver(moduleDir, *typePool, *stringPool,
-			                              *nodeStore);
-
-			std::string nestedResolved = nestedResolver.resolve(import->Path);
-			if (!nestedResolved.empty() && nestedResolved != "std") {
-				getOrLoadModule(import->Path);
-			}
+	// Recursively load both regular imports (`const x = import(...)`)
+	// and destructuring imports (`const { X } = import(...)`). The
+	// nested resolver runs in the source module's directory so relative
+	// paths work; we then forward to the top-level `getOrLoadModule` so
+	// every resolved module ends up in the shared `loadedModules` map
+	// and gets its `pub` symbols registered by main.cpp.
+	auto loadNested = [&](const std::string &importPath) {
+		if (importPath == "std") return;
+		fs::path modulePath(resolvedPath);
+		std::string moduleDir = modulePath.parent_path().string();
+		ModuleResolver nestedResolver(moduleDir, *typePool, *stringPool,
+		                              *nodeStore);
+		std::string nestedResolved = nestedResolver.resolve(importPath);
+		if (!nestedResolved.empty() && nestedResolved != "std") {
+			getOrLoadModule(importPath);
 		}
+	};
+	for (const auto &import : module->Imports) {
+		loadNested(import->Path);
+	}
+	for (const auto &destImport : module->DestructuringImports) {
+		loadNested(destImport->Path);
 	}
 
 	currentlyLoading.erase(importPath);

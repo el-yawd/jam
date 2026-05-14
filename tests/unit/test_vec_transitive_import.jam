@@ -1,0 +1,26 @@
+// bug fix test: importing only `Vec` must compile even though
+// `Vec(T)`'s methods reference `Option(T)` (which lives in
+// std/option). The module resolver follows destructuring imports
+// when walking the import graph, so Option is loaded transitively
+// without the user naming it anywhere in this file.
+const { assert } = import("test");
+const { Vec } = import("std/collections");
+
+tfn popWithoutExplicitOptionImport() {
+    var v: Vec(i32) = Vec(i32).empty();
+    v.push(1);
+    v.push(2);
+    // pop() returns Option(i32). We never spell `Option` here.
+    v.pop();
+    v.pop();
+    assert(v.len() as i32, 0);
+}
+
+tfn getWithoutExplicitOptionImport() {
+    var v: Vec(i32) = Vec(i32).empty();
+    v.push(7);
+    // get() also returns Option(i32). Same transitive concern.
+    v.get(0);
+    v.get(99);
+    assert(v.len() as i32, 1);
+}

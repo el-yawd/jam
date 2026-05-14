@@ -1399,6 +1399,30 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 	auto module = std::make_unique<ModuleAST>();
 
 	while (!isAtEnd()) {
+		// `pub` at module scope marks the next decl as exported. When
+		// the next token is `const` we absorb `pub` here and tag the
+		// resulting decl AST. When it's `fn`/`extern`/`tfn`/`export`,
+		// we leave it untouched so parseFunction can consume it itself.
+		bool isPub = false;
+		if (check(TOK_PUB)) {
+			int pubSaved = current;
+			advance();
+			bool nextIsConst = check(TOK_CONST);
+			current = pubSaved;
+			if (nextIsConst) {
+				advance();  // consume `pub`; const branch below handles the rest.
+				isPub = true;
+				// Reject `pub const { ... } = import(...)` upfront so the
+				// later destructuring-import path doesn't silently drop pub.
+				int peek = current + 1;
+				if (peek < static_cast<int>(tokens.size()) &&
+				    tokens[peek].type == TOK_OPEN_BRACE) {
+					throw std::runtime_error(
+					    "`pub` is not allowed on destructuring imports");
+				}
+			}
+		}
+
 		if (check(TOK_CONST)) {
 			int saved = current;
 			advance();
@@ -1415,35 +1439,49 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 				// `const NAME : T = …` — typed module const.
 				if (check(TOK_COLON)) {
 					current = saved;
-					module->Consts.push_back(parseConstDecl());
+					auto c = parseConstDecl();
+					c->isPub = isPub;
+					module->Consts.push_back(std::move(c));
 					continue;
 				}
 				if (check(TOK_EQUAL)) {
 					advance();
 					if (check(TOK_IMPORT)) {
+						if (isPub) {
+							throw std::runtime_error(
+							    "`pub` is not allowed on imports");
+						}
 						current = saved;
 						module->Imports.push_back(parseImportDecl());
 						continue;
 					}
 					if (check(TOK_STRUCT)) {
 						current = saved;
-						module->Structs.push_back(parseStructDecl());
+						auto s = parseStructDecl();
+						s->isPub = isPub;
+						module->Structs.push_back(std::move(s));
 						continue;
 					}
 					if (check(TOK_UNION)) {
 						current = saved;
-						module->Unions.push_back(parseUnionDecl());
+						auto u = parseUnionDecl();
+						u->isPub = isPub;
+						module->Unions.push_back(std::move(u));
 						continue;
 					}
 					if (check(TOK_ENUM)) {
 						current = saved;
-						module->Enums.push_back(parseEnumDecl());
+						auto e = parseEnumDecl();
+						e->isPub = isPub;
+						module->Enums.push_back(std::move(e));
 						continue;
 					}
 					// `const NAME = expr;` — untyped module const,
 					// type inferred from the initializer.
 					current = saved;
-					module->Consts.push_back(parseConstDecl());
+					auto c = parseConstDecl();
+					c->isPub = isPub;
+					module->Consts.push_back(std::move(c));
 					continue;
 				}
 			}
@@ -1451,6 +1489,8 @@ std::unique_ptr<ModuleAST> Parser::parse() {
 			current = saved;
 		}
 
+		// `pub fn …` falls through here; parseFunction handles `pub`
+		// itself (its modifier-loop accepts `pub`/`extern`/`export`/`tfn`).
 		module->Functions.push_back(parseFunction());
 	}
 

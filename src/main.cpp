@@ -135,10 +135,11 @@ static int compileAndRun(const std::string &filename,
 		symbolTable.registerModule(destImport->Path, importedModule);
 		for (const auto &name : destImport->Names) {
 			if (!symbolTable.hasSymbol(destImport->Path, name)) {
-				std::cerr << "Error: Symbol '" << name
-				          << "' is not exported from module '"
-				          << destImport->Path << "'" << std::endl;
-				return 1;
+				// Throw so the outer catch prefixes the importing
+				// file's path on the error message.
+				throw std::runtime_error(
+				    "symbol `" + name + "` is not exported from module `" +
+				    destImport->Path + "`");
 			}
 			symbolTable.registerBinding(name, destImport->Path, name);
 		}

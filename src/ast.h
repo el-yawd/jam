@@ -103,6 +103,7 @@ class StructDeclAST {
 	std::string Name;
 	std::vector<std::pair<std::string, TypeIdx>> Fields;  // (name, type)
 	std::vector<std::unique_ptr<FunctionAST>> Methods;
+	bool isPub = false;
 
 	StructDeclAST(std::string Name,
 	              std::vector<std::pair<std::string, TypeIdx>> Fields,
@@ -139,6 +140,7 @@ class EnumDeclAST {
   public:
 	std::string Name;
 	std::vector<EnumVariantAST> Variants;
+	bool isPub = false;
 
 	EnumDeclAST(std::string Name, std::vector<EnumVariantAST> Variants)
 	    : Name(std::move(Name)), Variants(std::move(Variants)) {}
@@ -160,6 +162,7 @@ class UnionDeclAST {
   public:
 	std::string Name;
 	std::vector<std::pair<std::string, TypeIdx>> Fields;  // (name, type)
+	bool isPub = false;
 
 	UnionDeclAST(std::string Name,
 	             std::vector<std::pair<std::string, TypeIdx>> Fields)
@@ -185,6 +188,7 @@ class ConstDeclAST {
 	// before regular consts and registers the alias in the codegen
 	// context's type-alias table.
 	TypeIdx AliasedType = kNoType;
+	bool isPub = false;
 
 	ConstDeclAST(std::string Name, TypeIdx DeclaredType, NodeIdx InitExpr)
 	    : Name(std::move(Name)), DeclaredType(DeclaredType),

@@ -14,16 +14,33 @@ void SymbolTable::registerModule(const std::string &modulePath,
 
 	auto &symbols = moduleSymbols[modulePath];
 
+	auto registerPub = [&](const std::string &name, FunctionAST *func) {
+		ExportedSymbol sym;
+		sym.name = name;
+		sym.modulePath = modulePath;
+		sym.function = func;  // nullptr for non-function exports
+		sym.isPub = true;
+		symbols[name] = sym;
+	};
+
 	for (auto &func : module->Functions) {
-		// Only register pub functions as exportable
-		if (func->isPub) {
-			ExportedSymbol sym;
-			sym.name = func->Name;
-			sym.modulePath = modulePath;
-			sym.function = func.get();
-			sym.isPub = true;
-			symbols[func->Name] = sym;
-		}
+		if (func->isPub) registerPub(func->Name, func.get());
+	}
+	// Top-level type / value decls are exportable when marked `pub`.
+	// Downstream consumers only check for existence (codegen finds the
+	// concrete struct/enum/union/const via its own per-module registry),
+	// so the function pointer stays null.
+	for (auto &s : module->Structs) {
+		if (s->isPub) registerPub(s->Name, nullptr);
+	}
+	for (auto &e : module->Enums) {
+		if (e->isPub) registerPub(e->Name, nullptr);
+	}
+	for (auto &u : module->Unions) {
+		if (u->isPub) registerPub(u->Name, nullptr);
+	}
+	for (auto &c : module->Consts) {
+		if (c->isPub) registerPub(c->Name, nullptr);
 	}
 }
 
