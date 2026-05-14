@@ -927,8 +927,19 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 		return JamLLVMBuildXor(ctx.getBuilder(), L, R, "xortmp");
 	case BinOp::Shl:
 		return JamLLVMBuildShl(ctx.getBuilder(), L, R, "shltmp");
-	case BinOp::Shr:
-		return JamLLVMBuildLShr(ctx.getBuilder(), L, R, "shrtmp");
+	case BinOp::Shr: {
+		// this one was a pain because:
+		// arithmetic shift right for signed operands so the sign bit
+		// propagates (matches C's behaviour for signed >>); logical
+		// shift for unsigned. Without this an `i64` value of -16 >> 12
+		// became a huge positive number, which broke the psone emulator
+		// IR-clamp pipeline and made every 3D scene render as a
+		// stretched streak.
+		bool signed_ =
+		    isSignedIntExpr(ctx, lhsIdx) || isSignedIntExpr(ctx, rhsIdx);
+		return signed_ ? JamLLVMBuildAShr(ctx.getBuilder(), L, R, "shrtmp")
+		               : JamLLVMBuildLShr(ctx.getBuilder(), L, R, "shrtmp");
+	}
 	case BinOp::Eq:
 		return JamLLVMBuildICmp(ctx.getBuilder(), JAM_ICMP_EQ, L, R, "cmptmp");
 	case BinOp::Ne:
@@ -3045,7 +3056,13 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		NodeIdx operandIdx = static_cast<NodeIdx>(n.lhs);
 		TypeIdx targetTy = static_cast<TypeIdx>(n.rhs);
 		JamTypeRef targetLLVM = ctx.getLLVMType(targetTy);
-		JamValueRef val = codegenNode(ctx, operandIdx);
+		const AstNode &operandNode = ctx.getNodeStore().get(operandIdx);
+		JamTypeRef innerExpected =
+		    (operandNode.tag == AstTag::NumberLit &&
+		     JamLLVMTypeIsInteger(targetLLVM))
+		        ? targetLLVM
+		        : nullptr;
+		JamValueRef val = codegenNode(ctx, operandIdx, innerExpected);
 		if (!val) return nullptr;
 		JamTypeRef srcLLVM = JamLLVMTypeOf(val);
 		if (srcLLVM == targetLLVM) return val;
@@ -3061,8 +3078,11 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 			                           "as.tag.cast");
 		}
 		if (JamLLVMTypeIsInteger(srcLLVM) && JamLLVMTypeIsInteger(targetLLVM)) {
-			return JamLLVMBuildIntCast(ctx.getBuilder(), val, targetLLVM, false,
-			                           "as.icast");
+			// sign-extend when widening a signed source so e.g. an i8
+			// holding -16 becomes i64 -16 rather than i64 +240.
+			bool signedSrc = isSignedIntExpr(ctx, operandIdx);
+			return JamLLVMBuildIntCast(ctx.getBuilder(), val, targetLLVM,
+			                           signedSrc, "as.icast");
 		}
 		if (JamLLVMTypeIsInteger(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
 			return JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,

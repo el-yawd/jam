@@ -968,6 +968,45 @@ NodeIdx Parser::parseUnary() {
 	}
 	if (match(TOK_MINUS)) {
 		NodeIdx operand = parseUnary();
+		// fold a leading "-" into the literal's sign so the natural type
+		// is signed. Otherwise "-16 as i64" parses as "Neg(AsCast(16,
+		// i64))" where the inner 16 is a u8.
+		auto innerLit = [&](NodeIdx idx) -> NodeIdx {
+			NodeIdx cur = idx;
+			while (true) {
+				const AstNode &n = nodes->get(cur);
+				if (n.tag == AstTag::NumberLit) { return cur; }
+				if (n.tag == AstTag::AsCast) {
+					cur = static_cast<NodeIdx>(n.lhs);
+					continue;
+				}
+				return kNoNode;
+			}
+		};
+		NodeIdx litIdx = innerLit(operand);
+		if (litIdx != kNoNode) {
+			AstNode lit = nodes->get(litIdx);
+			lit.flags = static_cast<uint16_t>(lit.flags ^ 1u);
+			NodeIdx newLit = emit(lit);
+			// if the original operand was a cast, rebuild the cast chain
+			// around the sign-flipped literal so "-16 as i64" becomes
+			// "AsCast(NumberLit(-16), i64)".
+			if (operand != litIdx) {
+				NodeIdx cur = operand;
+				std::vector<TypeIdx> casts;
+				while (cur != litIdx) {
+					const AstNode &n = nodes->get(cur);
+					casts.push_back(static_cast<TypeIdx>(n.rhs));
+					cur = static_cast<NodeIdx>(n.lhs);
+				}
+				for (auto it = casts.rbegin(); it != casts.rend(); ++it) {
+					newLit = emit(AstNode{AstTag::AsCast, 0, 0, 0,
+					                       static_cast<uint32_t>(newLit),
+					                       static_cast<uint32_t>(*it)});
+				}
+			}
+			return wrapAs(newLit);
+		}
 		return wrapAs(
 		    emit(AstNode{AstTag::UnaryOp, static_cast<uint8_t>(UnaryOp::Neg), 0,
 		                 0, static_cast<uint32_t>(operand), 0}));

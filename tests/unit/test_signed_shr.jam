@@ -1,0 +1,70 @@
+// Signed-arithmetic vs unsigned-logical right-shift dispatch.
+
+const { assert } = import("test");
+
+fn shrI64(a: i64, b: i64) i64 { return a >> b; }
+fn shrI32(a: i32, b: i32) i32 { return a >> b; }
+fn shrI16(a: i16, b: i16) i16 { return a >> b; }
+fn shrI8(a: i8, b: i8) i8 { return a >> b; }
+fn shrU64(a: u64, b: u64) u64 { return a >> b; }
+fn shrU32(a: u32, b: u32) u32 { return a >> b; }
+
+// Signed shifts must preserve the sign bit (arithmetic shift right)
+
+tfn shrI64Negative() {
+    // -16 >> 12 = -1
+    assert(shrI64(-16 as i64, 12 as i64) as i32, -1);
+    // -61843 >> 12 = -16
+    assert(shrI64(-61843 as i64, 12 as i64) as i32, -16);
+    // -1 >> 4 = -1
+    assert(shrI64(-1 as i64, 4 as i64) as i32, -1);
+    // -256 >> 4 = -16
+    assert(shrI64(-256 as i64, 4 as i64) as i32, -16);
+}
+
+tfn shrI64Positive() {
+    // Positive values are unchanged by the AShr/LShr distinction
+    assert(shrI64(65536 as i64, 16 as i64) as i32, 1);
+    assert(shrI64(1024 as i64, 4 as i64) as i32, 64);
+    assert(shrI64(0 as i64, 12 as i64) as i32, 0);
+}
+
+tfn shrI32Negative() {
+    // -16 >> 12 = -1
+    assert(shrI32(-16, 12), -1);
+    // INT32_MIN >> 31 = -1 (sign bit propagates all the way)
+    assert(shrI32(-2147483648, 31), -1);
+}
+
+tfn shrI16Negative() {
+    // -256 >> 4 = -16
+    assert(shrI16(-256 as i16, 4 as i16) as i32, -16);
+    // -32768 >> 15 = -1
+    assert(shrI16(-32768 as i16, 15 as i16) as i32, -1);
+}
+
+tfn shrI8Negative() {
+    // -128 >> 7 = -1
+    assert(shrI8(-128 as i8, 7 as i8) as i32, -1);
+    // -16 >> 2 = -4
+    assert(shrI8(-16 as i8, 2 as i8) as i32, -4);
+}
+
+// Unsigned shifts must NOT propagate any sign bit (logical shift right).
+
+tfn shrU32Top() {
+    // 0xFFFFFFFF >> 1 = 0x7FFFFFFF
+    assert(shrU32(4294967295, 1), 2147483647);
+    // 0x80000000 >> 31 = 1 (not -1)
+    assert(shrU32(2147483648, 31), 1);
+}
+
+tfn shrU64Top() {
+    // 0xFFFFFFFFFFFFFFFF >> 1 should NOT propagate the high bit.
+    // u64 max as i32 truncation gives -1; (u64 max >> 1) as i32 gives -1
+    // too, but the upper-half check separates the two: shifted >> 32
+    // must be 0x7FFFFFFF for logical, 0xFFFFFFFF (-1) for arithmetic.
+    const v: u64 = shrU64(18446744073709551615, 1);
+    const hi: u32 = (v >> 32) as u32;
+    assert(hi as i32, 2147483647);   // = 0x7FFFFFFF
+}

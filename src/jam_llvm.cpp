@@ -641,6 +641,12 @@ JamValueRef JamLLVMBuildLShr(JamBuilderRef builder, JamValueRef lhs,
 	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
 }
 
+JamValueRef JamLLVMBuildAShr(JamBuilderRef builder, JamValueRef lhs,
+                             JamValueRef rhs, const char *name) {
+	return WRAP_VALUE(UNWRAP_BUILDER(builder)->CreateAShr(
+	    UNWRAP_VALUE(lhs), UNWRAP_VALUE(rhs), name));
+}
+
 JamValueRef JamLLVMBuildICmp(JamBuilderRef builder, JamIntPredicate pred,
                              JamValueRef lhs, JamValueRef rhs,
                              const char *name) {

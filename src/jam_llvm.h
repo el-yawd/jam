@@ -255,6 +255,9 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildShl(JamBuilderRef builder, JamValueRef lhs,
 JAM_EXTERN_C JamValueRef JamLLVMBuildLShr(JamBuilderRef builder,
                                           JamValueRef lhs, JamValueRef rhs,
                                           const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildAShr(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
 
 JAM_EXTERN_C JamValueRef JamLLVMBuildICmp(JamBuilderRef builder,
                                           JamIntPredicate pred, JamValueRef lhs,
