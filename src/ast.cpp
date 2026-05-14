@@ -41,8 +41,15 @@ static JamValueRef coerceTo(JamCodegenContext &ctx, JamValueRef val,
 	JamTypeRef actual = JamLLVMTypeOf(val);
 	if (actual == expected) return val;
 	if (JamLLVMTypeIsFloat(expected) && JamLLVMTypeIsInteger(actual)) {
-		return JamLLVMBuildSIToFP(ctx.getBuilder(), val, expected,
-		                          "assign_si2fp");
+		// note:
+		// implicit int-to-float coercion is rejected: a float-typed
+		// destination needs a float literal (e.g. `3.0`) or an explicit
+		// `as` cast. Catches `var x: f32 = 3;` early. without this check
+		// would silently emit `store i8 into f32` and produce malformed
+		// IR.
+		throw std::runtime_error(
+		    "cannot assign integer to float-typed destination; use a "
+		    "float literal (e.g. `3.0`) or an explicit `as` cast");
 	}
 	if (JamLLVMTypeIsFloat(expected) && JamLLVMTypeIsFloat(actual)) {
 		return JamLLVMBuildFPCast(ctx.getBuilder(), val, expected,
