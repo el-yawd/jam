@@ -1,0 +1,152 @@
+// Float literal + arithmetic coverage.
+
+const { assert } = import("test");
+
+fn addF64(a: f64, b: f64) f64 { return a + b; }
+fn subF32(a: f32, b: f32) f32 { return a - b; }
+fn mulF64(a: f64, b: f64) f64 { return a * b; }
+fn divF64(a: f64, b: f64) f64 { return a / b; }
+fn remF64(a: f64, b: f64) f64 { return a % b; }
+fn negF64(a: f64) f64 { return -a; }
+
+fn ltF64(a: f64, b: f64) bool { return a < b; }
+fn leF64(a: f64, b: f64) bool { return a <= b; }
+fn gtF64(a: f64, b: f64) bool { return a > b; }
+fn geF64(a: f64, b: f64) bool { return a >= b; }
+fn eqF64(a: f64, b: f64) bool { return a == b; }
+fn neF64(a: f64, b: f64) bool { return a != b; }
+
+tfn arithF64() {
+    assert(addF64(1.5, 2.5) as i32, 4);
+    assert(subF32(3.0 as f32, 1.25 as f32) as i32, 1);
+    assert(mulF64(3.0, 4.0) as i32, 12);
+    assert(divF64(10.0, 4.0) as i32, 2);
+    assert(remF64(10.5, 4.0) as i32, 2);
+}
+
+tfn negationFold() {
+    // The parser folds "-" into the literal's flags bit 0 so the sign
+    // survives through "as" casts. Without that, "-1.5" would lower as
+    // "-(u8 1) as f64" and yield +254 / similar nonsense.
+    var n: f64 = -1.5;
+    assert(negF64(n) as i32, 1);
+    assert(n < 0.0, true);
+    assert(n > 0.0, false);
+    // Double-negation cancels.
+    assert(negF64(negF64(n)) as i32, -1);
+}
+
+tfn comparisons() {
+    assert(ltF64(1.0, 2.0), true);
+    assert(ltF64(2.0, 1.0), false);
+    assert(leF64(1.0, 1.0), true);
+    assert(gtF64(2.0, 1.0), true);
+    assert(geF64(1.0, 1.0), true);
+    assert(eqF64(1.0, 1.0), true);
+    assert(eqF64(1.0, 1.5), false);
+    assert(neF64(1.0, 1.5), true);
+}
+
+tfn nanIsUnequal() {
+    // NaN compares OEQ false (ordered: NaN inputs -> false). This is
+    // why our FCmp emits the "O"-prefixed predicates. A NaN equals
+    // itself only under the unordered ("U"-prefixed) variant, which we
+    // intentionally don't expose for "==".
+    var nan: f64 = 0.0 / 0.0;
+    assert(eqF64(nan, nan), false);
+    assert(neF64(nan, nan), true);
+    assert(ltF64(nan, 0.0), false);
+    assert(gtF64(nan, 0.0), false);
+}
+
+fn castI32ToF32(n: i32) f32 { return n as f32; }
+fn castF64ToI32(n: f64) i32 { return n as i32; }
+fn castU32ToF32(n: u32) f32 { return n as f32; }
+fn castF64ToU32(n: f64) u32 { return n as u32; }
+fn castF32ToF64(n: f32) f64 { return n as f64; }
+fn castF64ToF32(n: f64) f32 { return n as f32; }
+
+tfn castsRoundTrip() {
+    // signed int -> float
+    assert(castI32ToF32(-7) as i32, -7);
+    assert(castF64ToI32(-7.9) as i32, -7);    // truncates toward zero
+    // unsigned int -> float: must NOT misinterpret high bit as sign.
+    // (255 as i32 = -1; 255 as u32 -> f32 must stay +255.)
+    assert(castU32ToF32(255), 255 as f32);
+    // f32 <-> f64 round-trip.
+    var d: f64 = 1.25;
+    assert(castF32ToF64(castF64ToF32(d)) as i32, 1);
+}
+
+fn mixedLitArith(x: f64) f64 { return x * 2.5 + 1.0; }
+
+tfn literalCoercion() {
+    // "var x: f32 = 3" lowers the integer literal at f32, not at i*N.
+    var fromInt: f32 = 3;
+    assert(fromInt as i32, 3);
+    // Mixed literal/concrete arithmetic resolves to the variable's
+    // type — "x * 2.5" with x: f64 keeps everything as f64.
+    assert(mixedLitArith(4.0) as i32, 11);
+}
+
+fn mix32Plus64(a: f32, b: f64) f64 { return a + b; }
+fn mix64Plus32(a: f64, b: f32) f64 { return a + b; }
+fn mix32Cmp64(a: f32, b: f64) bool { return a < b; }
+
+tfn mixedWidthArithmetic() {
+    // Pre-fix this segfaulted: "fadd float, double" is malformed LLVM
+    // IR. The width-align block now widens the narrower side to f64
+    // via FPCast before any FAdd/FCmp.
+    assert(mix32Plus64(1.5 as f32, 2.5) as i32, 4);
+    assert(mix64Plus32(2.5, 1.5 as f32) as i32, 4);
+    assert(mix32Cmp64(1.0 as f32, 2.0), true);
+    assert(mix32Cmp64(2.0 as f32, 1.0), false);
+}
+
+fn divNonZero(a: f64, b: f64) f64 { return a / b; }
+fn isInfPositive(v: f64) bool { return v > 1e308; }
+
+tfn infinityArithmetic() {
+    // 1.0 / 0.0 must produce +inf, not panic. NaN-on-overflow only
+    // affects integer divides (which "/" already routes to SDiv/UDiv
+    // when both operands are integers).
+    var inf: f64 = divNonZero(1.0, 0.0);
+    assert(isInfPositive(inf), true);
+    // +inf + -inf is NaN.
+    var nan: f64 = inf + (-inf);
+    assert(eqF64(nan, nan), false);     // OEQ: NaN equals nothing
+    assert(neF64(nan, nan), true);      // UNE: NaN unequals everything
+}
+
+tfn negativeZero() {
+    // IEEE-754: -0.0 OEQ 0.0 == true. The user-facing "==" matches.
+    var posZ: f64 = 0.0;
+    var negZ: f64 = -0.0;
+    assert(eqF64(posZ, negZ), true);
+    assert(ltF64(negZ, posZ), false);
+}
+
+fn castU32ToF32_(n: u32) f32 { return n as f32; }
+fn castI32ToF32_(n: i32) f32 { return n as f32; }
+
+tfn unsignedHighBit() {
+    // 0xFFFFFFFF as i32 = -1, but as u32 = 4_294_967_295. The
+    // signed-vs-unsigned dispatch in "as" must pick UIToFP so the
+    // result is +4.29e9 rather than -1.0. Without UIToFP this used to
+    // silently produce -1.0 for any u32 with bit 31 set.
+    var maxU: u32 = 4294967295;
+    var f: f32 = castU32ToF32_(maxU);
+    assert(f > 4290000000.0 as f32, true);
+    // i32 -1 stays negative through SIToFP.
+    var negOne: i32 = -1;
+    var g: f32 = castI32ToF32_(negOne);
+    assert(g as i32, -1);
+}
+
+tfn precisionNarrowing() {
+    // f32 has 24-bit mantissa. 16777217 (2^24 + 1) cannot be stored
+    // exactly and rounds to 16777216 (banker's rounding to even).
+    var bigInt: i32 = 16777217;
+    var asF32: f32 = bigInt as f32;
+    assert(asF32 as i32, 16777216);
+}
