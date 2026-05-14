@@ -7,6 +7,9 @@
 
 #include "number_literal.h"
 
+#include <cstdlib>     // strtod
+#include <string>
+
 namespace {
 
 NumberResult fail(NumberErrorKind kind, std::size_t pos,
@@ -34,10 +37,11 @@ NumberResult okBigInt(NumberBase base) {
 	return r;
 }
 
-NumberResult okFloat(NumberBase base) {
+NumberResult okFloat(NumberBase base, double value) {
 	NumberResult r;
 	r.kind = NumberResultKind::Float;
 	r.base = base;
+	r.floatValue = value;
 	return r;
 }
 
@@ -223,7 +227,26 @@ NumberResult parseNumberLiteral(const std::string &bytes) {
 		return fail(NumberErrorKind::TrailingSpecial, bytes.size() - 1);
 	}
 
-	if (isFloat) return okFloat(base);
+	if (isFloat) {
+		// rule:
+		// Decimal and hex floats both parse cleanly with the standard C
+		// `strtod` (it accepts `0x1.8p4` for hex). Underscores have been
+		// validated already; strip them before strtod so it sees a
+		// pristine numeric form.
+		std::string clean;
+		clean.reserve(bytes.size());
+		for (char c : bytes) {
+			if (c != '_') clean.push_back(c);
+		}
+		const char *cstr = clean.c_str();
+		char *end = nullptr;
+		double v = std::strtod(cstr, &end);
+		// `end` should land at the end of the string; if not, we caught
+		// an unparseable character above and shouldn't have reached
+		// here, but guard for safety.
+		(void)end;
+		return okFloat(base, v);
+	}
 	if (overflow) return okBigInt(base);
 	return okInt(x, base);
 }

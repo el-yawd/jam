@@ -56,6 +56,28 @@ typedef enum {
 	JAM_ICMP_SLE = 41,  // signed less or equal
 } JamIntPredicate;
 
+// Float comparison predicates. `O` = ordered (NaN inputs → false);
+// `U` = unordered (NaN inputs → true). Jam emits the ordered
+// variants by default so NaN never satisfies a comparison.
+typedef enum {
+	JAM_FCMP_FALSE = 50, // always false
+	JAM_FCMP_OEQ = 51,
+	JAM_FCMP_OGT = 52,
+	JAM_FCMP_OGE = 53,
+	JAM_FCMP_OLT = 54,
+	JAM_FCMP_OLE = 55,
+	JAM_FCMP_ONE = 56,
+	JAM_FCMP_ORD = 57,
+	JAM_FCMP_UNO = 58,
+	JAM_FCMP_UEQ = 59,
+	JAM_FCMP_UGT = 60,
+	JAM_FCMP_UGE = 61,
+	JAM_FCMP_ULT = 62,
+	JAM_FCMP_ULE = 63,
+	JAM_FCMP_UNE = 64,
+	JAM_FCMP_TRUE = 65,  // always true
+} JamFloatPredicate;
+
 JAM_EXTERN_C void JamLLVMInitializeNativeTarget(void);
 JAM_EXTERN_C void JamLLVMInitializeNativeAsmPrinter(void);
 JAM_EXTERN_C void JamLLVMInitializeNativeAsmParser(void);
@@ -302,6 +324,36 @@ JAM_EXTERN_C JamValueRef JamLLVMBuildFPCast(JamBuilderRef builder,
                                             JamValueRef val,
                                             JamTypeRef destType,
                                             const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFPToSI(JamBuilderRef builder,
+                                            JamValueRef val,
+                                            JamTypeRef destType,
+                                            const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFPToUI(JamBuilderRef builder,
+                                            JamValueRef val,
+                                            JamTypeRef destType,
+                                            const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFAdd(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFSub(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFMul(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFDiv(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFRem(JamBuilderRef builder,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFNeg(JamBuilderRef builder,
+                                          JamValueRef operand,
+                                          const char *name);
+JAM_EXTERN_C JamValueRef JamLLVMBuildFCmp(JamBuilderRef builder,
+                                          JamFloatPredicate pred,
+                                          JamValueRef lhs, JamValueRef rhs,
+                                          const char *name);
 
 JAM_EXTERN_C JamValueRef JamLLVMBuildInsertValue(JamBuilderRef builder,
                                                  JamValueRef agg,

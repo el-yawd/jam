@@ -81,22 +81,23 @@ tfn castsRoundTrip() {
 fn mixedLitArith(x: f64) f64 { return x * 2.5 + 1.0; }
 
 tfn literalCoercion() {
-    // "var x: f32 = 3" lowers the integer literal at f32, not at i*N.
-    var fromInt: f32 = 3;
-    assert(fromInt as i32, 3);
+    // Float-typed locals must be initialized with a float literal.
+    // `var x: f32 = 3` is rejected; only `3.0` (or `3.`) lowers at f32.
+    var fromFloat: f32 = 3.0;
+    assert(fromFloat as i32, 3);
     // Mixed literal/concrete arithmetic resolves to the variable's
-    // type — "x * 2.5" with x: f64 keeps everything as f64.
+    // type. `x * 2.5` with x: f64 keeps everything as f64.
     assert(mixedLitArith(4.0) as i32, 11);
 }
 
-fn mix32Plus64(a: f32, b: f64) f64 { return a + b; }
-fn mix64Plus32(a: f64, b: f32) f64 { return a + b; }
-fn mix32Cmp64(a: f32, b: f64) bool { return a < b; }
+fn mix32Plus64(a: f32, b: f64) f64 { return (a as f64) + b; }
+fn mix64Plus32(a: f64, b: f32) f64 { return a + (b as f64); }
+fn mix32Cmp64(a: f32, b: f64) bool { return (a as f64) < b; }
 
 tfn mixedWidthArithmetic() {
-    // Pre-fix this segfaulted: "fadd float, double" is malformed LLVM
-    // IR. The width-align block now widens the narrower side to f64
-    // via FPCast before any FAdd/FCmp.
+    // Mixed-width float arithmetic requires an explicit `as` cast so
+    // both sides have the same type. Implicit widening would
+    // silently rebit the narrower operand, which Jam rejects.
     assert(mix32Plus64(1.5 as f32, 2.5) as i32, 4);
     assert(mix64Plus32(2.5, 1.5 as f32) as i32, 4);
     assert(mix32Cmp64(1.0 as f32, 2.0), true);

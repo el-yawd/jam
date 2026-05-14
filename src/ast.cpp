@@ -162,10 +162,26 @@ static DecodedPatEnumVariant decodePatEnumVariant(JamCodegenContext &ctx,
 
 // Materialize a NumberLit node directly at a known integer type. Falls back
 // to natural smallest-fit width when expectedType is null or non-integer.
+// Float literals (flags bit 1) lower via LLVMConstReal at the expected
+// width or default f64; the parser packs the host `double`'s bit pattern
+// into the same low/high u32 slots.
 static JamValueRef numberLitConst(JamCodegenContext &ctx, const AstNode &n,
                                   JamTypeRef expectedType) {
 	uint64_t val = numberLitValue(n);
 	bool isNegative = (n.flags & 1) != 0;
+	bool isFloat    = (n.flags & 2) != 0;
+
+	if (isFloat) {
+		// Reinterpret the packed u64 as a host double.
+		double d = 0.0;
+		std::memcpy(&d, &val, sizeof(d));
+		if (isNegative) d = -d;
+		// Default to f64; honour explicit f32 from context.
+		JamTypeRef ty = (expectedType && JamLLVMTypeIsFloat(expectedType))
+		                    ? expectedType
+		                    : ctx.getDoubleType();
+		return JamLLVMConstReal(ty, d);
+	}
 
 	if (expectedType && JamLLVMTypeIsInteger(expectedType)) {
 		if (isNegative) {
@@ -906,6 +922,59 @@ static JamValueRef codegenBinaryOp(JamCodegenContext &ctx, const AstNode &n) {
 		if (lw > rw) R = coerceTo(ctx, R, lt);
 		else L = coerceTo(ctx, L, rt);
 	}
+	// note: reject any remaining numeric-width mismatch where at least one
+	// side is a float. The int-widening block above already aligned
+	// <int->int pairs; what survives here is either `f32 + f64` or a
+	// stray <int->float pair. Both would lower to malformed IR
+	// (`fadd float, double`, `fadd i32, float`). Implicit widening
+	// would silently rebit the narrower operand, so we make the user
+	// spell the conversion with `as`.
+	if (lt != rt && (JamLLVMTypeIsFloat(lt) || JamLLVMTypeIsFloat(rt))) {
+		throw std::runtime_error(
+		    "mismatched operand types in binary operation; insert an "
+		    "`as` cast so both sides have the same type");
+	}
+
+	// route arithmetic to LLVM's F* opcodes and comparisons to FCmp
+	// with ordered predicates so NaN never compares true.
+	const bool isFloat = JamLLVMTypeIsFloat(lt);
+
+	if (isFloat) {
+		switch (op) {
+		case BinOp::Add:
+			return JamLLVMBuildFAdd(ctx.getBuilder(), L, R, "faddtmp");
+		case BinOp::Sub:
+			return JamLLVMBuildFSub(ctx.getBuilder(), L, R, "fsubtmp");
+		case BinOp::Mul:
+			return JamLLVMBuildFMul(ctx.getBuilder(), L, R, "fmultmp");
+		case BinOp::Div:
+			return JamLLVMBuildFDiv(ctx.getBuilder(), L, R, "fdivtmp");
+		case BinOp::Mod:
+			return JamLLVMBuildFRem(ctx.getBuilder(), L, R, "fremtmp");
+		case BinOp::Eq:
+			// OEQ: false when either side is NaN. Matches IEEE-754 and C.
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OEQ, L, R, "fcmp");
+		case BinOp::Ne:
+			// UNE: true when either side is NaN OR operands differ. The
+			// alternative (ONE) returns false on NaN inputs, which would
+			// make `nan != nan` evaluate false, which is surprising and wrong.
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_UNE, L, R, "fcmp");
+		case BinOp::Lt:
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLT, L, R, "fcmp");
+		case BinOp::Le:
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OLE, L, R, "fcmp");
+		case BinOp::Gt:
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGT, L, R, "fcmp");
+		case BinOp::Ge:
+			return JamLLVMBuildFCmp(ctx.getBuilder(), JAM_FCMP_OGE, L, R, "fcmp");
+		case BinOp::BitAnd: case BinOp::BitOr: case BinOp::BitXor:
+		case BinOp::Shl: case BinOp::Shr:
+			throw std::runtime_error(
+			    "bitwise / shift operators are not defined for float operands");
+		default:
+			throw std::runtime_error("Invalid float binary operator");
+		}
+	}
 
 	switch (op) {
 	case BinOp::Add:
@@ -1000,6 +1069,9 @@ static JamValueRef codegenUnaryOp(JamCodegenContext &ctx, const AstNode &n) {
 	}
 	case UnaryOp::Neg: {
 		JamTypeRef ty = JamLLVMTypeOf(operandVal);
+		if (JamLLVMTypeIsFloat(ty)) {
+			return JamLLVMBuildFNeg(ctx.getBuilder(), operandVal, "fnegtmp");
+		}
 		JamValueRef zero = JamLLVMConstInt(ty, 0, false);
 		return JamLLVMBuildSub(ctx.getBuilder(), zero, operandVal, "negtmp");
 	}
@@ -3054,10 +3126,10 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 		return codegenMatch(ctx, n);
 	case AstTag::AsCast: {
 		// `expr as Type` — explicit conversion. Handles:
-		//   • integer ↔ integer (truncate/extend)
-		//   • integer ↔ float (siToFP / fpToSI)
-		//   • float ↔ float (FPCast)
-		//   • enum ↔ integer: extracts the tag for payloaded enums (which
+		//   • integer <-> integer (truncate/extend)
+		//   • integer <-> float (siToFP / fpToSI)
+		//   • float <-> float (FPCast)
+		//   • enum <-> integer: extracts the tag for payloaded enums (which
 		//     are {tag, payload} structs); identity for unit-only enums
 		//     (which are already i8).
 		NodeIdx operandIdx = static_cast<NodeIdx>(n.lhs);
@@ -3091,12 +3163,27 @@ JamValueRef codegenNode(JamCodegenContext &ctx, NodeIdx node,
 			                           signedSrc, "as.icast");
 		}
 		if (JamLLVMTypeIsInteger(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
-			return JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,
-			                          "as.si2fp");
+			// Pick signed vs unsigned conversion from the source operand.
+			// Otherwise `255u as f32` would round-trip as -1.0 because
+			// SIToFP treats the high bit as a sign.
+			bool signedSrc = isSignedIntExpr(ctx, operandIdx);
+			return signedSrc
+			           ? JamLLVMBuildSIToFP(ctx.getBuilder(), val, targetLLVM,
+			                                "as.si2fp")
+			           : JamLLVMBuildUIToFP(ctx.getBuilder(), val, targetLLVM,
+			                                "as.ui2fp");
 		}
 		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsInteger(targetLLVM)) {
-			throw std::runtime_error(
-			    "`as` from float to integer is not yet supported");
+			// Conversion truncates toward zero (matches C semantics).
+			// Dest signedness picks FPToSI vs FPToUI. TypeKey.b is set
+			// on signed integer types (see ast_flat.h's seed of i8/i16/…).
+			const TypeKey &tk = ctx.getTypePool().get(targetTy);
+			bool signedDst = tk.kind == TypeKind::Int && tk.b != 0;
+			return signedDst
+			           ? JamLLVMBuildFPToSI(ctx.getBuilder(), val, targetLLVM,
+			                                "as.fp2si")
+			           : JamLLVMBuildFPToUI(ctx.getBuilder(), val, targetLLVM,
+			                                "as.fp2ui");
 		}
 		if (JamLLVMTypeIsFloat(srcLLVM) && JamLLVMTypeIsFloat(targetLLVM)) {
 			return JamLLVMBuildFPCast(ctx.getBuilder(), val, targetLLVM,

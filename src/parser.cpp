@@ -7,6 +7,7 @@
 
 #include "parser.h"
 #include "number_literal.h"
+#include <cstring>
 #include <stdexcept>
 
 // Validate a number lexeme via the dedicated validator
@@ -14,13 +15,15 @@
 // negation is the caller's responsibility, since it depends on context
 // (negative literal vs. unary minus on a literal).
 //
-// On non-int results (float, big_int, validation failure), throws a
-// runtime_error with a descriptive message. The validator's rich error
-// vocabulary surfaces here unchanged.
-static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut) {
+// Returns the 64-bit magnitude. For float literals the bit pattern of
+// the parsed `double` is returned via `bit_cast`, and `isFloatOut` is
+// set so the caller can mark the AST node with the float flag.
+static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut,
+                               bool &isFloatOut) {
 	bool neg = !s.empty() && s[0] == '-';
 	const std::string &abs = neg ? s.substr(1) : s;
 	isNegOut = neg;
+	isFloatOut = false;
 
 	NumberResult r = parseNumberLiteral(abs);
 	switch (r.kind) {
@@ -29,10 +32,17 @@ static uint64_t parseNumLexeme(const std::string &s, bool &isNegOut) {
 	case NumberResultKind::BigInt:
 		throw std::runtime_error("integer literal `" + abs +
 		                         "` exceeds u64 range");
-	case NumberResultKind::Float:
-		throw std::runtime_error(
-		    "float literal `" + abs +
-		    "` is not yet supported (only integer literals)");
+	case NumberResultKind::Float: {
+		isFloatOut = true;
+		// pack the double's bit pattern into u64. memcpy keeps it
+		// strictly aliasing-safe; the codegen reinterprets back to
+		// double via `bit_cast` in numberLitConst.
+		uint64_t bits = 0;
+		double v = r.floatValue;
+		static_assert(sizeof(v) == sizeof(bits), "double must be 8 bytes");
+		std::memcpy(&bits, &v, sizeof(bits));
+		return bits;
+	}
 	case NumberResultKind::Failure:
 		throw std::runtime_error(std::string("invalid numeric literal `") +
 		                         abs +
@@ -140,14 +150,17 @@ NodeIdx Parser::parsePrimary() {
 
 	if (match(TOK_NUMBER)) {
 		// `parseNumLexeme` returns the magnitude; the sign is recorded in
-		// the node's flags bit 0 and the codegen applies negation. This
-		// matches the convention established before hex-literal support
-		// landed.
+		// the node's flags bit 0 (negative) and bit 1 (isFloat: when
+		// set the magnitude is the bit pattern of a `double`).
 		bool isNegative = false;
-		uint64_t mag = parseNumLexeme(previous().lexeme, isNegative);
+		bool isFloat = false;
+		uint64_t mag = parseNumLexeme(previous().lexeme, isNegative, isFloat);
+		uint16_t flags = 0;
+		if (isNegative) flags |= 1;
+		if (isFloat)    flags |= 2;
 		AstNode n{AstTag::NumberLit,
 		          0,
-		          isNegative ? uint16_t{1} : uint16_t{0},
+		          flags,
 		          0,
 		          static_cast<uint32_t>(mag & 0xFFFFFFFFu),
 		          static_cast<uint32_t>(mag >> 32)};
@@ -574,12 +587,23 @@ NodeIdx Parser::parsePatternAtom() {
 	}
 	if (match(TOK_NUMBER)) {
 		bool isNegative = false;
-		uint64_t lo = parseNumLexeme(previous().lexeme, isNegative);
+		bool isFloat = false;
+		uint64_t lo = parseNumLexeme(previous().lexeme, isNegative, isFloat);
+		if (isFloat) {
+			throw std::runtime_error(
+			    "Float literals are not allowed in `match` patterns "
+			    "(use an integer literal or a `..=` range)");
+		}
 		// Inclusive range `lo..=hi`?
 		if (match(TOK_DOTDOT_EQ)) {
 			consume(TOK_NUMBER, "Expected upper bound after `..=`");
 			bool hiNeg = false;
-			uint64_t hi = parseNumLexeme(previous().lexeme, hiNeg);
+			bool hiFloat = false;
+			uint64_t hi = parseNumLexeme(previous().lexeme, hiNeg, hiFloat);
+			if (hiFloat) {
+				throw std::runtime_error(
+				    "Float literals are not allowed in `match` patterns");
+			}
 			// range bounds fit in u32; truncate gracefully.
 			return emit(AstNode{AstTag::PatRange, 0, 0, 0,
 			                    static_cast<uint32_t>(lo & 0xFFFFFFFFu),

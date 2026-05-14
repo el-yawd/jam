@@ -69,6 +69,10 @@ class CodegenErrorTests {
 		                  testDefaultWrongReturnType);
 		framework.addTest("Codegen - non-drop non-default method on top-level",
 		                  testForbiddenTopLevelMethod);
+		framework.addTest("Codegen - int literal in float-typed destination",
+		                  testIntToFloatRejected);
+		framework.addTest("Codegen - mixed-width float binary op without cast",
+		                  testMixedFloatWidthRejected);
 	}
 
   private:
@@ -138,6 +142,33 @@ fn main() i32 { return 0; }
 		ASSERT_TRUE(r.exitCode != 0);
 		ASSERT_TRUE(stderrContains(r, "default"));
 		ASSERT_TRUE(stderrContains(r, "Self"));
+	}
+
+	// Float-typed destinations need a float literal (`3.0`) or an
+	// explicit `as` cast. Implicit int→float coercion is rejected so
+	// the source spells out every bit-pattern change.
+	static void testIntToFloatRejected() {
+		auto r = compileSource("must_fail_int_to_float", R"(
+fn main() {
+    var x: f32 = 3;
+}
+)");
+		ASSERT_TRUE(r.exitCode != 0);
+		ASSERT_TRUE(stderrContains(r, "float"));
+		ASSERT_TRUE(stderrContains(r, "as"));
+	}
+
+	// Binary ops over mismatched float widths (`f32 + f64`) need an
+	// explicit `as` cast on the narrower side. Without it the codegen
+	// would emit `fadd float, double`, which is malformed IR.
+	static void testMixedFloatWidthRejected() {
+		auto r = compileSource("must_fail_mixed_float_width", R"(
+fn add(a: f32, b: f64) f64 { return a + b; }
+fn main() {}
+)");
+		ASSERT_TRUE(r.exitCode != 0);
+		ASSERT_TRUE(stderrContains(r, "mismatched"));
+		ASSERT_TRUE(stderrContains(r, "as"));
 	}
 
 	// Top-level structs only allow `drop` and `default` methods. Other

@@ -58,6 +58,7 @@ enum class NumberResultKind {
 struct NumberResult {
 	NumberResultKind kind = NumberResultKind::Failure;
 	uint64_t intValue = 0;
+	double floatValue = 0.0;
 	NumberBase base = NumberBase::Decimal;
 	NumberError failure{};
 };
