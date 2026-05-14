@@ -19,13 +19,19 @@
 #include <mach-o/dyld.h>
 #endif
 #if defined(__linux__) || defined(__APPLE__)
-#include <climits>
 #include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
 
 namespace {
+
+// Maximum filesystem path length we accept for the executable lookup.
+#if defined(__APPLE__)
+constexpr size_t kMaxPathBytes = 1024;  // macOS PATH_MAX
+#elif defined(__linux__)
+constexpr size_t kMaxPathBytes = 4096;  // Linux PATH_MAX
+#endif
 
 std::optional<std::string> g_stdPathOverride;
 
@@ -34,14 +40,14 @@ std::optional<std::string> g_stdPathOverride;
 // callers fall back to other lookups.
 std::optional<std::string> getExecutablePath() {
 #if defined(__APPLE__)
-	char buf[PATH_MAX];
+	char buf[kMaxPathBytes];
 	uint32_t size = sizeof(buf);
 	if (_NSGetExecutablePath(buf, &size) != 0) return std::nullopt;
-	char real[PATH_MAX];
+	char real[kMaxPathBytes];
 	if (realpath(buf, real) != nullptr) return std::string(real);
 	return std::string(buf);
 #elif defined(__linux__)
-	char buf[PATH_MAX];
+	char buf[kMaxPathBytes];
 	ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
 	if (len <= 0) return std::nullopt;
 	buf[len] = '\0';
@@ -51,14 +57,14 @@ std::optional<std::string> getExecutablePath() {
 #endif
 }
 
-// Compute the standard-library root once per process. Order:
+// Standard-library root once per process. Order:
 //   1. `--std-path <path>` CLI flag (via setStdPathOverride).
 //   2. `JAM_STD_PATH` env var — used as-is when non-empty.
-//   3. `<bindir>/../lib/jam/std` — binary-relative install layout
-//      (matches `$PREFIX/lib/jam/std` shipped by `make install`).
-// Returns std::nullopt when none are available; the resolver then
-// falls back to the in-tree CWD `std/` lookup so dev workflows still
-// work.
+//   3. Walk up from the running binary's directory, picking the first
+//      ancestor that holds a `lib/jam/std/` subtree. Covers both the
+//      FHS install layout (`$PREFIX/bin/jam` + `$PREFIX/lib/jam/std`)
+//      and a relocatable tarball (`<dir>/jam` + `<dir>/lib/jam/std`)
+//      with one rule.
 const std::optional<std::string> &stdRoot() {
 	static const std::optional<std::string> root =
 	    []() -> std::optional<std::string> {
@@ -68,13 +74,14 @@ const std::optional<std::string> &stdRoot() {
 		}
 		auto exe = getExecutablePath();
 		if (!exe) return std::nullopt;
-		fs::path binDir = fs::path(*exe).parent_path();
-		fs::path candidate = binDir / ".." / "lib" / "jam" / "std";
-		std::error_code ec;
-		fs::path canonical = fs::weakly_canonical(candidate, ec);
-		if (ec) return std::nullopt;
-		if (fs::exists(canonical) && fs::is_directory(canonical)) {
-			return canonical.string();
+		fs::path cur = fs::path(*exe);
+		while (cur.has_parent_path() && cur.parent_path() != cur) {
+			cur = cur.parent_path();
+			fs::path candidate = cur / "lib" / "jam" / "std";
+			std::error_code ec;
+			if (fs::is_directory(candidate, ec)) {
+				return fs::canonical(candidate, ec).string();
+			}
 		}
 		return std::nullopt;
 	}();
