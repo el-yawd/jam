@@ -17,6 +17,13 @@ There's nothing available to use yet, and I've also disabled issues and pull req
 
 Jam will indeed move to an org in the future, but right now it's mostly me maintaining the language and I'm considering testing other options besides GitHub, so I'd like to wait a bit before starting to move things around.
 
+In case you want to test before v0.1:
+
+```bash
+brew tap raphamorim/jam https://github.com/raphamorim/jam
+brew install --HEAD jam
+```
+
 ## Contributing
 
 [Donate monthly](https://github.com/sponsors/raphamorim).
