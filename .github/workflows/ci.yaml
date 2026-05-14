@@ -43,6 +43,14 @@ jobs:
       - name: Run unit tests
         run: ./build/jam test tests/unit
 
+      - name: Run codegen-error tests
+        run: |
+          ln -sf build/jam jam.out
+          clang++ -c tests/cpp/test_codegen_errors.cpp -o codegen_error_tests.o \
+            `/usr/lib/llvm-20/bin/llvm-config --cxxflags` -fexceptions
+          clang++ -o codegen_error_tests codegen_error_tests.o
+          ./codegen_error_tests
+
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +84,14 @@ jobs:
       - name: Run unit tests
         run: ./build/jam test tests/unit
 
+      - name: Run codegen-error tests
+        run: |
+          ln -sf build/jam jam.out
+          clang++ -c tests/cpp/test_codegen_errors.cpp -o codegen_error_tests.o \
+            `/usr/lib/llvm-20/bin/llvm-config --cxxflags` -fexceptions
+          clang++ -o codegen_error_tests codegen_error_tests.o
+          ./codegen_error_tests
+
       - name: Archive ARM build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -105,6 +121,14 @@ jobs:
 
       - name: Run unit tests
         run: ./build/jam test tests/unit
+
+      - name: Run codegen-error tests
+        run: |
+          ln -sf build/jam jam.out
+          clang++ -c tests/cpp/test_codegen_errors.cpp -o codegen_error_tests.o \
+            $("${LLVM_PREFIX}/bin/llvm-config" --cxxflags) -fexceptions
+          clang++ -o codegen_error_tests codegen_error_tests.o
+          ./codegen_error_tests
 
       - name: Archive macOS build artifacts
         uses: actions/upload-artifact@v4
